@@ -1,0 +1,12 @@
+# per-checkout state (never migrated between machines/worktrees)
+.harness/state/
+*.log
+*.heartbeat
+merge-watch-state
+deferred-nudges
+inbox/*/*.msg
+inbox/*/*.ack
+!inbox/*/.gitkeep
+auto-resume-state.json
+gatekeeper-alert-state.json
+watch-flagged-dead
