@@ -1,0 +1,104 @@
+#!/bin/bash
+# bin/orc — `orc up` (T21, issue #26): builds the tmux control room from
+# orchestrator.yaml. Extracted from career-ops-harness's .harness/orc.sh
+# (epic #91a, issue #116) — ORC_SCRIPT_DIR now resolves to THIS repo's
+# bin/, so pane commands and the liveness watchdog are anchored to
+# ORC_LIB_DIR (this installation's lib/), not a `./.harness/...` path
+# relative to whatever project cwd `orc up` happens to run from.
+set -euo pipefail
+
+ORC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORC_LIB_DIR="$(cd "$ORC_SCRIPT_DIR/../lib" && pwd)"
+# shellcheck source=../lib/orc-config.sh
+source "$ORC_LIB_DIR/orc-config.sh"
+
+ORC_SESSION="${ORC_SESSION:-harness}"
+
+# orc_build_session -- everything `orc up` does except the final attach.
+# Split out so tests can build a throwaway session, assert on it, and tear
+# it down without this process getting replaced by `tmux attach` (exec).
+orc_build_session() {
+  local session="$ORC_SESSION"
+  local project integration_branch orchestra_model implementer_model
+
+  project="$(orc_get_scalar project)"
+  project="${project:-$(basename "$(pwd)")}"
+  integration_branch="$(orc_get_scalar integration_branch)"
+  integration_branch="${integration_branch:-uat}"
+  orchestra_model="$(orc_get_role_model orchestra)"
+  orchestra_model="${orchestra_model:-opus}"
+  implementer_model="$(orc_get_role_model implementer)"
+  implementer_model="${implementer_model:-sonnet}"
+
+  tmux new-session -d -s "$session" -n main
+  tmux rename-window -t "$session:main" "control-room"
+  tmux set -t "$session:0" pane-border-status top
+
+  # issue #89 (T38): pane 3 (copilot/scribe) retired -- no recurring scribe
+  # job remains after #85 (Builder writes PR bodies, watch.sh closes issues
+  # mechanically), so scribe becomes an on-demand headless spawn
+  # (dispatch.sh's assign/handoff to 'scribe', see nudge_agent) instead of a
+  # standing pane. 5 panes now, not 6: orchestra, builder, agy, gatekeeper,
+  # watch.
+  tmux split-window -v -t "$session:0"
+  tmux split-window -h -t "$session:0.0"
+  tmux split-window -h -t "$session:0.0"
+  tmux split-window -h -t "$session:0.3"
+  tmux select-layout -t "$session:0" tiled
+
+  tmux select-pane -t "$session:0.0" -T "orchestra"
+  tmux select-pane -t "$session:0.1" -T "builder"
+  tmux select-pane -t "$session:0.2" -T "agy"
+  tmux select-pane -t "$session:0.3" -T "gatekeeper"
+  tmux select-pane -t "$session:0.4" -T "pr/budget watch"
+
+  if [ "${ORC_SKIP_PANE_COMMANDS:-0}" != "1" ]; then
+    tmux send-keys -t "$session:0.0" "claude --model $orchestra_model --dangerously-skip-permissions" C-m
+    tmux send-keys -t "$session:0.1" "claude --model $implementer_model --dangerously-skip-permissions" C-m
+    tmux send-keys -t "$session:0.2" 'agy --dangerously-skip-permissions' C-m
+    # issue #105 Task 3: the supervisor respawns gatekeeper.sh with bounded
+    # backoff if it ever exits, instead of leaving pane 3 with a dead
+    # process until a human notices.
+    tmux send-keys -t "$session:0.3" "$ORC_LIB_DIR/gatekeeper-supervisor.sh" C-m
+    tmux send-keys -t "$session:0.4" "$ORC_LIB_DIR/watch.sh" C-m
+  fi
+
+  # Gatekeeper liveness watchdog (T19): independent background process, not
+  # a pane, so a gatekeeper crash/hang can't also silence its own warning.
+  # Log lands in the CONSUMER project's state dir (91b), not this
+  # installation's checkout, so multiple projects sharing one orc install
+  # don't clobber each other's liveness logs.
+  if [ "${ORC_SKIP_LIVENESS:-0}" != "1" ]; then
+    mkdir -p ./.harness/state
+    nohup "$ORC_LIB_DIR/gatekeeper-liveness.sh" >> ./.harness/state/gatekeeper-liveness.log 2>&1 &
+    disown
+  fi
+
+  tmux select-pane -t "$session:0.0"
+
+  echo "orc up: project=$project integration_branch=$integration_branch" \
+    "orchestra_model=$orchestra_model implementer_model=$implementer_model" \
+    "protected_paths=$(orc_protected_paths | paste -sd, -)" >&2
+}
+
+orc_up() {
+  local session="$ORC_SESSION"
+  if tmux has-session -t "$session" 2>/dev/null; then
+    exec tmux attach -t "$session"
+  fi
+  orc_build_session
+  exec tmux attach -t "$session"
+}
+
+# BASH_SOURCE-guarded _main, same pattern as dispatch.sh/orc-worktree.sh:
+# lets tests `source` this file for orc_build_session without triggering
+# the interactive `orc up` path (and its `exec tmux attach`).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "${1:-}" in
+    up) orc_up ;;
+    *)
+      echo "usage: orc.sh up" >&2
+      exit 1
+      ;;
+  esac
+fi

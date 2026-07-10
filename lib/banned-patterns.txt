@@ -1,0 +1,10 @@
+rm -rf
+git push --force
+push -f
+reset --hard
+git clean
+(>|>>|tee |cp |mv |sed -i|rm |touch |mkdir ).*career-ops/
+git restore
+git checkout
+git commit
+git reset
