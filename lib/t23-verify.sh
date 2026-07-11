@@ -10,7 +10,10 @@
 set -uo pipefail
 
 ISSUE="${1:-28}"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# issue #116: checks the CHECKOUT it runs in (a consumer project's loop
+# receipts), not the directory above this script (this script now lives
+# in agent-orchestra's own lib/, a separate repo).
+ROOT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || { echo "t23-verify.sh: not inside a git repo" >&2; exit 2; }
 cd "$ROOT" || exit 2
 
 pass=0

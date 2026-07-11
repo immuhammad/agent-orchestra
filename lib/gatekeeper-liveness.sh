@@ -8,8 +8,20 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$DIR/gatekeeper.heartbeat}"
-LOG="${GATEKEEPER_LIVENESS_LOG:-$DIR/budget.log}"
+# shellcheck source=./harness-root.sh
+source "$DIR/harness-root.sh"
+# issue #116: HEARTBEAT/LOG must resolve to the same CANON_DIR
+# gatekeeper.sh itself writes to (the caller's project root), not this
+# script's own directory -- nohup preserves cwd from `orc up`, so
+# $PWD is still the project root at the time this was launched.
+if [ -n "${GATEKEEPER_CANON_DIR:-}" ]; then
+  CANON_DIR="$GATEKEEPER_CANON_DIR"
+elif ! CANON_DIR="$(harness_canonical_dir "$PWD")"; then
+  echo "gatekeeper-liveness.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
+  exit 1
+fi
+HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$CANON_DIR/gatekeeper.heartbeat}"
+LOG="${GATEKEEPER_LIVENESS_LOG:-$CANON_DIR/budget.log}"
 CHECK_INTERVAL="${GATEKEEPER_LIVENESS_INTERVAL:-60}"
 # gatekeeper.sh's own loop period is $GATEKEEPER_INTERVAL (default 300s);
 # 2x that plus slack tolerates one slow iteration (e.g. a slow curl to the

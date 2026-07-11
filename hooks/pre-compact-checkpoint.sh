@@ -24,9 +24,13 @@ set -euo pipefail
 
 INPUT=$(cat)
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-HANDOFF="${PRE_COMPACT_HANDOFF_FILE:-$DIR/handoff.md}"
-# shellcheck source=./handoff-lib.sh
-source "$DIR/handoff-lib.sh"
+# issue #116: hooks fire with cwd = the consumer project (Claude Code
+# invokes them from the project root), so HANDOFF stays cwd-relative, not
+# anchored to this hook script's own directory. handoff-lib.sh moved to
+# ../lib/ (a sibling of hooks/) in the new layout.
+HANDOFF="${PRE_COMPACT_HANDOFF_FILE:-.harness/handoff.md}"
+# shellcheck source=../lib/handoff-lib.sh
+source "$DIR/../lib/handoff-lib.sh"
 
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"')
 TRIGGER=$(echo "$INPUT" | jq -r '.trigger // "unknown"')

@@ -23,8 +23,11 @@ source "$DIR/harness-root.sh"
 # already hit this exact bug (an entry got written worktree-local and had
 # to be re-logged by hand). CANON_DIR resolves to the MAIN checkout's
 # .harness regardless of which worktree log-decision.sh happens to run
-# from.
-CANON_DIR="$(harness_canonical_dir "$DIR")"
+# from, off the CALLER's cwd (issue #116: this script no longer lives
+# inside the project it serves). `set -e` above means a resolution
+# failure (bad exit + stderr message from harness_canonical_dir) aborts
+# here rather than silently continuing with an empty CANON_DIR.
+CANON_DIR="$(harness_canonical_dir "$PWD")"
 LOG_FILE="${LOG_DECISION_FILE:-$CANON_DIR/decisions.log}"
 LOCK_DIR="${LOG_DECISION_LOCK_DIR:-$CANON_DIR/.decisions.lock}"
 

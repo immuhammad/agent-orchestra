@@ -61,7 +61,14 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-REPO_ROOT="$(cd "$DIR/.." >/dev/null 2>&1 && pwd)"
+# issue #116: REPO_ROOT is the CONSUMER project's git repo (worktrees are
+# created inside it), not the directory above this script (this script
+# now lives in agent-orchestra's own lib/, a separate repo entirely).
+REPO_ROOT="${ORC_WORKTREE_REPO_ROOT:-$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)}"
+if [ -z "$REPO_ROOT" ]; then
+  echo "orc-worktree.sh: not inside a git repo (run from the consumer project, or set ORC_WORKTREE_REPO_ROOT)" >&2
+  exit 1
+fi
 # shellcheck source=./dispatch.sh
 source "$DIR/dispatch.sh"
 

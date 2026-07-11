@@ -28,9 +28,15 @@ source "$DIR/harness-root.sh"
 # issue #99: inbox/deferred-nudges are per-repo STATE, not per-checkout --
 # every worktree has its own gitignored .harness/inbox, so a dispatch run
 # from inside a worktree must still land in the MAIN checkout's inbox, not
-# the worktree's own empty copy. CANON_DIR is that canonical .harness dir
-# (falls back to DIR itself outside a git repo, e.g. some test setups).
-CANON_DIR="${DISPATCH_CANON_DIR:-$(harness_canonical_dir "$DIR")}"
+# the worktree's own empty copy. CANON_DIR is that canonical .harness dir,
+# resolved off the CALLER's cwd (issue #116: these scripts no longer live
+# inside the project they serve). DISPATCH_CANON_DIR overrides outright.
+if [ -n "${DISPATCH_CANON_DIR:-}" ]; then
+  CANON_DIR="$DISPATCH_CANON_DIR"
+elif ! CANON_DIR="$(harness_canonical_dir "$PWD")"; then
+  echo "dispatch.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
+  exit 1
+fi
 
 # T24 (issue #34): deferred nudges used to be fire-and-forget -- if a nudge
 # was skipped because the target pane was busy, nothing ever retried it, so

@@ -4,10 +4,22 @@ set -uo pipefail
 THRESHOLD=80
 CHECK_INTERVAL="${GATEKEEPER_INTERVAL:-300}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$DIR/gatekeeper.heartbeat}"
+# shellcheck source=./harness-root.sh
+source "$DIR/harness-root.sh"
+# issue #116: state files default off the CALLER's project root, not this
+# script's own directory (these scripts now live in agent-orchestra's
+# lib/, separate from any consumer project). GATEKEEPER_CANON_DIR
+# overrides outright for tests.
+if [ -n "${GATEKEEPER_CANON_DIR:-}" ]; then
+  CANON_DIR="$GATEKEEPER_CANON_DIR"
+elif ! CANON_DIR="$(harness_canonical_dir "$PWD")"; then
+  echo "gatekeeper.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
+  exit 1
+fi
+HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$CANON_DIR/gatekeeper.heartbeat}"
 # Overridable so tests never append real ALERT/EXIT lines into the tracked
 # .harness/budget.log (or a worktree's own copy of it).
-BUDGET_LOG="${GATEKEEPER_BUDGET_LOG:-.harness/budget.log}"
+BUDGET_LOG="${GATEKEEPER_BUDGET_LOG:-$CANON_DIR/budget.log}"
 
 # issue #105 (T44) Task 3: diagnostics for WHY gatekeeper stopped, not just
 # THAT it did (the liveness watchdog already covers detection). Logs to
@@ -29,7 +41,9 @@ AGY_STATUSLINE="$HOME/.gemini/antigravity-cli/scratch/agy-statusline.json"
 
 # T20: budgeted 5h-window rate-limit auto-resume. See auto-resume.sh for the
 # full state machine and policy (weekly never auto-resumes, max N/day,
-# "only unblock what you parked").
+# "only unblock what you parked"). Pin its own root-resolution to the
+# CANON_DIR already resolved above so the two can't diverge.
+export AUTO_RESUME_CANON_DIR="$CANON_DIR"
 source "$DIR/auto-resume.sh"
 
 # T33 (issue #77): shared color/clear-screen helpers for the dashboard
@@ -57,7 +71,7 @@ NOTIFY_SESSION="${GATEKEEPER_NOTIFY_SESSION:-harness}"
 # AGY_ALERTED bool forgets everything on restart, so a crash-respawn
 # (Task 3) re-sent already-delivered alerts and re-spoke `say` for
 # thresholds the operator had already been told about (observed live).
-GK_ALERT_STATE_FILE="${GATEKEEPER_ALERT_STATE_FILE:-$DIR/gatekeeper-alert-state.json}"
+GK_ALERT_STATE_FILE="${GATEKEEPER_ALERT_STATE_FILE:-$CANON_DIR/gatekeeper-alert-state.json}"
 
 gk_ensure_alert_state() {
   [ -f "$GK_ALERT_STATE_FILE" ] || echo '{}' > "$GK_ALERT_STATE_FILE"

@@ -7,7 +7,17 @@ set -euo pipefail
 AGENT="${1:?usage: inbox-poll.sh <agent>}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-INBOX="$DIR/inbox/$AGENT"
+# shellcheck source=./harness-root.sh
+source "$DIR/harness-root.sh"
+# issue #116: the inbox lives under the CALLER's project root, not this
+# script's own directory (this script now lives in agent-orchestra's
+# shared lib/). INBOX_POLL_CANON_DIR overrides outright for tests.
+if [ -n "${INBOX_POLL_CANON_DIR:-}" ]; then
+  CANON_DIR="$INBOX_POLL_CANON_DIR"
+else
+  CANON_DIR="$(harness_canonical_dir "$PWD")"
+fi
+INBOX="$CANON_DIR/inbox/$AGENT"
 
 if [ ! -d "$INBOX" ]; then
   echo "inbox-poll.sh: no inbox for agent '$AGENT' (expected $INBOX)" >&2

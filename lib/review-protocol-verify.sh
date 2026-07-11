@@ -9,8 +9,18 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-REPO_ROOT="$(cd "$DIR/.." >/dev/null 2>&1 && pwd)"
-PROTOCOL="$REPO_ROOT/.harness/review-protocol.md"
+# issue #116: this verifies the CHECKOUT it runs in (this repo's own
+# templates/skills, or a consumer project's, depending on cwd) -- not the
+# directory above this script (this script now lives in agent-orchestra's
+# own lib/). Paths below updated for the new layout: review-protocol.md
+# moved .harness/ -> templates/, the skill's dual-install target is
+# .agents/skills/ (unchanged -- that's still the consumer-facing path).
+REPO_ROOT="${REVIEW_PROTOCOL_REPO_ROOT:-$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)}"
+if [ -z "$REPO_ROOT" ]; then
+  echo "review-protocol-verify.sh: not inside a git repo (run from the repo to verify, or set REVIEW_PROTOCOL_REPO_ROOT)" >&2
+  exit 1
+fi
+PROTOCOL="$REPO_ROOT/templates/review-protocol.md"
 SKILL="$REPO_ROOT/.agents/skills/code-review/SKILL.md"
 
 PASS=0

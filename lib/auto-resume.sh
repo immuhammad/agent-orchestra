@@ -31,9 +31,19 @@ set -uo pipefail
 AR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./send-lib.sh
 source "$AR_DIR/send-lib.sh"
-AR_STATE_FILE="${AUTO_RESUME_STATE_FILE:-$AR_DIR/auto-resume-state.json}"
+# shellcheck source=./harness-root.sh
+source "$AR_DIR/harness-root.sh"
+# issue #116: state defaults off the CALLER's project root (this script's
+# own dir is now agent-orchestra's shared lib/, not the consumer project).
+if [ -n "${AUTO_RESUME_CANON_DIR:-}" ]; then
+  AR_CANON_DIR="$AUTO_RESUME_CANON_DIR"
+elif ! AR_CANON_DIR="$(harness_canonical_dir "$PWD")"; then
+  echo "auto-resume.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
+  exit 1
+fi
+AR_STATE_FILE="${AUTO_RESUME_STATE_FILE:-$AR_CANON_DIR/auto-resume-state.json}"
 AR_MAX_PER_DAY="${AUTO_RESUME_MAX_PER_DAY:-2}"
-AR_LOG="${AUTO_RESUME_LOG:-$AR_DIR/budget.log}"
+AR_LOG="${AUTO_RESUME_LOG:-$AR_CANON_DIR/budget.log}"
 # The exact wording is mandated by AGENTS.md's Quota Failsafe ("Keep the
 # (a)/(b)/(c) structure exactly") -- this regex is deliberately narrow so it
 # can't accidentally match ordinary conversation.
