@@ -306,16 +306,23 @@ ar_poll_all() { # $1 = current five_hour resets_at, $2 = current 5h usage_pct
 # call made while implementing, not an explicit line in the Gate-1 plan;
 # confirm it matches intent.
 ar_write_quota_stop_flag() {
-  local pool="$1" pct="$2" fallback="$3" resets_at="${4:-}" epoch=""
+  local pool="$1" pct="$2" fallback="$3" resets_at="${4:-}" epoch="" tmp
   mkdir -p "$(dirname "$AR_QUOTA_STOP_FLAG")"
   if [ -n "$resets_at" ]; then
     epoch="$(ar_epoch_from_iso8601 "$resets_at" 2>/dev/null || echo "")"
+    if [ -z "$epoch" ]; then
+      ar_log "quota-stop flag: could not parse resets_at '$resets_at' for pool=$pool -- auto-clear disabled for this crossing, manual clear (lib/quota-stop-clear.sh) required"
+    fi
   fi
+  # Write-to-temp-then-mv: `mv` within the same directory is atomic, so a
+  # concurrent reader (the PreToolUse hooks) never observes a
+  # partially-written flag file.
+  tmp="$(mktemp)"
   jq -n --arg pool "$pool" --arg pct "$pct" --arg fallback "$fallback" \
     --arg epoch "$epoch" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{pool: $pool, pct: (($pct|tonumber?) // 0), fallback: $fallback,
       resets_at_epoch: (if $epoch == "" then null else ($epoch|tonumber) end),
-      at: $at}' > "$AR_QUOTA_STOP_FLAG"
+      at: $at}' > "$tmp" && mv "$tmp" "$AR_QUOTA_STOP_FLAG"
   ar_log "quota-stop flag written (pool=$pool pct=$pct fallback=$fallback)"
 }
 

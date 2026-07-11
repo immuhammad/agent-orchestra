@@ -40,7 +40,7 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
 case "$TOOL_NAME" in
   Write|Edit)
-    if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH"; then
+    if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
       exit 0
     fi
     ;;

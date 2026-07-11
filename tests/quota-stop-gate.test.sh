@@ -103,6 +103,26 @@ echo "== Claude Code dialect: any other tool (e.g. Read) is blocked while gated 
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":"README.md"}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "Read tool blocked while gated (deny-by-default, allow only the fixed list)" || fail "Read should be blocked while gated, got $GATE_STATUS"
 
+echo "== regression (agy security review): a compound command cannot smuggle an unrelated command alongside an allow-listed one =="
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"rm -rf /Users/mac/important && bash lib/dispatch.sh assign orchestra x DONE"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "compound command (&&) with a smuggled rm -rf is blocked, not allowed through" || fail "SECURITY REGRESSION: compound command bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x DONE; rm -rf /Users/mac/important"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "compound command (;) with a smuggled rm -rf is blocked, not allowed through" || fail "SECURITY REGRESSION: compound command bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x \"$(rm -rf /Users/mac/important)\""}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "command substitution inside an otherwise-matching call is blocked" || fail "SECURITY REGRESSION: command substitution bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+echo "== regression (agy security review): allow-listed script invocation with a pipe-delimited argument still works =="
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/log-decision.sh \"role|model|decision text\""}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "log-decision.sh's own pipe-delimited argument shape is NOT mistaken for a shell pipe" || fail "quote-aware split regressed: log-decision.sh with a pipe-delimited arg got blocked, $GATE_STATUS: $GATE_OUT"
+
+echo "== regression (agy security review): the Write allow-list is anchored to the project's canon dir, not any matching basename =="
+OUTSIDE="$(mktemp -d)"
+run_claude_gate "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$OUTSIDE/handoff.md\"}}"
+[ "$GATE_STATUS" -eq 2 ] && pass "a handoff.md OUTSIDE this project's canon dir is still blocked while gated" || fail "SECURITY REGRESSION: path allow-list not scoped to canon dir, got $GATE_STATUS: $GATE_OUT"
+rm -f "$OUTSIDE/handoff.md" 2>/dev/null
+
 echo "== Claude Code dialect: clearing the flag re-opens the gate =="
 rm -f "$FLAG"
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
