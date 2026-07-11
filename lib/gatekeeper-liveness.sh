@@ -143,19 +143,37 @@ liveness_main() {
 echo "Gatekeeper liveness watchdog active (stale after ${STALE_AFTER}s, target $TARGET)"
 while true; do
   now=$(date +%s)
-  last=0
-  [ -f "$HEARTBEAT" ] && last=$(cat "$HEARTBEAT" 2>/dev/null || echo 0)
-  age=$((now - last))
-
-  if [ "$age" -ge "$STALE_AFTER" ]; then
-    if [ "$ALERTED" = false ]; then
-      echo "$(date) - ALERT: gatekeeper heartbeat stale (${age}s, expected every ~${STALE_AFTER}s)" >> "$LOG"
-      tmux send-keys -t "$TARGET" "gatekeeper watchdog: no heartbeat for ${age}s -- gatekeeper.sh may have died. Check pane 4." C-m 2>/dev/null
-      ALERTED=true
-    fi
-  else
-    ALERTED=false
-  fi
+  # Ahmad fold-in (caught LIVE: a false "no heartbeat for 1783784949s"
+  # death alert fired while gatekeeper was alive and well). gatekeeper.sh
+  # now writes the heartbeat atomically (temp+mv), but this reader must
+  # ALSO guard against the pre-existing race independently -- a `cat` of
+  # a file mid-truncate-then-write, or any other transient empty/corrupt
+  # read, returns an EMPTY string with a SUCCESSFUL exit status, so the
+  # old `|| echo 0` fallback (which only fires on a `cat` FAILURE) never
+  # caught it: `last=""`, and `$((now - last))` treats "" as 0 in bash
+  # arithmetic, making age ~= now (~1.78 billion seconds) -- always past
+  # any real STALE_AFTER. Validate the read is actually numeric; if not,
+  # skip this tick's staleness check entirely (no age computed, no
+  # alert, no state change) rather than guessing.
+  last_raw=""
+  [ -f "$HEARTBEAT" ] && last_raw="$(cat "$HEARTBEAT" 2>/dev/null)"
+  case "$last_raw" in
+    ''|*[!0-9]*)
+      echo "$(date) - DEBUG: heartbeat file empty/non-numeric this tick ('${last_raw}') -- skipping staleness check rather than treating it as epoch 0" >> "$LOG"
+      ;;
+    *)
+      age=$((now - last_raw))
+      if [ "$age" -ge "$STALE_AFTER" ]; then
+        if [ "$ALERTED" = false ]; then
+          echo "$(date) - ALERT: gatekeeper heartbeat stale (${age}s, expected every ~${STALE_AFTER}s)" >> "$LOG"
+          tmux send-keys -t "$TARGET" "gatekeeper watchdog: no heartbeat for ${age}s -- gatekeeper.sh may have died. Check pane 4." C-m 2>/dev/null
+          ALERTED=true
+        fi
+      else
+        ALERTED=false
+      fi
+      ;;
+  esac
   if [ "$((now - RATELIMIT_LAST_CHECK_EPOCH))" -ge "$RATELIMIT_CHECK_INTERVAL" ]; then
     gkl_check_rate_limit_stuck
     RATELIMIT_LAST_CHECK_EPOCH="$now"

@@ -314,10 +314,16 @@ ar_write_quota_stop_flag() {
       ar_log "quota-stop flag: could not parse resets_at '$resets_at' for pool=$pool -- auto-clear disabled for this crossing, manual clear (lib/quota-stop-clear.sh) required"
     fi
   fi
-  # Write-to-temp-then-mv: `mv` within the same directory is atomic, so a
-  # concurrent reader (the PreToolUse hooks) never observes a
-  # partially-written flag file.
-  tmp="$(mktemp)"
+  # Write-to-temp-then-mv: `mv` is only atomic WITHIN the same filesystem
+  # -- a bare `mktemp` defaults to $TMPDIR, which can be a different
+  # mount than AR_QUOTA_STOP_FLAG's own directory, silently downgrading
+  # `mv` to a non-atomic copy+delete (same class of bug as the heartbeat
+  # write Ahmad caught live -- fixed here too while touching this code
+  # for the #10-rework). `mktemp "${AR_QUOTA_STOP_FLAG}.XXXXXX"` creates
+  # the temp file IN THE SAME DIRECTORY, guaranteeing a same-filesystem
+  # `mv` a concurrent reader (the PreToolUse hooks) can never observe
+  # partially-written.
+  tmp="$(mktemp "${AR_QUOTA_STOP_FLAG}.XXXXXX")"
   jq -n --arg pool "$pool" --arg pct "$pct" --arg fallback "$fallback" \
     --arg epoch "$epoch" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{pool: $pool, pct: (($pct|tonumber?) // 0), fallback: $fallback,
@@ -326,24 +332,50 @@ ar_write_quota_stop_flag() {
   ar_log "quota-stop flag written (pool=$pool pct=$pct fallback=$fallback)"
 }
 
-# ar_clear_quota_stop_flag_if_reset -- the #11<->#10 seam: lifts the
-# PreToolUse gate ONLY once the window that triggered it has genuinely
-# time-reset (epoch comparison against resets_at_epoch captured when the
-# flag was written), never a usage-percentage heuristic -- dropping below
-# some % mid-window is not the same as the window actually rolling over,
-# and clearing on that would reopen the exact drift bug #11 exists to fix.
-# A flag with no resets_at_epoch (weekly/both, see
+# ar_clear_quota_stop_flag_if_reset [current weekly usage_pct] -- the
+# #11<->#10 seam: lifts the PreToolUse gate ONLY once the window that
+# triggered it has genuinely time-reset (epoch comparison against
+# resets_at_epoch captured when the flag was written), never a
+# usage-percentage heuristic -- dropping below some % mid-window is not
+# the same as the window actually rolling over, and clearing on that
+# would reopen the exact drift bug #11 exists to fix. A flag with no
+# resets_at_epoch at all (a pure "weekly" crossing has none, see
 # ar_write_quota_stop_flag) is left alone here; only
-# lib/quota-stop-clear.sh's explicit manual clear lifts those. Call once
-# per gatekeeper iteration, unconditionally (same posture as ar_poll_all).
+# lib/quota-stop-clear.sh's explicit manual clear lifts it. Call once per
+# gatekeeper iteration, unconditionally (same posture as ar_poll_all).
+#
+# "both" is a special case (#10-rework finding 5, agy's dedicated
+# security review): it DOES carry a resets_at_epoch (the 5h reset time,
+# since gatekeeper.sh now passes it), but agy's own pool has no comparable
+# epoch this codebase can read -- once the 5h portion resets, this can't
+# tell whether agy is ALSO clear. Rather than either fully clearing (would
+# silently un-gate agy while it may still be exhausted) or leaving the
+# flag stuck forever with a stale "both" pool/fallback in the failsafe
+# text (the original bug -- a "both" flag with no resets_at_epoch at all
+# was invisible to this function permanently), DOWNGRADE it to a plain
+# "weekly" flag: still human-clear-only (matches "weekly always stops for
+# Ahmad, no exceptions"), but no longer permanently silently stuck once
+# Claude's own quota has genuinely returned. $1, if given, is the CURRENT
+# weekly usage_pct (gatekeeper.sh has it fresh every iteration) so the
+# downgraded flag shows an accurate %, not whatever stale 5h% the "both"
+# flag happened to be written with; falls back to the flag's own stored
+# pct if omitted (e.g. a caller that hasn't been updated, or a test).
 ar_clear_quota_stop_flag_if_reset() {
+  local current_weekly_pct="${1:-}"
   [ -f "$AR_QUOTA_STOP_FLAG" ] || return 0
   local flag_epoch pool
   flag_epoch="$(jq -r '.resets_at_epoch // empty' "$AR_QUOTA_STOP_FLAG" 2>/dev/null)"
   [ -z "$flag_epoch" ] && return 0
   if [ "$(ar_now_epoch)" -ge "$flag_epoch" ]; then
     pool="$(jq -r '.pool // "?"' "$AR_QUOTA_STOP_FLAG" 2>/dev/null)"
-    rm -f "$AR_QUOTA_STOP_FLAG"
-    ar_log "quota-stop flag cleared -- window reset (pool=$pool)"
+    if [ "$pool" = "both" ]; then
+      local pct
+      pct="${current_weekly_pct:-$(jq -r '.pct // 0' "$AR_QUOTA_STOP_FLAG" 2>/dev/null)}"
+      ar_write_quota_stop_flag "weekly" "$pct" "none"
+      ar_log "quota-stop flag downgraded both -> weekly (5h window reset; agy's pool has no epoch to auto-clear against, weekly still requires the manual clear)"
+    else
+      rm -f "$AR_QUOTA_STOP_FLAG"
+      ar_log "quota-stop flag cleared -- window reset (pool=$pool)"
+    fi
   fi
 }

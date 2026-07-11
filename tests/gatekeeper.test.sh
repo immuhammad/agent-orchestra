@@ -225,6 +225,58 @@ fi
 kill "$LIVENESS_PID" >/dev/null 2>&1
 LIVENESS_PID=""
 
+echo "== regression (Ahmad fold-in, PR#17 rework finding 6): an EMPTY heartbeat file (mid-write race) does NOT produce a false death alert =="
+# The confirmed live incident: gatekeeper.sh's non-atomic `date +%s >
+# "$HEARTBEAT"` truncates the file before writing, and a reader that
+# lands in that window sees an EMPTY string with a SUCCESSFUL `cat` --
+# the old `|| echo 0` fallback only fires on a `cat` FAILURE, so it never
+# caught this, and bash arithmetic silently treats "" as 0, making
+# age ~= now (~1.78 billion seconds) -- always past any real
+# STALE_AFTER. This reproduces the empty-file case directly (no need to
+# actually race gatekeeper.sh's writer) and confirms it's now a no-op
+# tick, not a false alert.
+: > "$GATEKEEPER_HEARTBEAT_FILE"  # empty, not missing -- the exact race condition
+: > "$GATEKEEPER_LIVENESS_LOG"
+tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
+GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
+  GATEKEEPER_LIVENESS_TARGET="$TEST_SESSION:0.0" \
+  bash "$LIVENESS" >/dev/null 2>&1 &
+LIVENESS_PID=$!
+disown
+sleep 4
+CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
+kill "$LIVENESS_PID" >/dev/null 2>&1
+LIVENESS_PID=""
+if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
+  fail "SECURITY/RELIABILITY REGRESSION (finding 6): an empty heartbeat file produced a false death alert: $CAPTURE"
+else
+  pass "an empty heartbeat file produces NO false alert (skips the tick instead of treating '' as epoch 0)"
+fi
+if grep -q "heartbeat file empty/non-numeric this tick" "$GATEKEEPER_LIVENESS_LOG" 2>/dev/null; then
+  pass "the skipped tick was logged for diagnosability (not a silent no-op)"
+else
+  fail "expected a debug log line explaining the skipped tick"
+fi
+
+echo "== regression (finding 6): a genuinely-old but VALID numeric heartbeat still alerts (the fix doesn't over-correct) =="
+echo "1" > "$GATEKEEPER_HEARTBEAT_FILE"  # ancient (epoch=1) -- a real, valid, stale heartbeat
+: > "$GATEKEEPER_LIVENESS_LOG"
+tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
+GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
+  GATEKEEPER_LIVENESS_TARGET="$TEST_SESSION:0.0" \
+  bash "$LIVENESS" >/dev/null 2>&1 &
+LIVENESS_PID=$!
+disown
+sleep 4
+CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
+kill "$LIVENESS_PID" >/dev/null 2>&1
+LIVENESS_PID=""
+if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
+  pass "a genuinely stale, validly-numeric heartbeat still triggers a real alert"
+else
+  fail "the empty-heartbeat fix over-corrected -- a real stale heartbeat should still alert, got: $CAPTURE"
+fi
+
 echo "== liveness: does NOT warn while the heartbeat stays fresh =="
 tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
 : > "$GATEKEEPER_LIVENESS_LOG"

@@ -221,11 +221,22 @@ while true; do
   # T33: heartbeat age computed from the PREVIOUS tick's file, before it's
   # overwritten further down -- "how long since gatekeeper last confirmed
   # it was alive", same signal gatekeeper-liveness.sh watches externally.
+  #
+  # Ahmad fold-in: `[ -z "$HB_VAL" ] && HB_VAL=0` looks like a safe
+  # fallback but IS the false-alert bug in disguise -- treating an
+  # empty/transiently-corrupt read as epoch 0 makes HEARTBEAT_AGE ~= now
+  # (~1.78 billion seconds), which the display below renders as stale/red
+  # even though gatekeeper is actively computing this exact line right
+  # now. Same validation as gatekeeper-liveness.sh's independent read:
+  # only compute an age from an actually-numeric value; otherwise show
+  # "never (first tick)" rather than a manufactured huge number.
   HEARTBEAT_AGE=""
   if [ -f "$HEARTBEAT" ]; then
     HB_VAL="$(cat "$HEARTBEAT" 2>/dev/null)"
-    [ -z "$HB_VAL" ] && HB_VAL=0
-    HEARTBEAT_AGE=$(( $(date +%s) - HB_VAL ))
+    case "$HB_VAL" in
+      ''|*[!0-9]*) : ;; # leave HEARTBEAT_AGE unset -- see comment above
+      *) HEARTBEAT_AGE=$(( $(date +%s) - HB_VAL )) ;;
+    esac
   fi
 
   gatekeeper_render
@@ -238,11 +249,14 @@ while true; do
       gk_say "Both quota pools exhausted"
       gk_mark_alerted claude_5h; gk_mark_alerted agy
       ar_mark_pending "$NOTIFY_SESSION:0.0"
-      # #10: gate every session's tools until Ahmad answers or a real
-      # window reset clears it. "both" has no comparable resets_at to
-      # auto-clear against (agy's pool isn't epoch-trackable here) -- stays
-      # gated until the manual clear (lib/quota-stop-clear.sh).
-      ar_write_quota_stop_flag "both" "$USAGE_PCT" "none"
+      # #10 (rework finding 5): carry the 5h resets_at even for "both" --
+      # agy's pool still has no epoch to auto-clear against, so this alone
+      # can't fully lift the gate, but ar_clear_quota_stop_flag_if_reset
+      # uses it to DOWNGRADE both -> weekly once the 5h window resets,
+      # rather than leaving a stale "both" flag permanently stuck even
+      # after Claude quota returns (the bug: a flag with no resets_at_epoch
+      # at all is invisible to the clear check forever).
+      ar_write_quota_stop_flag "both" "$USAGE_PCT" "none" "$FIVE_HOUR_RESETS_AT"
     fi
   else
     # --- Claude 5h over: fallback = agy ---
@@ -288,8 +302,10 @@ while true; do
 
   # #10: lift the quota-stop PreToolUse gate on a genuine time-based window
   # reset -- unconditional every iteration, independent of whether any pane
-  # is currently tracked (the #11<->#10 seam).
-  ar_clear_quota_stop_flag_if_reset
+  # is currently tracked (the #11<->#10 seam). WEEKLY_PCT is passed so a
+  # "both" -> "weekly" downgrade (finding 5) shows the CURRENT weekly%,
+  # not whatever stale 5h% the "both" flag happened to be written with.
+  ar_clear_quota_stop_flag_if_reset "$WEEKLY_PCT"
 
   # --- per-pool re-arm after reset (persisted, survives a restart) ---
   [ "$USAGE_PCT" -lt 50 ] && gk_clear_alerted claude_5h
@@ -299,7 +315,20 @@ while true; do
   # T19 liveness: heartbeat every iteration so gatekeeper-liveness.sh (a
   # separate process, so a gatekeeper crash can't also silence its own
   # watchdog) can detect a dead/hung gatekeeper and warn pane 0.
-  date +%s > "$HEARTBEAT"
+  #
+  # Write-to-temp-then-mv (Ahmad fold-in, caught LIVE: a false "no
+  # heartbeat" death alert fired while gatekeeper was alive). A direct
+  # `date +%s > "$HEARTBEAT"` truncates the file before writing the new
+  # value -- a reader (gatekeeper-liveness.sh, or this file's own render
+  # below) that opens the file in that exact window sees EMPTY content,
+  # not a missing file, so an `[ -f ... ]` existence check doesn't catch
+  # it. `mv` is only atomic WITHIN the same filesystem -- a bare
+  # `mktemp` defaults to $TMPDIR/tmp, which can be a different mount than
+  # $HEARTBEAT's own directory, silently downgrading `mv` to a
+  # non-atomic copy+delete. `mktemp "${HEARTBEAT}.XXXXXX"` creates the
+  # temp file IN THE SAME DIRECTORY, guaranteeing same-filesystem `mv`.
+  _hb_tmp="$(mktemp "${HEARTBEAT}.XXXXXX")"
+  date +%s > "$_hb_tmp" && mv "$_hb_tmp" "$HEARTBEAT"
   sleep "$CHECK_INTERVAL"
 done
 }

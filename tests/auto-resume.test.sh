@@ -367,9 +367,56 @@ rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 ar_write_quota_stop_flag "both" "95" "none"
 ar_clear_quota_stop_flag_if_reset
 if [ -f "$AUTO_RESUME_QUOTA_STOP_FLAG" ]; then
-  pass "both-exhausted flag never auto-clears either"
+  pass "a 'both' flag with NO resets_at at all (e.g. the usage API fetch failed) never auto-clears, stays fully manual"
 else
-  fail "both-exhausted flag should require the manual clear path, not auto-clear"
+  fail "a 'both' flag with no resets_at should require the manual clear path, not auto-clear"
+fi
+rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
+
+echo "== #10-rework finding 5: 'both' flag WITH a 5h resets_at downgrades to 'weekly' on reset, not permanently stuck =="
+# The original bug: gatekeeper.sh wrote the "both" flag with NO resets_at
+# at all, so even once the 5h window genuinely reset and Claude quota
+# came back, ar_clear_quota_stop_flag_if_reset had nothing to compare
+# against and the flag (and the whole PreToolUse gate) stayed stuck
+# forever -- breaking unattended recovery. gatekeeper.sh now passes the
+# 5h resets_at for "both" too; this exercises the clear function directly
+# (auto-resume.sh's own responsibility) with that resets_at.
+rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
+ar_write_quota_stop_flag "both" "95" "none" "2026-07-11T14:00:00Z"
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T13:00:00Z")" # before the 5h reset
+ar_clear_quota_stop_flag_if_reset "12"
+if [ "$(jq -r '.pool' "$AUTO_RESUME_QUOTA_STOP_FLAG" 2>/dev/null)" = "both" ]; then
+  pass "still 'both' before the 5h window has actually reset"
+else
+  fail "should still be 'both' before the 5h reset time is reached"
+fi
+
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T14:00:00Z")" # exactly at the 5h reset
+ar_clear_quota_stop_flag_if_reset "12"
+if [ ! -f "$AUTO_RESUME_QUOTA_STOP_FLAG" ]; then
+  fail "SECURITY/RECOVERY REGRESSION (finding 5): 'both' flag vanished entirely on 5h reset -- agy may still be exhausted, should downgrade to weekly, not fully clear"
+elif [ "$(jq -r '.pool' "$AUTO_RESUME_QUOTA_STOP_FLAG")" = "weekly" ]; then
+  pass "'both' downgraded to 'weekly' once the 5h window genuinely reset (agy's own pool still unverifiable, so it doesn't fully clear)"
+else
+  fail "expected pool=weekly after the downgrade, got: $(cat "$AUTO_RESUME_QUOTA_STOP_FLAG")"
+fi
+if [ "$(jq -r '.pct' "$AUTO_RESUME_QUOTA_STOP_FLAG" 2>/dev/null)" = "12" ]; then
+  pass "downgraded flag shows the CURRENT weekly% passed in, not the stale 5h% the 'both' flag was written with"
+else
+  fail "expected pct=12 (current weekly%) in the downgraded flag, got: $(cat "$AUTO_RESUME_QUOTA_STOP_FLAG")"
+fi
+if grep -q "downgraded both -> weekly" "$AUTO_RESUME_LOG"; then
+  pass "downgrade was logged"
+else
+  fail "expected a 'downgraded both -> weekly' log line"
+fi
+# The downgraded weekly flag must now behave exactly like any other
+# weekly flag: no resets_at_epoch, never auto-clears on its own.
+ar_clear_quota_stop_flag_if_reset "12"
+if [ -f "$AUTO_RESUME_QUOTA_STOP_FLAG" ] && [ "$(jq -r '.pool' "$AUTO_RESUME_QUOTA_STOP_FLAG")" = "weekly" ]; then
+  pass "the downgraded weekly flag itself does not auto-clear -- still requires the manual clear path"
+else
+  fail "the downgraded weekly flag should persist (manual-clear-only), got: $(cat "$AUTO_RESUME_QUOTA_STOP_FLAG" 2>/dev/null || echo MISSING)"
 fi
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 
