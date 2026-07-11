@@ -195,6 +195,61 @@ expect_allowed "custom protected_paths no longer blocks career-ops/" \
 expect_blocked "inline-list protected_paths blocks a listed path" \
   "cp a docs/frozen/b" "feature/issue-99" "$INLINE_YAML"
 
+echo "== issue #116 follow-up (agy REQUEST-CHANGES on PR #3): protected branches include the CONFIGURED integration_branch =="
+DEVELOP_YAML=$'integration_branch: develop'
+expect_blocked "git push targeting a CONFIGURED custom integration_branch is blocked, not just main/uat" \
+  "git push origin develop" "feature/issue-99" "$DEVELOP_YAML"
+expect_blocked "git merge while ON the configured custom integration_branch is blocked" \
+  "git merge feature/issue-1" "develop" "$DEVELOP_YAML"
+expect_blocked "main/uat protection is NOT lost when a different custom integration_branch is configured" \
+  "git push origin main" "feature/issue-99" "$DEVELOP_YAML"
+expect_allowed "pushing a branch that is neither main/uat nor the configured integration_branch stays allowed" \
+  "git push origin feature/issue-20" "feature/issue-99" "$DEVELOP_YAML"
+
+echo "== issue #116 follow-up (agy REQUEST-CHANGES on PR #3): script-exec trusts THIS orc installation's own bin/lib/hooks/tests, not just .harness/ =="
+# run_guard's throwaway scratch repo has no tests/lib/ subdirs of its own,
+# so it can't exercise "does SCRIPT resolve under ORC_INSTALL_ROOT" --
+# this repo (agent-orchestra) IS an orc installation, so run guard.sh with
+# CWD at the real REPO_ROOT to check against the real bin/lib/hooks/tests.
+run_guard_at_repo_root() {
+  local command="$1"
+  local payload out status
+  payload="$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')"
+  out="$(cd "$REPO_ROOT" && echo "$payload" | bash "$GUARD" 2>&1)"
+  status=$?
+  GUARD_OUT="$out"
+  GUARD_STATUS=$status
+}
+REPO_ROOT="$(cd "$DIR/.." >/dev/null 2>&1 && pwd)"
+
+run_guard_at_repo_root "bash tests/guard.test.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: running this repo's OWN test suite (bash tests/foo.test.sh) is trusted, not just .harness/*"; PASS=$((PASS + 1))
+else
+  echo "FAIL: running this repo's OWN test suite should be trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_at_repo_root "bash lib/orc-worktree.sh finish 116"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: running this repo's OWN lib script (bash lib/foo.sh) is trusted"; PASS=$((PASS + 1))
+else
+  echo "FAIL: running this repo's OWN lib script should be trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_at_repo_root "bash /tmp/whatever.sh"
+if [ "$GUARD_STATUS" -eq 2 ]; then
+  echo "PASS: a script OUTSIDE both .harness/ and this orc installation is still blocked"; PASS=$((PASS + 1))
+else
+  echo "FAIL: a script outside both trusted locations should still be blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_at_repo_root "bash /tmp/some-other-place/lib/evil.sh"
+if [ "$GUARD_STATUS" -eq 2 ]; then
+  echo "PASS: a directory merely NAMED lib/ elsewhere (not this installation) is still blocked, not trusted by name alone"; PASS=$((PASS + 1))
+else
+  echo "FAIL: a directory named lib/ outside this installation should still be blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

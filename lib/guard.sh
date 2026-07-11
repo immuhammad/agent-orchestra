@@ -6,6 +6,13 @@ set -euo pipefail
 GUARD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./orc-config.sh
 source "$GUARD_SCRIPT_DIR/orc-config.sh"
+# issue #116 follow-up (agy REQUEST-CHANGES on PR #3): this guard.sh
+# itself always lives in an orc installation's own lib/ -- ORC_INSTALL_ROOT
+# is that installation's root, used below to trust script-exec calls into
+# its own bin/lib/hooks/tests the same way .harness/ was always trusted,
+# without trusting any arbitrary directory that happens to also be named
+# lib/hooks/tests elsewhere.
+ORC_INSTALL_ROOT="$(cd "$GUARD_SCRIPT_DIR/.." && pwd)"
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -36,6 +43,16 @@ DANGEROUS_RE='^(rm -rf|git push --force|push -f|git reset --hard|reset --hard|gi
 # not the hook's fixed CWD. Starts at the hook's real $PWD, same as before,
 # for commands with no leading cd.
 guard_cwd="$PWD"
+# issue #116 follow-up (agy REQUEST-CHANGES on PR #3): protected branches
+# must include the CONFIGURED integration_branch, not just the hardcoded
+# main/uat pair -- orc-worktree.sh already respects a custom
+# integration_branch (issue #116), and guard.sh not doing the same left a
+# real gap: a project configuring integration_branch: develop could
+# git push/merge straight to it, completely unguarded. Kept main/uat as
+# defaults too (not just a fallback) since career-ops-harness's real
+# deployment uses uat and many others default to main -- configuring one
+# custom branch shouldn't silently un-protect the other common name.
+CONFIGURED_INTEGRATION_BRANCH="$(orc_get_scalar integration_branch)"
 
 while IFS= read -r seg; do
   trimmed="$(echo "$seg" | sed -E 's/^[[:space:]]*//')"
@@ -64,7 +81,7 @@ while IFS= read -r seg; do
   if echo "$trimmed" | grep -Eq '^git[[:space:]]+merge([[:space:]]|$)'; then
     current_branch="$(git -C "$guard_cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
     case "$current_branch" in
-      main|uat)
+      main|uat|"$CONFIGURED_INTEGRATION_BRANCH")
         # Allow a fast-forward SYNC of the local protected branch to its OWN
         # remote-tracking ref (e.g. `git merge --ff-only origin/uat` while on
         # uat) -- that only advances local to the commit Ahmad already merged
@@ -113,7 +130,7 @@ while IFS= read -r seg; do
       dest_ref="$(git -C "$guard_cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
     fi
     case "$dest_ref" in
-      main|uat)
+      main|uat|"$CONFIGURED_INTEGRATION_BRANCH")
         echo "guard.sh: blocked git push targeting protected branch '$dest_ref' (see AGENTS.md Hard Rules): $COMMAND" >&2
         exit 2
         ;;
@@ -126,6 +143,18 @@ while IFS= read -r seg; do
   # scripts under .harness/ are trusted (version-controlled, reviewable);
   # ad-hoc scripts anywhere else (scratch, /tmp, issue-body-generated) are
   # blocked so dangerous ops can't be smuggled past this guard in a file.
+  #
+  # issue #116 follow-up (agy REQUEST-CHANGES on PR #3): this whitelist
+  # only ever covered .harness/ -- fine when every harness script lived
+  # there, but this repo's own scripts (bin/, lib/, hooks/, tests/) now
+  # live in a SEPARATE orc installation. Without this, `bash
+  # tests/guard.test.sh` (documented in docs/getting-started.md, and the
+  # exact command that got blocked here repeatedly while writing this
+  # fix) or a consumer running `bash ../agent-orchestra/lib/orc-worktree.sh
+  # finish 116` would be blocked as untrusted. Trust is resolved by actual
+  # LOCATION (does the script fall under THIS guard.sh's own installation
+  # root, ORC_INSTALL_ROOT, computed above), not by directory NAME -- an
+  # arbitrary directory elsewhere named lib/hooks/tests is still blocked.
   if echo "$trimmed" | grep -Eq '^(bash|sh|zsh|source|\.)[[:space:]]+[^[:space:]-]'; then
     SCRIPT="$(echo "$trimmed" | awk '{print $2}')"
     case "$SCRIPT" in
@@ -133,8 +162,17 @@ while IFS= read -r seg; do
         : # trusted location, allow
         ;;
       *)
-        echo "guard.sh: blocked script execution outside .harness/ (bypasses command-string inspection, see G13): $trimmed" >&2
-        exit 2
+        # `|| true`: under `set -e`, a plain assignment from a failing
+        # command substitution (the cd chain fails when SCRIPT's directory
+        # doesn't exist) aborts the whole script here instead of falling
+        # through to the empty-resolved_dir blocked branch below.
+        resolved_dir="$(cd "$guard_cwd" 2>/dev/null && cd "$(dirname "$SCRIPT")" 2>/dev/null && pwd)" || true
+        if [ -n "$resolved_dir" ] && [[ "$resolved_dir" == "$ORC_INSTALL_ROOT"* ]]; then
+          : # trusted: this orc installation's own bin/lib/hooks/tests/etc.
+        else
+          echo "guard.sh: blocked script execution outside .harness/ or this orc installation ($ORC_INSTALL_ROOT) (bypasses command-string inspection, see G13): $trimmed" >&2
+          exit 2
+        fi
         ;;
     esac
   fi
