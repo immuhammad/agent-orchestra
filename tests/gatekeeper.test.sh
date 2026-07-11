@@ -292,10 +292,23 @@ echo "$*" >> "$SAY_CALLS_FILE"
 FAKESAY
 chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/say"
 
+# get_claude_token tries macOS Keychain first (silently no-ops on Linux --
+# no `security` binary), then falls back to $HOME/.claude/.credentials.json.
+# fetch_claude_usage returns immediately (never even calling the mocked
+# curl above) if that token is empty -- on a dev machine with real Claude
+# Code credentials in Keychain this always happened to succeed by
+# accident, but a CI runner has neither, silently no-oping the entire
+# mocked-crossing section below. FAKE_HOME's dummy credentials file makes
+# this section run the same everywhere, with no real token ever needed
+# since curl itself is mocked and never inspects it.
+FAKE_HOME="$FAKE_BIN/home"
+mkdir -p "$FAKE_HOME/.claude"
+echo '{"claudeAiOauth":{"accessToken":"test-token-not-real"}}' > "$FAKE_HOME/.claude/.credentials.json"
+
 gk_mocked_run() { # $1 = seconds to run, $2 = usage JSON, $3.. = extra env assignments
   local secs="$1" json="$2"; shift 2
   echo "$json" > "$CURL_MOCK_JSON_FILE"
-  env "$@" PATH="$FAKE_BIN:$PATH" CURL_MOCK_JSON_FILE="$CURL_MOCK_JSON_FILE" SAY_CALLS_FILE="$SAY_CALLS" \
+  env "$@" PATH="$FAKE_BIN:$PATH" HOME="$FAKE_HOME" CURL_MOCK_JSON_FILE="$CURL_MOCK_JSON_FILE" SAY_CALLS_FILE="$SAY_CALLS" \
     GATEKEEPER_INTERVAL=9999 bash "$GATEKEEPER" >/dev/null 2>&1 &
   GATEKEEPER_PID=$!
   sleep "$secs"
