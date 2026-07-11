@@ -11,6 +11,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB="$(cd "$DIR/../lib" && pwd)"
 TEST_SESSION="harness-send-lib-test"
 
 PASS=0
@@ -23,9 +24,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-source "$DIR/send-lib.sh"
+source "$LIB/send-lib.sh"
 
-SUBMIT_BODY="$(awk '/^send_submit\(\)/{f=1} f{print} f&&/^}/{exit}' "$DIR/send-lib.sh")"
+SUBMIT_BODY="$(awk '/^send_submit\(\)/{f=1} f{print} f&&/^}/{exit}' "$LIB/send-lib.sh")"
 
 echo "== send_submit: text and Enter are separate key events, sent literally (finding 4) =="
 if printf '%s\n' "$SUBMIT_BODY" | grep -qF 'send-keys -t "$target" -l -- "$text"' \
@@ -81,22 +82,22 @@ fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1
 
 echo "== send_submit: call sites (nudge_agent, gatekeeper notify(), auto-resume resume path) =="
-if grep -q 'send_submit "\$target" "check inbox"' "$DIR/dispatch.sh"; then
+if grep -q 'send_submit "\$target" "check inbox"' "$LIB/dispatch.sh"; then
   pass "dispatch.sh's nudge_agent submits via send_submit (issue #86 finding 1)"
 else
   fail "nudge_agent should submit via send_submit, not a raw send-keys burst"
 fi
-if grep -q 'source "\$DIR/send-lib.sh"' "$DIR/dispatch.sh"; then
+if grep -q 'source "\$DIR/send-lib.sh"' "$LIB/dispatch.sh"; then
   pass "dispatch.sh sources send-lib.sh"
 else
   fail "dispatch.sh should source send-lib.sh"
 fi
-if grep -q 'source "\$AR_DIR/send-lib.sh"' "$DIR/auto-resume.sh"; then
+if grep -q 'source "\$AR_DIR/send-lib.sh"' "$LIB/auto-resume.sh"; then
   pass "auto-resume.sh sources send-lib.sh"
 else
   fail "auto-resume.sh should source send-lib.sh"
 fi
-if grep -q 'send_meaningful_tail "\$target" 10' "$DIR/dispatch.sh"; then
+if grep -q 'send_meaningful_tail "\$target" 10' "$LIB/dispatch.sh"; then
   pass "dispatch.sh's pane_is_idle uses the blank-filtered send_meaningful_tail, not a raw tail -10"
 else
   fail "pane_is_idle should use send_meaningful_tail, not an unfiltered capture-pane|tail"

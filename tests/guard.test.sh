@@ -5,7 +5,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-GUARD="$DIR/guard.sh"
+GUARD="$DIR/../lib/guard.sh"
 
 PASS=0
 FAIL=0

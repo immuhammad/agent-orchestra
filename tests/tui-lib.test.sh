@@ -4,7 +4,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-LIB="$DIR/tui-lib.sh"
+LIB="$DIR/../lib/tui-lib.sh"
 
 PASS=0
 FAIL=0
