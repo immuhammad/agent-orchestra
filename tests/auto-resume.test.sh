@@ -9,6 +9,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB="$(cd "$DIR/../lib" && pwd)"
 TEST_SESSION="harness-auto-resume-test"
 
 export AUTO_RESUME_STATE_FILE
@@ -19,7 +20,7 @@ AUTO_RESUME_LOG="$(mktemp)"
 AUTO_RESUME_MAX_PER_DAY=2
 rm -f "$AUTO_RESUME_STATE_FILE" # ar_ensure_state_file should recreate it
 
-source "$DIR/auto-resume.sh"
+source "$LIB/auto-resume.sh"
 
 PASS=0
 FAIL=0
@@ -137,12 +138,12 @@ echo "== #80/#81/#86 (was T31/#68-E): resume path submits via the shared send_su
 # all -- issue #105 replaced that with a durable dispatch.sh message to
 # Orchestra (see gatekeeper.test.sh's Task 1/2 cases and
 # gk_alert_orchestra in gatekeeper.sh).
-if grep -q 'send_submit "\$pane" "Quota window reset' "$DIR/auto-resume.sh"; then
+if grep -q 'send_submit "\$pane" "Quota window reset' "$LIB/auto-resume.sh"; then
   pass "resume path submits via send_submit"
 else
   fail "resume path should submit via send_submit, not a raw send-keys burst"
 fi
-if grep -q 'gk_alert_orchestra' "$DIR/gatekeeper.sh" && grep -q 'dispatch_main assign orchestra' "$DIR/gatekeeper.sh"; then
+if grep -q 'gk_alert_orchestra' "$LIB/gatekeeper.sh" && grep -q 'dispatch_main assign orchestra' "$LIB/gatekeeper.sh"; then
   pass "gatekeeper alerts route through dispatch_main assign orchestra (issue #105), not a direct pane keystroke"
 else
   fail "gatekeeper should route alerts through gk_alert_orchestra/dispatch_main, not send_submit directly"
@@ -235,7 +236,7 @@ else
 fi
 
 echo "== weekly (seven_day) never wires into auto-resume =="
-GATEKEEPER="$DIR/gatekeeper.sh"
+GATEKEEPER="$LIB/gatekeeper.sh"
 WEEKLY_BLOCK="$(sed -n '/Claude weekly (seven_day) over/,/^  fi/p' "$GATEKEEPER")"
 if echo "$WEEKLY_BLOCK" | grep -q "ar_mark_pending"; then
   fail "the weekly (seven_day) alert block must NEVER call ar_mark_pending"

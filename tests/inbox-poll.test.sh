@@ -4,8 +4,13 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-POLL="$DIR/inbox-poll.sh"
+POLL="$DIR/../lib/inbox-poll.sh"
 TESTBOX="$DIR/inbox/testpollagent"
+# issue #116: inbox-poll.sh resolves its inbox root via
+# INBOX_POLL_CANON_DIR (or orchestrator.yaml discovery) now, not its own
+# script directory -- pin it at $DIR so TESTBOX above is where it actually
+# looks.
+export INBOX_POLL_CANON_DIR="$DIR"
 
 PASS=0
 FAIL=0

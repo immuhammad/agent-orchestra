@@ -32,8 +32,9 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-GATEKEEPER="$DIR/gatekeeper.sh"
-LIVENESS="$DIR/gatekeeper-liveness.sh"
+LIB="$(cd "$DIR/../lib" && pwd)"
+GATEKEEPER="$LIB/gatekeeper.sh"
+LIVENESS="$LIB/gatekeeper-liveness.sh"
 TEST_SESSION="gktest-$$"
 REAL_SESSION="harness"
 
