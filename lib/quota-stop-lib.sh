@@ -9,31 +9,113 @@
 # callers.
 set -uo pipefail
 
+_QSG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+# shellcheck source=./harness-root.sh
+source "$_QSG_LIB_DIR/harness-root.sh"
+
+# qsg_resolve_canon_dir -- fail-CLOSED project-root resolution (finding 3,
+# agy's dedicated security review of PR #17's rework request). The
+# original version of the two hooks called harness_canonical_dir "$PWD"
+# alone and failed OPEN (allowed the tool) if that came back empty -- an
+# agent could `cd /tmp` (or anywhere with no discoverable
+# orchestrator.yaml) and every subsequent tool call bypassed the gate
+# entirely, flag or no flag.
+#
+# Tries $CLAUDE_PROJECT_DIR FIRST (Claude Code always sets it for the
+# whole session, so resolution succeeds even from a cwd with nothing
+# discoverable via ancestor walk-up), falling back to $PWD-based walk-up
+# (harness_canonical_dir's own ancestor search) if that's unset. Only
+# when BOTH fail does the caller fail closed. FLAG (per this ticket's
+# instructions): agy's own equivalent anchor env var, if one exists,
+# isn't confirmed in this codebase -- add it to the candidate list below
+# once known; until then agy sessions rely on the $PWD walk-up alone,
+# same as before.
+#
+# Echoes the canonical dir and returns 0 on success; returns 1 (nothing
+# echoed) only if every candidate fails, at which point the caller has no
+# way to know whether a quota-stop flag exists and must fail closed.
+qsg_resolve_canon_dir() {
+  local dir
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && dir="$(harness_canonical_dir "$CLAUDE_PROJECT_DIR" 2>/dev/null)"; then
+    echo "$dir"
+    return 0
+  fi
+  if dir="$(harness_canonical_dir "$PWD" 2>/dev/null)"; then
+    echo "$dir"
+    return 0
+  fi
+  return 1
+}
+
+# qsg_lexical_normalize <path> -- resolves "." and ".." path components
+# PURELY LEXICALLY (no filesystem access, so it works for a target that
+# doesn't exist yet -- exactly what's needed for a Write about to CREATE
+# an inbox .msg). Echoes the normalized absolute path and returns 0, or
+# returns 1 (nothing echoed) if ".." would climb above the root -- that
+# can never resolve to anything inside canon_dir, so it's an unconditional
+# reject. Bash 3.2 safe (plain indexed array, no associative arrays).
+qsg_lexical_normalize() {
+  local path="$1" part
+  local -a stack
+  stack=()
+  local IFS='/'
+  for part in $path; do
+    case "$part" in
+      ''|'.') continue ;;
+      '..')
+        if [ "${#stack[@]}" -eq 0 ]; then
+          return 1
+        fi
+        unset 'stack[${#stack[@]}-1]'
+        ;;
+      *) stack+=("$part") ;;
+    esac
+  done
+  local result="" p
+  for p in "${stack[@]}"; do
+    result="${result}/${p}"
+  done
+  [ -z "$result" ] && result="/"
+  echo "$result"
+  return 0
+}
+
 # qsg_path_allowed <file_path> <canon_dir> -- the ONLY Write/Edit targets a
 # gated session may still touch: its own handoff.md update and
 # decisions.log append (AGENTS.md Quota Failsafe: "update handoff.md
 # fully" before asking), plus inbox .ack/.msg so a blocked agent can still
 # park honestly and report back (this ticket's own REPORT-BACK instruction
 # requires writing a .msg via dispatch.sh even while gated). ANCHORED to
-# canon_dir -- a bare basename/suffix match (the original version of this
-# function) let a Write to ANY path ending in e.g. "handoff.md" through
-# regardless of location (/tmp/evil/handoff.md, another project's
-# decisions.log, ...); caught in agy's dedicated security review of this
-# diff. file_path is resolved against $PWD when relative, matching how
-# Claude Code/agy actually report tool_input.file_path.
+# canon_dir AFTER LEXICAL NORMALIZATION -- the original version of this
+# function (a) only matched a bare basename/suffix (let /tmp/evil/handoff.md
+# through regardless of location), and even the canon_dir-anchored version
+# that fixed that (b) matched the RAW string before resolving "..", so
+# "inbox/builder/../../../../etc/evil.msg" string-glob-matched
+# "$canon_dir/inbox/*/*.msg" (bash's case `*` matches "/" too) while the
+# OS would actually resolve it somewhere entirely outside canon_dir; both
+# caught in agy's dedicated security review of this diff (finding 2). Both
+# file_path and canon_dir are normalized before comparison so a traversal
+# component can never survive into the match.
 qsg_path_allowed() {
-  local file_path="$1" canon_dir="$2" resolved
+  local file_path="$1" canon_dir="$2" resolved normalized canon_normalized
   [ -z "$file_path" ] && return 1
   case "$file_path" in
     /*) resolved="$file_path" ;;
     *) resolved="$PWD/$file_path" ;;
   esac
-  case "$resolved" in
-    "$canon_dir/handoff.md"|"$canon_dir/decisions.log") return 0 ;;
-    "$canon_dir"/inbox/*/*.ack|"$canon_dir"/inbox/*/*.msg) return 0 ;;
+  normalized="$(qsg_lexical_normalize "$resolved")" || return 1
+  canon_normalized="$(qsg_lexical_normalize "$canon_dir")" || return 1
+  case "$normalized" in
+    "$canon_normalized/handoff.md"|"$canon_normalized/decisions.log") return 0 ;;
+    "$canon_normalized"/inbox/*/*.ack|"$canon_normalized"/inbox/*/*.msg) return 0 ;;
     *) return 1 ;;
   esac
 }
+
+# __QSG_REJECT__ is not a valid shell segment (a bare double-underscore
+# token), so it's safe as an unambiguous sentinel for "this command must
+# be rejected outright" from qsg_split_top_level below.
+QSG_REJECT_SENTINEL="__QSG_REJECT__"
 
 # qsg_split_top_level <command string> -- echoes one shell "segment" per
 # line, splitting on UNQUOTED ; && || |. Quote-aware: a separator
@@ -49,8 +131,20 @@ qsg_path_allowed() {
 # allow-list splitting the same naive way fails the opposite direction
 # (a call that should be allowed gets rejected), which is safe but wrong,
 # not a security hole -- still worth being precise about since it broke a
-# real, expected caller. Bash 3.2 safe (character-by-character scan, no
-# regex extensions).
+# real, expected caller.
+#
+# ALSO hard-rejects (echoes ONLY $QSG_REJECT_SENTINEL and stops) on an
+# UNQUOTED `<` or `>` anywhere -- a redirection target is not part of an
+# allow-listed command's own arguments; letting `bash lib/dispatch.sh ...
+# > /etc/passwd` pass the allow-list as "one matching segment" was a real
+# bypass (finding 1, agy's dedicated security review of PR #17's rework
+# request) -- the segment split alone doesn't stop the shell from still
+# honoring the redirection. Quote-aware for the SAME reason the separator
+# split is: a report-back message legitimately containing a literal "<"
+# or ">" inside quotes (e.g. "usage < 50%") must not be blocked, only an
+# actual unquoted redirection operator.
+#
+# Bash 3.2 safe (character-by-character scan, no regex extensions).
 qsg_split_top_level() {
   local s="$1" i c quote="" cur="" len
   len=${#s}
@@ -67,6 +161,10 @@ qsg_split_top_level() {
       "'"|'"')
         quote="$c"
         cur="${cur}${c}"
+        ;;
+      '<'|'>')
+        echo "$QSG_REJECT_SENTINEL"
+        return 0
         ;;
       ';')
         echo "$cur"; cur=""
@@ -112,14 +210,21 @@ qsg_split_top_level() {
 # diff. Command substitution/backtick/backgrounding are rejected outright
 # and UNCONDITIONALLY (even inside quotes) -- none of the three
 # allow-listed scripts legitimately needs `$(...)`, backticks, or `&` in
-# an argument, so being maximally strict there costs nothing. Every
-# remaining UNQUOTED top-level segment (qsg_split_top_level) must
-# independently match the allow-list, anchored at the segment's start.
+# an argument, so being maximally strict there costs nothing. An unquoted
+# redirection (`>`,`>>`,`<`,`<<`,`<<<`, or fd-prefixed like `2>`/`&>` --
+# all of which contain a bare `<`/`>`) is likewise a hard reject via
+# qsg_split_top_level's sentinel (finding 1, agy's dedicated security
+# review). Every remaining UNQUOTED top-level segment must independently
+# match the allow-list, anchored at the segment's start.
 qsg_command_allowed() {
-  local cmd="$1" seg trimmed rest
+  local cmd="$1" seg trimmed rest split
   [ -z "$cmd" ] && return 1
   case "$cmd" in
     *'$('*|*'`'*|*'&'*) return 1 ;;
+  esac
+  split="$(qsg_split_top_level "$cmd")"
+  case "$split" in
+    "$QSG_REJECT_SENTINEL"|"$QSG_REJECT_SENTINEL"$'\n'*) return 1 ;;
   esac
   while IFS= read -r seg; do
     trimmed="$(echo "$seg" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -138,7 +243,7 @@ qsg_command_allowed() {
       lib/quota-stop-clear.sh|lib/quota-stop-clear.sh\ *|*/lib/quota-stop-clear.sh|*/lib/quota-stop-clear.sh\ *) ;;
       *) return 1 ;;
     esac
-  done <<< "$(qsg_split_top_level "$cmd")"
+  done <<< "$split"
   return 0
 }
 

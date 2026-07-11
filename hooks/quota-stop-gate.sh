@@ -15,21 +15,23 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 LIB_DIR="$(cd "$DIR/../lib" >/dev/null 2>&1 && pwd)"
-# shellcheck source=../lib/harness-root.sh
-source "$LIB_DIR/harness-root.sh"
 # shellcheck source=../lib/quota-stop-lib.sh
 source "$LIB_DIR/quota-stop-lib.sh"
 
 INPUT=$(cat)
 
-# Fail OPEN (allow) if the project root can't be resolved -- unlike
-# guard-write.sh's protected-path check (a hard security boundary that
-# must fail closed), this is an availability gate: a directory with no
-# orchestrator.yaml has no quota-stop flag to check against, and blocking
-# every tool call in that case would be a much worse regression than
-# occasionally missing the gate. FLAG (per this ticket's instructions):
-# confirm this fail-open choice is the intended posture.
-CANON_DIR="$(harness_canonical_dir "$PWD" 2>/dev/null)" || exit 0
+# FAIL CLOSED if the project root can't be resolved (finding 3, agy's
+# dedicated security review): the original fail-OPEN posture here meant
+# `cd /tmp` (or anywhere with no discoverable orchestrator.yaml) bypassed
+# the gate entirely, flag or no flag -- an enforcement gate must fail
+# closed on "can't tell", not allow. qsg_resolve_canon_dir tries
+# $CLAUDE_PROJECT_DIR first specifically so this stays rare in practice
+# (Claude Code always sets it for the session). The message is specific
+# enough to diagnose (not a silent brick) if it does fire.
+CANON_DIR="$(qsg_resolve_canon_dir)" || {
+  echo "quota-stop-gate.sh: gate cannot verify quota state -- project root unresolvable via \$CLAUDE_PROJECT_DIR or \$PWD ancestor walk-up (no orchestrator.yaml found). Failing CLOSED per AGENTS.md Quota Failsafe: an enforcement gate that can't check state must not silently allow. Set CLAUDE_PROJECT_DIR or run from inside a project with orchestrator.yaml." >&2
+  exit 2
+}
 FLAG_PATH="$CANON_DIR/state/quota-stop"
 
 [ -f "$FLAG_PATH" ] || exit 0

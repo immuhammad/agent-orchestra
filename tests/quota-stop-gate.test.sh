@@ -123,17 +123,40 @@ run_claude_gate "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$OUTSI
 [ "$GATE_STATUS" -eq 2 ] && pass "a handoff.md OUTSIDE this project's canon dir is still blocked while gated" || fail "SECURITY REGRESSION: path allow-list not scoped to canon dir, got $GATE_STATUS: $GATE_OUT"
 rm -f "$OUTSIDE/handoff.md" 2>/dev/null
 
+echo "== regression (agy PR#17 rework, finding 1): a redirection cannot smuggle a write to an arbitrary file =="
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x DONE > /tmp/quota-stop-gate-poc-redirect"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "an allow-listed call with a trailing > redirection is blocked, not allowed through" || fail "SECURITY REGRESSION (finding 1): redirection bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x DONE 2>> /tmp/quota-stop-gate-poc-redirect2"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "an fd-prefixed redirection (2>>) is also blocked" || fail "SECURITY REGRESSION (finding 1): fd-prefixed redirection bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x \"message with < and > as literal text\""}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "a QUOTED literal < or > inside an argument is not mistaken for a redirection" || fail "over-strict: quoted </> inside an argument got blocked, $GATE_STATUS: $GATE_OUT"
+
+echo "== regression (agy PR#17 rework, finding 2): the path allow-list survives a .. traversal attempt, not just a bare cross-project path =="
+run_claude_gate '{"tool_name":"Write","tool_input":{"file_path":".harness/inbox/builder/../../../../etc/quota-stop-gate-poc-traversal.msg"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "a Write with a .. traversal that string-glob-matches the inbox pattern is still blocked" || fail "SECURITY REGRESSION (finding 2): path traversal bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Write","tool_input":{"file_path":".harness/inbox/builder/./20260711-99.msg"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "a harmless ./ in an otherwise-legitimate inbox path is still allowed (normalization doesn't over-block)" || fail "over-strict: a harmless ./ segment got blocked, $GATE_STATUS: $GATE_OUT"
+
 echo "== Claude Code dialect: clearing the flag re-opens the gate =="
 rm -f "$FLAG"
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "gate re-opened once the flag is cleared" || fail "gate should re-open once the flag is cleared, got $GATE_STATUS"
 
-echo "== Claude Code dialect: unresolvable project root fails OPEN =="
+echo "== regression (agy PR#17 rework, finding 3): unresolvable project root fails CLOSED, not open =="
 NOROOT="$(mktemp -d)"
-OUT="$(cd "$NOROOT" && echo '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' | bash "$CLAUDE_GATE" 2>&1)"
+OUT="$(cd "$NOROOT" && env -u CLAUDE_PROJECT_DIR bash -c 'echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la\"}}" | bash "'"$CLAUDE_GATE"'"' 2>&1)"
 STATUS=$?
+[ "$STATUS" -eq 2 ] && pass "no orchestrator.yaml findable and no CLAUDE_PROJECT_DIR -> fails CLOSED (blocked)" || fail "SECURITY REGRESSION (finding 3): expected fail-closed (exit 2) with no resolvable project root, got $STATUS: $OUT"
+echo "$OUT" | grep -qi "failing closed" && pass "fail-closed message is diagnosable (says why), not a silent brick" || fail "expected a diagnosable 'failing closed' message, got: $OUT"
+
+echo "== regression (agy PR#17 rework, finding 3): CLAUDE_PROJECT_DIR anchor resolves even when \$PWD has nothing discoverable =="
+OUT="$(cd "$NOROOT" && env CLAUDE_PROJECT_DIR="$TMP" bash -c 'echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la\"}}" | bash "'"$CLAUDE_GATE"'"' 2>&1)"
+STATUS=$?
+[ "$STATUS" -eq 0 ] && pass "CLAUDE_PROJECT_DIR anchor lets resolution succeed from an unrelated cwd (no flag active there, so allowed)" || fail "CLAUDE_PROJECT_DIR anchor should have resolved successfully, got $STATUS: $OUT"
 rm -rf "$NOROOT"
-[ "$STATUS" -eq 0 ] && pass "no orchestrator.yaml findable -> fails open (allow), not closed" || fail "expected fail-open (exit 0) with no resolvable project root, got $STATUS: $OUT"
 
 echo "== agy dialect: no flag -> allow decision =="
 rm -f "$FLAG"
@@ -166,6 +189,33 @@ if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
   pass "agy: dispatch.sh invocation allowed while gated"
 else
   fail "agy: dispatch.sh should be allowed while gated, got: $GATE_OUT"
+fi
+
+echo "== regression (agy PR#17 rework, finding 3): agy dialect also fails CLOSED on an unresolvable root =="
+NOROOT2="$(mktemp -d)"
+OUT="$(cd "$NOROOT2" && env -u CLAUDE_PROJECT_DIR bash -c 'echo "{\"toolCall\":{\"args\":{\"CommandLine\":\"ls -la\"}}}" | bash "'"$AGY_GATE"'"' 2>&1)"
+rm -rf "$NOROOT2"
+DECISION="$(echo "$OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: unresolvable root -> deny decision (fails closed), not allow" || fail "SECURITY REGRESSION (finding 3, agy): expected a deny decision, got: $OUT"
+
+echo "== regression (agy PR#17 rework, finding 4): agy file-write canary -- a plausible write-tool payload shape is allow-listed for handoff.md =="
+# CANARY, not a confirmed fix (see lib/guard-quota-stop-agy.sh's own FLAG
+# comment): no real agy PreToolUse payload for a file-write tool call is
+# confirmed in this codebase. This documents the exact field-name
+# candidates tried (FilePath here) so a live agy trace can validate or
+# correct them. If agy's REAL shape differs, this test (not just the
+# hook) needs updating once confirmed.
+run_agy_gate '{"toolCall":{"args":{"FilePath":".harness/handoff.md"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: a FilePath-shaped write-tool call targeting handoff.md is allowed while gated (was previously trapped -- empty CommandLine always fell through to deny)"
+else
+  fail "agy file-write canary: expected handoff.md write to be allowed via the FilePath probe, got: $GATE_OUT"
+fi
+run_agy_gate '{"toolCall":{"args":{"FilePath":"/tmp/some-other-file-not-allowlisted.txt"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "deny"' >/dev/null 2>&1; then
+  pass "agy: a FilePath-shaped write-tool call targeting a NON-allow-listed path is still blocked while gated"
+else
+  fail "agy file-write canary: a non-allow-listed path should still be denied, got: $GATE_OUT"
 fi
 
 echo "== lib/quota-stop-clear.sh: clears an active flag and logs it =="
