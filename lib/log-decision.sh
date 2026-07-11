@@ -21,15 +21,20 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "$DIR/harness-root.sh"
 # issue #99: decisions.log is per-repo state, not per-checkout -- a T33 case
 # already hit this exact bug (an entry got written worktree-local and had
-# to be re-logged by hand). CANON_DIR resolves to the MAIN checkout's
-# .harness regardless of which worktree log-decision.sh happens to run
-# from, off the CALLER's cwd (issue #116: this script no longer lives
-# inside the project it serves). `set -e` above means a resolution
-# failure (bad exit + stderr message from harness_canonical_dir) aborts
-# here rather than silently continuing with an empty CANON_DIR.
-CANON_DIR="$(harness_canonical_dir "$PWD")"
-LOG_FILE="${LOG_DECISION_FILE:-$CANON_DIR/decisions.log}"
-LOCK_DIR="${LOG_DECISION_LOCK_DIR:-$CANON_DIR/.decisions.lock}"
+# to be re-logged by hand). Resolves off the CALLER's cwd (issue #116:
+# this script no longer lives inside the project it serves), lazily --
+# only if LOG_FILE or LOCK_DIR is left to its default -- so a caller
+# pinning both explicitly (tests) never needs orchestrator.yaml/
+# ORC_PROJECT_ROOT. `set -e` means a resolution failure (bad exit +
+# stderr message from harness_canonical_dir) aborts here.
+_ld_canon_dir() {
+  if [ -z "${_LD_CANON_DIR_CACHE:-}" ]; then
+    _LD_CANON_DIR_CACHE="$(harness_canonical_dir "$PWD")"
+  fi
+  echo "$_LD_CANON_DIR_CACHE"
+}
+LOG_FILE="${LOG_DECISION_FILE:-$(_ld_canon_dir)/decisions.log}"
+LOCK_DIR="${LOG_DECISION_LOCK_DIR:-$(_ld_canon_dir)/.decisions.lock}"
 
 IFS='|' read -r ROLE MODEL DECISION <<< "$ARG"
 

@@ -34,16 +34,23 @@ source "$AR_DIR/send-lib.sh"
 # shellcheck source=./harness-root.sh
 source "$AR_DIR/harness-root.sh"
 # issue #116: state defaults off the CALLER's project root (this script's
-# own dir is now agent-orchestra's shared lib/, not the consumer project).
-if [ -n "${AUTO_RESUME_CANON_DIR:-}" ]; then
-  AR_CANON_DIR="$AUTO_RESUME_CANON_DIR"
-elif ! AR_CANON_DIR="$(harness_canonical_dir "$PWD")"; then
-  echo "auto-resume.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
-  exit 1
-fi
-AR_STATE_FILE="${AUTO_RESUME_STATE_FILE:-$AR_CANON_DIR/auto-resume-state.json}"
+# own dir is now agent-orchestra's shared lib/, not the consumer
+# project). Resolved lazily/memoized -- a caller pinning every *_FILE/LOG
+# var explicitly (tests) never needs orchestrator.yaml/ORC_PROJECT_ROOT.
+_ar_canon_dir() {
+  if [ -z "${_AR_CANON_DIR_CACHE:-}" ]; then
+    if [ -n "${AUTO_RESUME_CANON_DIR:-}" ]; then
+      _AR_CANON_DIR_CACHE="$AUTO_RESUME_CANON_DIR"
+    elif ! _AR_CANON_DIR_CACHE="$(harness_canonical_dir "$PWD")"; then
+      echo "auto-resume.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT, run from inside a project with orchestrator.yaml, or pin AUTO_RESUME_STATE_FILE/AUTO_RESUME_LOG explicitly" >&2
+      exit 1
+    fi
+  fi
+  echo "$_AR_CANON_DIR_CACHE"
+}
+AR_STATE_FILE="${AUTO_RESUME_STATE_FILE:-$(_ar_canon_dir)/auto-resume-state.json}"
 AR_MAX_PER_DAY="${AUTO_RESUME_MAX_PER_DAY:-2}"
-AR_LOG="${AUTO_RESUME_LOG:-$AR_CANON_DIR/budget.log}"
+AR_LOG="${AUTO_RESUME_LOG:-$(_ar_canon_dir)/budget.log}"
 # The exact wording is mandated by AGENTS.md's Quota Failsafe ("Keep the
 # (a)/(b)/(c) structure exactly") -- this regex is deliberately narrow so it
 # can't accidentally match ordinary conversation.

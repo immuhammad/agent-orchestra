@@ -8,18 +8,26 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "$DIR/harness-root.sh"
 # issue #116: state files default off the CALLER's project root, not this
 # script's own directory (these scripts now live in agent-orchestra's
-# lib/, separate from any consumer project). GATEKEEPER_CANON_DIR
-# overrides outright for tests.
-if [ -n "${GATEKEEPER_CANON_DIR:-}" ]; then
-  CANON_DIR="$GATEKEEPER_CANON_DIR"
-elif ! CANON_DIR="$(harness_canonical_dir "$PWD")"; then
-  echo "gatekeeper.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
-  exit 1
-fi
-HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$CANON_DIR/gatekeeper.heartbeat}"
+# lib/, separate from any consumer project). Resolved LAZILY (only if at
+# least one of the specific *_FILE overrides below is unset) and memoized
+# -- a caller that pins every path explicitly (tests, or an advanced
+# setup) never needs an orchestrator.yaml/ORC_PROJECT_ROOT to exist at
+# all. GATEKEEPER_CANON_DIR overrides the resolution itself outright.
+_gk_canon_dir() {
+  if [ -z "${_GK_CANON_DIR_CACHE:-}" ]; then
+    if [ -n "${GATEKEEPER_CANON_DIR:-}" ]; then
+      _GK_CANON_DIR_CACHE="$GATEKEEPER_CANON_DIR"
+    elif ! _GK_CANON_DIR_CACHE="$(harness_canonical_dir "$PWD")"; then
+      echo "gatekeeper.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT, run from inside a project with orchestrator.yaml, or pin GATEKEEPER_HEARTBEAT_FILE/GATEKEEPER_BUDGET_LOG/GATEKEEPER_ALERT_STATE_FILE explicitly" >&2
+      exit 1
+    fi
+  fi
+  echo "$_GK_CANON_DIR_CACHE"
+}
+HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$(_gk_canon_dir)/gatekeeper.heartbeat}"
 # Overridable so tests never append real ALERT/EXIT lines into the tracked
 # .harness/budget.log (or a worktree's own copy of it).
-BUDGET_LOG="${GATEKEEPER_BUDGET_LOG:-$CANON_DIR/budget.log}"
+BUDGET_LOG="${GATEKEEPER_BUDGET_LOG:-$(_gk_canon_dir)/budget.log}"
 
 # issue #105 (T44) Task 3: diagnostics for WHY gatekeeper stopped, not just
 # THAT it did (the liveness watchdog already covers detection). Logs to
@@ -41,9 +49,9 @@ AGY_STATUSLINE="$HOME/.gemini/antigravity-cli/scratch/agy-statusline.json"
 
 # T20: budgeted 5h-window rate-limit auto-resume. See auto-resume.sh for the
 # full state machine and policy (weekly never auto-resumes, max N/day,
-# "only unblock what you parked"). Pin its own root-resolution to the
-# CANON_DIR already resolved above so the two can't diverge.
-export AUTO_RESUME_CANON_DIR="$CANON_DIR"
+# "only unblock what you parked"). auto-resume.sh resolves its own root
+# lazily the same way (same $PWD), so this can't diverge from the
+# resolution above without also needing to be forced.
 source "$DIR/auto-resume.sh"
 
 # T33 (issue #77): shared color/clear-screen helpers for the dashboard
@@ -71,7 +79,7 @@ NOTIFY_SESSION="${GATEKEEPER_NOTIFY_SESSION:-harness}"
 # AGY_ALERTED bool forgets everything on restart, so a crash-respawn
 # (Task 3) re-sent already-delivered alerts and re-spoke `say` for
 # thresholds the operator had already been told about (observed live).
-GK_ALERT_STATE_FILE="${GATEKEEPER_ALERT_STATE_FILE:-$CANON_DIR/gatekeeper-alert-state.json}"
+GK_ALERT_STATE_FILE="${GATEKEEPER_ALERT_STATE_FILE:-$(_gk_canon_dir)/gatekeeper-alert-state.json}"
 
 gk_ensure_alert_state() {
   [ -f "$GK_ALERT_STATE_FILE" ] || echo '{}' > "$GK_ALERT_STATE_FILE"

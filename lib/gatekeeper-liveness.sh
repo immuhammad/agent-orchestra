@@ -10,18 +10,25 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./harness-root.sh
 source "$DIR/harness-root.sh"
-# issue #116: HEARTBEAT/LOG must resolve to the same CANON_DIR
-# gatekeeper.sh itself writes to (the caller's project root), not this
-# script's own directory -- nohup preserves cwd from `orc up`, so
-# $PWD is still the project root at the time this was launched.
-if [ -n "${GATEKEEPER_CANON_DIR:-}" ]; then
-  CANON_DIR="$GATEKEEPER_CANON_DIR"
-elif ! CANON_DIR="$(harness_canonical_dir "$PWD")"; then
-  echo "gatekeeper-liveness.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
-  exit 1
-fi
-HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$CANON_DIR/gatekeeper.heartbeat}"
-LOG="${GATEKEEPER_LIVENESS_LOG:-$CANON_DIR/budget.log}"
+# issue #116: HEARTBEAT/LOG must resolve to the same place gatekeeper.sh
+# itself writes to (the caller's project root), not this script's own
+# directory -- nohup preserves cwd from `orc up`, so $PWD is still the
+# project root at the time this was launched. Resolved lazily/memoized,
+# same as gatekeeper.sh, so a caller pinning both *_FILE vars explicitly
+# never needs orchestrator.yaml/ORC_PROJECT_ROOT to exist.
+_gkl_canon_dir() {
+  if [ -z "${_GKL_CANON_DIR_CACHE:-}" ]; then
+    if [ -n "${GATEKEEPER_CANON_DIR:-}" ]; then
+      _GKL_CANON_DIR_CACHE="$GATEKEEPER_CANON_DIR"
+    elif ! _GKL_CANON_DIR_CACHE="$(harness_canonical_dir "$PWD")"; then
+      echo "gatekeeper-liveness.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT, run from inside a project with orchestrator.yaml, or pin GATEKEEPER_HEARTBEAT_FILE/GATEKEEPER_LIVENESS_LOG explicitly" >&2
+      exit 1
+    fi
+  fi
+  echo "$_GKL_CANON_DIR_CACHE"
+}
+HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$(_gkl_canon_dir)/gatekeeper.heartbeat}"
+LOG="${GATEKEEPER_LIVENESS_LOG:-$(_gkl_canon_dir)/budget.log}"
 CHECK_INTERVAL="${GATEKEEPER_LIVENESS_INTERVAL:-60}"
 # gatekeeper.sh's own loop period is $GATEKEEPER_INTERVAL (default 300s);
 # 2x that plus slack tolerates one slow iteration (e.g. a slow curl to the
