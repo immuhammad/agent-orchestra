@@ -13,7 +13,11 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd "$DIR/.." >/dev/null 2>&1 && pwd)"
-ORC="$DIR/orc-worktree.sh"
+ORC="$DIR/../lib/orc-worktree.sh"
+# issue #116: "uat" was career-ops-harness's own integration branch name --
+# this repo's is "main" (read the same way orc-worktree.sh itself does).
+INTEGRATION_BRANCH="$(cd "$REPO_ROOT" && source "$DIR/../lib/orc-config.sh" && orc_get_scalar integration_branch)"
+INTEGRATION_BRANCH="${INTEGRATION_BRANCH:-uat}"
 ISSUE="t18-scratch"
 BRANCH="feature/issue-$ISSUE"
 WT="$REPO_ROOT/.claude/worktrees/issue-$ISSUE"
@@ -60,12 +64,12 @@ if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
 else
   fail "start did not create the local branch"
 fi
-UAT_TIP="$(git -C "$REPO_ROOT" rev-parse origin/uat)"
+INTEGRATION_TIP="$(git -C "$REPO_ROOT" rev-parse "origin/$INTEGRATION_BRANCH")"
 WT_HEAD="$(git -C "$WT" rev-parse HEAD)"
-if [ "$UAT_TIP" = "$WT_HEAD" ]; then
-  pass "start branched from origin/uat's current tip"
+if [ "$INTEGRATION_TIP" = "$WT_HEAD" ]; then
+  pass "start branched from origin/$INTEGRATION_BRANCH's current tip"
 else
-  fail "start's base commit ($WT_HEAD) does not match origin/uat ($UAT_TIP)"
+  fail "start's base commit ($WT_HEAD) does not match origin/$INTEGRATION_BRANCH ($INTEGRATION_TIP)"
 fi
 
 echo "== start refuses when branch already exists =="

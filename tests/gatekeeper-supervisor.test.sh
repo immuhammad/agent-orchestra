@@ -4,7 +4,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-SUPERVISOR="$DIR/gatekeeper-supervisor.sh"
+SUPERVISOR="$DIR/../lib/gatekeeper-supervisor.sh"
 
 PASS=0
 FAIL=0

@@ -1,0 +1,33 @@
+# orchestrator.yaml — agent-orchestra's own instance of the template it
+# ships (templates/orchestrator.yaml), used for its own worktree/dispatch
+# tooling (e.g. orc-worktree.test.sh's live verify cycle) and eventually
+# to dogfood orc on itself.
+
+project: agent-orchestra
+integration_branch: main
+
+protected_paths:
+  - .git/
+
+roles:
+  orchestra:
+    model: opus
+    effort: high
+  implementer:
+    model: sonnet
+    effort: default
+  tester:
+    model: sonnet
+    effort: default
+  reviewer:
+    model: agy
+    effort: high
+  scribe:
+    model: haiku
+    effort: low
+
+budgets:
+  claude:
+    failsafe_pct: 80
+  agy:
+    failsafe_pct: 80

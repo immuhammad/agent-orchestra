@@ -71,6 +71,15 @@ if [ -z "$REPO_ROOT" ]; then
 fi
 # shellcheck source=./dispatch.sh
 source "$DIR/dispatch.sh"
+# shellcheck source=./orc-config.sh
+source "$DIR/orc-config.sh"
+# issue #116: "uat" was career-ops-harness's own integration branch name,
+# hardcoded here -- generalized to read orchestrator.yaml's
+# integration_branch (same key orc.sh's control-room build already
+# reads), falling back to "uat" only for existing consumers whose config
+# predates this or omits the key.
+INTEGRATION_BRANCH="$(cd "$REPO_ROOT" && orc_get_scalar integration_branch)"
+INTEGRATION_BRANCH="${INTEGRATION_BRANCH:-uat}"
 
 usage() {
   echo "usage: orc-worktree.sh {start|pause|resume|finish|teardown} <issue> [base-commit|extra-issue ...]" >&2
@@ -107,9 +116,9 @@ cmd_start() {
     return 1
   fi
 
-  git -C "$REPO_ROOT" fetch origin uat >/dev/null 2>&1
+  git -C "$REPO_ROOT" fetch origin "$INTEGRATION_BRANCH" >/dev/null 2>&1
   if [ -z "$base" ]; then
-    base="$(git -C "$REPO_ROOT" rev-parse origin/uat)"
+    base="$(git -C "$REPO_ROOT" rev-parse "origin/$INTEGRATION_BRANCH")"
   fi
   local base_sha
   base_sha="$(git -C "$REPO_ROOT" rev-parse "$base" 2>/dev/null)" || {
@@ -224,7 +233,7 @@ cmd_finish() {
 
   local pr_url
   pr_url="$(cd "$wt" && gh pr create \
-    --base uat --head "$branch" --draft \
+    --base "$INTEGRATION_BRANCH" --head "$branch" --draft \
     --title "Issue #$issue" \
     --body "$body" 2>&1)" || {
     echo "orc-worktree.sh: push succeeded but gh pr create failed:" >&2
