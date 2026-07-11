@@ -5,7 +5,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-HOOK="$DIR/check-handoff.sh"
+HOOK="$DIR/../hooks/check-handoff.sh"
 
 PASS=0
 FAIL=0

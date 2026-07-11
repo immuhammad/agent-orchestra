@@ -5,7 +5,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-HOOK="$DIR/rate-limit-handoff.sh"
+HOOK="$(cd "$DIR/../hooks" && pwd)/rate-limit-handoff.sh"
 
 PASS=0
 FAIL=0
@@ -15,18 +15,19 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# The hook hardcodes its own dir's handoff.md ($DIR/handoff.md), so point
-# it at an isolated copy of the real script directory instead of touching
-# the live handoff.md.
+# issue #116: the hook now sources ../lib/handoff-lib.sh relative to its
+# OWN (fixed) location in this repo's hooks/, and its handoff.md target is
+# cwd-relative (.harness/handoff.md), not hook-dir-relative -- matching how
+# Claude Code actually invokes it (cwd = the consumer project). So this
+# just needs a scratch project dir to run the real hook FROM, not a copy
+# of the hook itself.
 SANDBOX="$TMP/sandbox"
-mkdir -p "$SANDBOX"
-cp "$HOOK" "$SANDBOX/rate-limit-handoff.sh"
-cp "$DIR/handoff-lib.sh" "$SANDBOX/handoff-lib.sh"
-SANDBOX_HANDOFF="$SANDBOX/handoff.md"
+mkdir -p "$SANDBOX/.harness"
+SANDBOX_HANDOFF="$SANDBOX/.harness/handoff.md"
 
 echo "== rate_limit hook: appends a dated section to a fresh handoff.md =="
 printf '# HANDOFF\n\n## Current state\nsome prior content\n' > "$SANDBOX_HANDOFF"
-echo '{"session_id":"s1"}' | bash "$SANDBOX/rate-limit-handoff.sh"
+echo '{"session_id":"s1"}' | (cd "$SANDBOX" && bash "$HOOK")
 if grep -q '^## RATE-LIMITED' "$SANDBOX_HANDOFF"; then
   pass "RATE-LIMITED section appended"
 else
@@ -44,7 +45,7 @@ else
 fi
 
 echo "== T31 (issue #68 item A): a SECOND firing REPLACES the section, doesn't append another =="
-echo '{"session_id":"s2"}' | bash "$SANDBOX/rate-limit-handoff.sh"
+echo '{"session_id":"s2"}' | (cd "$SANDBOX" && bash "$HOOK")
 COUNT="$(grep -c '^## RATE-LIMITED' "$SANDBOX_HANDOFF")"
 if [ "$COUNT" -eq 1 ]; then
   pass "exactly one RATE-LIMITED section survives after two firings"
@@ -64,7 +65,7 @@ fi
 
 echo "== missing session_id degrades gracefully to 'unknown' =="
 printf '# HANDOFF\n' > "$SANDBOX_HANDOFF"
-echo '{}' | bash "$SANDBOX/rate-limit-handoff.sh"
+echo '{}' | (cd "$SANDBOX" && bash "$HOOK")
 if grep -q 'session unknown' "$SANDBOX_HANDOFF"; then
   pass "missing session_id falls back to 'unknown'"
 else
