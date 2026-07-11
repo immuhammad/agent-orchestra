@@ -1,0 +1,33 @@
+#!/bin/bash
+# bin/orc-install-skills [target_dir] — dual-installs agent-orchestra's
+# capped skill pack into a project: both .claude/skills/ (Claude Code)
+# and .agents/skills/ (agy / Antigravity CLI) get a copy, since a skill
+# is just a directory with a SKILL.md (YAML frontmatter + markdown) and
+# both tools auto-register it as a slash command from their own
+# directory (verified for agy under issue #107: a canary skill dropped
+# into .agents/skills/ auto-registered its /<name> command in a fresh
+# agy session). One source tree, installed twice, so a protocol-shaped
+# skill (code-review) never drifts between the two copies.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+SKILLS_SRC="$(cd "$DIR/../skills" && pwd)"
+TARGET="${1:-$PWD}"
+
+if [ ! -d "$TARGET" ]; then
+  echo "orc-install-skills: no such directory: $TARGET" >&2
+  exit 1
+fi
+
+for dest in "$TARGET/.claude/skills" "$TARGET/.agents/skills"; do
+  mkdir -p "$dest"
+  for skill_dir in "$SKILLS_SRC"/*/; do
+    name="$(basename "$skill_dir")"
+    rm -rf "${dest:?}/$name"
+    cp -R "$skill_dir" "$dest/$name"
+  done
+done
+
+echo "orc-install-skills: installed $(ls "$SKILLS_SRC" | wc -l | tr -d ' ') skills to:"
+echo "  $TARGET/.claude/skills/"
+echo "  $TARGET/.agents/skills/"

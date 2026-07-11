@@ -1,0 +1,312 @@
+#!/bin/bash
+# .harness/dispatch.test.sh — tests for dispatch.sh (T17 3-verb inbox).
+# Run: bash .harness/dispatch.test.sh
+#
+# Uses a throwaway tmux session ("harness-dispatch-test") with panes it
+# fully controls to exercise the live idle/busy nudge heuristic, and a
+# throwaway fake-agent inbox (not a real agent name, so dispatch.sh's own
+# pane_for_agent() correctly no-ops the nudge) to exercise the verb/ack/
+# timeout logic without touching any real agent's inbox or the production
+# "harness" session.
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+DISPATCH="$DIR/../lib/dispatch.sh"
+TEST_SESSION="harness-dispatch-test"
+
+# issue #116: dispatch.sh's root-resolution now requires an
+# orchestrator.yaml/ORC_PROJECT_ROOT to exist somewhere above cwd unless
+# DISPATCH_CANON_DIR overrides it outright -- pin a scratch dir so this
+# test never depends on (or risks touching) any real project's discovery.
+export DISPATCH_CANON_DIR
+DISPATCH_CANON_DIR="$(mktemp -d)"
+
+PASS=0
+FAIL=0
+
+pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
+
+cleanup() {
+  tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+  rm -rf "$CANON_DIR/inbox/testagent" "$DISPATCH_CANON_DIR"
+}
+trap cleanup EXIT
+
+echo "== pane_is_idle (live, isolated panes) =="
+# Source dispatch.sh for its pane_is_idle helper. BASH_SOURCE guard means
+# dispatch_main does NOT run as a side effect of sourcing.
+source "$DISPATCH"
+
+# Explicit -x/-y (same fix as auto-resume.test.sh): an unattached session
+# with no client falls back to tmux's own default size, which can leave a
+# LOT of blank-padded rows below the actual content -- a raw `tail -N`
+# on `capture-pane`'s output (no blank-line filtering, unlike auto-resume.sh's
+# own ar_meaningful_tail) then grabs pure padding instead of the real text.
+# Pinning a small, sane size keeps that padding short enough that tail -10
+# always reaches real content.
+tmux new-session -d -s "$TEST_SESSION" -n main -x 200 -y 50 2>&1
+tmux split-window -h -t "$TEST_SESSION:0" 2>&1
+# Pane 0: sits at a plain shell prompt -- idle.
+# Pane 1: simulate a TUI mid-generation -- busy.
+tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter 2>&1
+sleep 1
+
+if pane_is_idle "$TEST_SESSION:0.0"; then
+  pass "shell-prompt pane detected as idle"
+else
+  fail "shell-prompt pane should be idle"
+fi
+
+if pane_is_idle "$TEST_SESSION:0.1"; then
+  fail "busy pane (printing 'Thinking...') should NOT be idle"
+else
+  pass "busy pane correctly detected as not idle"
+fi
+
+echo "== issue #86 Task 3: per-agent busy markers (agy's live-observed 'Working...' render) =="
+# A DEDICATED third pane (0.2), not the shared 0.1 pane the T24 section
+# below depends on staying busy -- reusing 0.1 here would both leave stale
+# 'Thinking...' scrollback contaminating this check AND interrupt the
+# sleep the T24 section expects to still be running.
+tmux split-window -h -t "$TEST_SESSION:0" 2>&1
+# agy's real busy rendering (live-confirmed 2026-07-10): "Working..." with a
+# bare '>' prompt still visible underneath -- none of the Claude-Code-only
+# words (thinking/generating/compacting/esc to interrupt/running...) match
+# this, so the DEFAULT marker set alone reads it as idle.
+tmux send-keys -t "$TEST_SESSION:0.2" "printf '⣟ Working...\\n> \\n'; sleep 30" Enter 2>&1
+sleep 1
+if pane_is_idle "$TEST_SESSION:0.2" "agy"; then
+  fail "agy's 'Working...' render should be detected busy when checked as agy"
+else
+  pass "agy's 'Working...' render correctly detected as busy for agent 'agy'"
+fi
+if pane_is_idle "$TEST_SESSION:0.2"; then
+  pass "same render with NO agent hint falls back to the Claude-Code-only list (documents the gap 'working' widening exists to close)"
+else
+  fail "no-agent-hint call unexpectedly matched 'working' -- pane_busy_markers default branch may have widened"
+fi
+tmux send-keys -t "$TEST_SESSION:0.2" C-c 2>&1
+
+echo "== T24: deferred-nudge queue (nudge_agent / retry_deferred_nudges) =="
+# Override pane_for_agent so a fake agent name maps onto this test session's
+# real busy pane (0.1) -- lets us drive nudge_agent's defer branch and
+# retry_deferred_nudges' drain logic against a real tmux pane instead of
+# just asserting on file contents.
+pane_for_agent() {
+  case "$1" in
+    deferredtest) echo "$TEST_SESSION:0.1" ;;
+    *) echo "" ;;
+  esac
+}
+DEFERRED_TEST_FILE="$(mktemp)"
+DEFERRED_FILE="$DEFERRED_TEST_FILE"
+
+nudge_agent "deferredtest" >/dev/null 2>&1
+if grep -qxF "deferredtest" "$DEFERRED_FILE" 2>/dev/null; then
+  pass "nudge into a busy pane queues the agent in the deferred file"
+else
+  fail "busy-pane nudge should have queued 'deferredtest'"
+fi
+
+nudge_agent "deferredtest" >/dev/null 2>&1
+DUP_COUNT="$(grep -cxF "deferredtest" "$DEFERRED_FILE" 2>/dev/null || echo 0)"
+if [ "$DUP_COUNT" -eq 1 ]; then
+  pass "re-deferring the same agent does not duplicate the queue entry"
+else
+  fail "expected exactly one queued entry for 'deferredtest', got $DUP_COUNT"
+fi
+
+# Make the pane idle, then retry -- should nudge for real and drain the queue.
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+sleep 1
+retry_deferred_nudges >/dev/null 2>&1
+if [ ! -s "$DEFERRED_FILE" ]; then
+  pass "retry_deferred_nudges drains the queue once the pane is idle"
+else
+  fail "deferred queue should be empty after retry, got: $(cat "$DEFERRED_FILE")"
+fi
+rm -f "$DEFERRED_TEST_FILE"
+# Restore the real pane_for_agent for anything below that relies on it.
+unset -f pane_for_agent
+source "$DISPATCH"
+
+echo "== message verb: writes .msg, no nudge, no ack wait =="
+mkdir -p "$CANON_DIR/inbox/testagent"
+OUT="$(bash "$DISPATCH" message testagent 9001 "hello" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && ls "$CANON_DIR"/inbox/testagent/*-9001.msg >/dev/null 2>&1; then
+  pass "message verb wrote .msg and returned 0"
+else
+  fail "message verb did not behave as expected: $OUT"
+fi
+if echo "$OUT" | grep -q "nudged"; then
+  fail "message verb should never nudge"
+else
+  pass "message verb did not nudge"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+
+echo "== assign verb: writes .msg, returns immediately without an ack =="
+START=$SECONDS
+OUT="$(bash "$DISPATCH" assign testagent 9002 "hello" 2>&1)"
+STATUS=$?
+ELAPSED=$((SECONDS - START))
+if [ "$STATUS" -eq 0 ] && [ "$ELAPSED" -lt 5 ] && ls "$CANON_DIR"/inbox/testagent/*-9002.msg >/dev/null 2>&1; then
+  pass "assign verb wrote .msg and returned immediately (${ELAPSED}s) without an ack"
+else
+  fail "assign verb did not behave as expected (status=$STATUS elapsed=${ELAPSED}s): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+
+echo "== handoff verb: round-trip -- ack appears before timeout =="
+(
+  # Simulate the receiver: wait briefly, then ack the newest .msg with a
+  # real one-line status (T30, issue #56: acks must be non-empty receipts).
+  sleep 2
+  msg="$(ls -t "$CANON_DIR"/inbox/testagent/*-9003.msg 2>/dev/null | head -1)"
+  [ -n "$msg" ] && echo "done" > "${msg%.msg}.ack"
+) &
+OUT="$(bash "$DISPATCH" handoff testagent 9003 "hello" 10 2>&1)"
+STATUS=$?
+wait
+if [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q "received"; then
+  pass "handoff verb returned success once the .ack appeared"
+else
+  fail "handoff verb round-trip failed (status=$STATUS): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR"/inbox/testagent/*.ack
+
+echo "== T30 (#56): handoff verb treats an empty/whitespace-only ack as suspect, keeps waiting =="
+(
+  # Receiver writes an EMPTY ack first (the old "just touch it" habit),
+  # then a real one shortly after -- handoff should only accept the second.
+  sleep 1
+  msg="$(ls -t "$CANON_DIR"/inbox/testagent/*-9007.msg 2>/dev/null | head -1)"
+  [ -n "$msg" ] && touch "${msg%.msg}.ack"
+  sleep 2
+  [ -n "$msg" ] && echo "SKIPPED: not applicable" > "${msg%.msg}.ack"
+) &
+OUT="$(bash "$DISPATCH" handoff testagent 9007 "hello" 10 2>&1)"
+STATUS=$?
+wait
+if [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q "received" && echo "$OUT" | grep -q "empty/whitespace-only"; then
+  pass "handoff verb logged the empty ack as suspect and waited for a real one"
+else
+  fail "handoff verb should log+skip the empty ack then accept the real one (status=$STATUS): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR"/inbox/testagent/*.ack
+
+echo "== T30 (#56): handoff verb times out if the ack STAYS empty the whole window =="
+(
+  sleep 1
+  msg="$(ls -t "$CANON_DIR"/inbox/testagent/*-9008.msg 2>/dev/null | head -1)"
+  [ -n "$msg" ] && touch "${msg%.msg}.ack"
+) &
+OUT="$(bash "$DISPATCH" handoff testagent 9008 "hello" 3 2>&1)"
+STATUS=$?
+wait
+if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q "timeout"; then
+  pass "handoff verb times out when the ack never becomes non-empty"
+else
+  fail "handoff verb should time out on a permanently-empty ack (status=$STATUS): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR"/inbox/testagent/*.ack
+
+echo "== handoff verb: timeout when no ack ever appears =="
+OUT="$(bash "$DISPATCH" handoff testagent 9004 "hello" 3 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q "timeout"; then
+  pass "handoff verb times out cleanly when no .ack appears"
+else
+  fail "handoff verb should time out with exit 2 (status=$STATUS): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+
+echo "== issue #89: assign/handoff scribe spawns a one-shot headless run, not a pane nudge =="
+# Its own scratch CANON_DIR (via DISPATCH_CANON_DIR) so this never touches
+# the real copilot inbox's actual history.
+SCRIBE_SCRATCH="$(mktemp -d)"
+mkdir -p "$SCRIBE_SCRATCH/inbox/copilot"
+CLAUDE_CALLS="$SCRIBE_SCRATCH/claude-calls.log"
+: > "$CLAUDE_CALLS"
+# Fake `claude` on PATH (dispatch_main runs as a subprocess via `bash
+# "$DISPATCH"`, so a shell function override wouldn't reach it -- a PATH
+# stub is the only way to intercept what that subprocess actually execs).
+FAKE_BIN="$SCRIBE_SCRATCH/bin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/claude" <<'FAKECLAUDE'
+#!/bin/bash
+echo "$*" >> "$CLAUDE_CALLS_FILE"
+# Find the .ack path the prompt asked us to write to and write a receipt,
+# simulating the real headless run completing its judgment task.
+ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
+[ -n "$ACK_PATH" ] && echo "DONE: scribe handled it" > "$ACK_PATH"
+FAKECLAUDE
+chmod +x "$FAKE_BIN/claude"
+
+OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign scribe 9010 "do the judgment task" 2>&1)"
+sleep 1 # scribe_spawn_headless backgrounds the claude call
+if echo "$OUT" | grep -q "spawning one-shot headless scribe" && ! echo "$OUT" | grep -q "no pane mapping"; then
+  pass "assign scribe spawned the headless run instead of trying to nudge a pane"
+else
+  fail "assign scribe should spawn headless, not attempt a pane nudge: $OUT"
+fi
+if grep -q -- "--model haiku" "$CLAUDE_CALLS"; then
+  pass "spawned claude with --model haiku"
+else
+  fail "expected the spawned claude call to use --model haiku: $(cat "$CLAUDE_CALLS")"
+fi
+if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9010.msg >/dev/null 2>&1; then
+  pass "the .msg still landed in the durable inbox (copilot dir -- scribe's real physical inbox)"
+else
+  fail "expected the .msg in the copilot inbox dir (scribe's alias target)"
+fi
+
+echo "== issue #89: 'copilot' alias resolves to the SAME inbox/spawn behavior as 'scribe' =="
+: > "$CLAUDE_CALLS"
+OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign copilot 9011 "another judgment task" 2>&1)"
+sleep 1
+if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9011.msg >/dev/null 2>&1; then
+  pass "'copilot' still lands in the same physical inbox dir as 'scribe'"
+else
+  fail "'copilot' alias should resolve to the same inbox dir as 'scribe'"
+fi
+if grep -q -- "--model haiku" "$CLAUDE_CALLS"; then
+  pass "'copilot' also spawns the headless run (same code path as 'scribe')"
+else
+  fail "'copilot' should also spawn the headless scribe run"
+fi
+
+echo "== issue #89: handoff scribe waits for the headless run's own .ack, same as any other agent =="
+: > "$CLAUDE_CALLS"
+OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" handoff scribe 9012 "judge this" 10 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q "received"; then
+  pass "handoff scribe received the headless run's own .ack before timing out"
+else
+  fail "handoff scribe should receive the spawned run's .ack (status=$STATUS): $OUT"
+fi
+rm -rf "$SCRIBE_SCRATCH"
+
+echo "== unmapped agent name: never nudges (pane_for_agent has no entry) =="
+OUT="$(bash "$DISPATCH" assign testagent 9005 "hello" 2>&1)"
+if echo "$OUT" | grep -q "no pane mapping"; then
+  pass "unmapped agent name skips the nudge safely"
+else
+  fail "unmapped agent should log a skipped nudge: $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+
+echo "== unknown verb is rejected =="
+OUT="$(bash "$DISPATCH" bogus testagent 9006 "hello" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 1 ] && echo "$OUT" | grep -q "unknown verb"; then
+  pass "unknown verb rejected with exit 1"
+else
+  fail "unknown verb should be rejected (status=$STATUS): $OUT"
+fi
+
+echo ""
+echo "$PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]

@@ -1,0 +1,47 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tmux
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      - name: Syntax-check every script
+        run: |
+          set -e
+          for f in bin/orc bin/orc-install-skills lib/*.sh hooks/*.sh; do
+            bash -n "$f"
+          done
+      - name: Run shell test suites
+        run: |
+          set -uo pipefail
+          fail=0
+          for f in tests/*.test.sh; do
+            # orc-worktree.test.sh runs a LIVE push + draft-PR cycle against
+            # this repo's own GitHub remote (self-cleaning, but needs push
+            # rights this workflow's default GITHUB_TOKEN doesn't reliably
+            # have, and concurrent CI runs across PRs would collide on its
+            # fixed scratch branch name). Excluded from CI; run manually
+            # (or from a trusted local checkout) per its own header comment.
+            case "$(basename "$f")" in
+              orc-worktree.test.sh) echo "SKIP (live GitHub cycle, run manually): $f"; continue ;;
+            esac
+            echo "::group::$f"
+            if ! bash "$f"; then
+              echo "FAILED: $f"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$fail"
+      - name: Install skills into a scratch project (smoke test)
+        run: |
+          set -e
+          TARGET="$(mktemp -d)"
+          bin/orc-install-skills "$TARGET"
+          test -f "$TARGET/.claude/skills/test-driven-development/SKILL.md"
+          test -f "$TARGET/.agents/skills/code-review/SKILL.md"

@@ -1,0 +1,40 @@
+# orchestrator.yaml — read by bin/orc (`orc up`) and by the guards
+# (lib/guard.sh, lib/guard-write.sh) via lib/orc-config.sh. Copy this file
+# to your project root and edit the values below; `orc up` and the guards
+# walk up from cwd looking for this file to find your project root (see
+# lib/harness-root.sh), so it MUST live at your project's top level.
+#
+# Fail-closed: if this file is missing or malformed, the guards fall back
+# to a hardcoded default protected path rather than allowing writes
+# anywhere.
+
+project: my-project
+integration_branch: main
+
+# Paths the guards refuse to let agents write to directly (secrets,
+# infra, whatever your project considers off-limits for autonomous edits).
+protected_paths:
+  - infra/
+
+roles:
+  orchestra:
+    model: opus
+    effort: high
+  implementer:
+    model: sonnet
+    effort: default
+  tester:
+    model: sonnet
+    effort: default
+  reviewer:
+    model: agy
+    effort: high
+  scribe:
+    model: haiku
+    effort: low
+
+budgets:
+  claude:
+    failsafe_pct: 80
+  agy:
+    failsafe_pct: 80
