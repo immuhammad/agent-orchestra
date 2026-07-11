@@ -11,8 +11,15 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-DISPATCH="$DIR/dispatch.sh"
+DISPATCH="$DIR/../lib/dispatch.sh"
 TEST_SESSION="harness-dispatch-test"
+
+# issue #116: dispatch.sh's root-resolution now requires an
+# orchestrator.yaml/ORC_PROJECT_ROOT to exist somewhere above cwd unless
+# DISPATCH_CANON_DIR overrides it outright -- pin a scratch dir so this
+# test never depends on (or risks touching) any real project's discovery.
+export DISPATCH_CANON_DIR
+DISPATCH_CANON_DIR="$(mktemp -d)"
 
 PASS=0
 FAIL=0
@@ -22,7 +29,7 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 cleanup() {
   tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
-  rm -rf "$CANON_DIR/inbox/testagent"
+  rm -rf "$CANON_DIR/inbox/testagent" "$DISPATCH_CANON_DIR"
 }
 trap cleanup EXIT
 
