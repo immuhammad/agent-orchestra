@@ -10,3 +10,9 @@ inbox/*/*.ack
 auto-resume-state.json
 gatekeeper-alert-state.json
 watch-flagged-dead
+
+# dual-installed skill pack (bin/orc-install-skills dogfooded on this repo
+# itself, e.g. for agy to review here) -- skills/ is the source, these are
+# installed copies, never tracked
+.claude/skills/
+.agents/skills/
