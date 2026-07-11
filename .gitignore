@@ -1,4 +1,5 @@
 # per-checkout state (never migrated between machines/worktrees)
+.worktrees/
 .harness/state/
 *.log
 *.heartbeat
