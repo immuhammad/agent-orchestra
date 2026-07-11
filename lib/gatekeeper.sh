@@ -238,6 +238,11 @@ while true; do
       gk_say "Both quota pools exhausted"
       gk_mark_alerted claude_5h; gk_mark_alerted agy
       ar_mark_pending "$NOTIFY_SESSION:0.0"
+      # #10: gate every session's tools until Ahmad answers or a real
+      # window reset clears it. "both" has no comparable resets_at to
+      # auto-clear against (agy's pool isn't epoch-trackable here) -- stays
+      # gated until the manual clear (lib/quota-stop-clear.sh).
+      ar_write_quota_stop_flag "both" "$USAGE_PCT" "none"
     fi
   else
     # --- Claude 5h over: fallback = agy ---
@@ -247,6 +252,10 @@ while true; do
       gk_say "Claude quota threshold"
       gk_mark_alerted claude_5h
       ar_mark_pending "$NOTIFY_SESSION:0.0"
+      # #10: 5h is the one pool with a resets_at we can epoch-compare, so
+      # this flag auto-clears on the real window reset (see
+      # ar_clear_quota_stop_flag_if_reset, called below every iteration).
+      ar_write_quota_stop_flag "5h" "$USAGE_PCT" "agy" "$FIVE_HOUR_RESETS_AT"
     fi
     # --- agy over: fallback = Claude (or throttle) ---
     if [ "$AGY_PCT" -ge "$THRESHOLD" ] && ! gk_is_alerted agy; then
@@ -263,6 +272,10 @@ while true; do
     gk_alert_orchestra "quota-weekly" "quota Claude WEEKLY at ${WEEKLY_PCT}% — follow AGENTS.md failsafe (pool: weekly)."
     gk_say "Claude weekly quota threshold"
     gk_mark_alerted claude_weekly
+    # #10: weekly never auto-clears (same "always stop for Ahmad, no
+    # exceptions" policy as auto-resume.sh's own header comment) -- stays
+    # gated until the manual clear (lib/quota-stop-clear.sh).
+    ar_write_quota_stop_flag "weekly" "$WEEKLY_PCT" "none"
   fi
 
   # T20: advance every currently-tracked pane's auto-resume state machine.
@@ -271,7 +284,12 @@ while true; do
   # has already dropped back down, and weekly (seven_day) never reaches
   # this function at all since nothing above ever calls ar_mark_pending
   # for it.
-  ar_poll_all "$FIVE_HOUR_RESETS_AT"
+  ar_poll_all "$FIVE_HOUR_RESETS_AT" "$USAGE_PCT"
+
+  # #10: lift the quota-stop PreToolUse gate on a genuine time-based window
+  # reset -- unconditional every iteration, independent of whether any pane
+  # is currently tracked (the #11<->#10 seam).
+  ar_clear_quota_stop_flag_if_reset
 
   # --- per-pool re-arm after reset (persisted, survives a restart) ---
   [ "$USAGE_PCT" -lt 50 ] && gk_clear_alerted claude_5h

@@ -51,12 +51,46 @@ _ar_canon_dir() {
 AR_STATE_FILE="${AUTO_RESUME_STATE_FILE:-$(_ar_canon_dir)/auto-resume-state.json}"
 AR_MAX_PER_DAY="${AUTO_RESUME_MAX_PER_DAY:-2}"
 AR_LOG="${AUTO_RESUME_LOG:-$(_ar_canon_dir)/budget.log}"
+# #11 belt-and-braces: even once the window has time-reset, only resume
+# into quota we've confirmed is actually available.
+AR_RESUME_USAGE_CEILING="${AUTO_RESUME_USAGE_CEILING:-50}"
+# #10: single source of truth for the quota-stop PreToolUse gate's flag
+# path -- gatekeeper.sh (writer), this file (auto-clear on real reset), and
+# hooks/quota-stop-gate.sh / lib/guard-quota-stop-agy.sh (readers) must
+# never resolve this independently or they can drift apart.
+AR_QUOTA_STOP_FLAG="${AUTO_RESUME_QUOTA_STOP_FLAG:-$(_ar_canon_dir)/state/quota-stop}"
 # The exact wording is mandated by AGENTS.md's Quota Failsafe ("Keep the
 # (a)/(b)/(c) structure exactly") -- this regex is deliberately narrow so it
 # can't accidentally match ordinary conversation.
 AR_PARK_MARKER='Quota .*Options: \(a\).*Pick one\.'
 
 ar_today() { date -u +%Y-%m-%d; }
+
+# ar_now_epoch -- wall-clock "now" as epoch seconds. Overridable
+# (AUTO_RESUME_NOW_EPOCH) so tests can pin deterministic values instead of
+# racing the real clock against fixed resets_at fixtures.
+ar_now_epoch() { echo "${AUTO_RESUME_NOW_EPOCH:-$(date -u +%s)}"; }
+
+# ar_epoch_from_iso8601 <ISO-8601 timestamp, e.g. 2026-07-11T18:00:00Z> --
+# cross-platform epoch-seconds parse. Tries GNU `date -d` first (Linux/CI;
+# also harmless to try on BSD since -d isn't a recognized BSD date flag and
+# just fails over to the next branch), then BSD `date -j -f` (darwin dev
+# machines). Echoes the epoch on success; returns 1 with nothing on stdout
+# if neither can parse it (caller must treat empty output as "unknown",
+# never guess).
+ar_epoch_from_iso8601() {
+  local ts="$1" epoch
+  [ -z "$ts" ] && return 1
+  if epoch="$(date -u -d "$ts" +%s 2>/dev/null)"; then
+    echo "$epoch"
+    return 0
+  fi
+  if epoch="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null)"; then
+    echo "$epoch"
+    return 0
+  fi
+  return 1
+}
 
 # ar_meaningful_tail -- thin alias for send-lib.sh's send_meaningful_tail
 # (issue #86: moved there so dispatch.sh's pane_is_idle gets the same
@@ -141,8 +175,8 @@ ar_mark_pending() { # $1 = pane target
 # of current usage% (the reset that matters happens AFTER usage has already
 # dropped back down, so this must not be gated on still being over
 # threshold).
-ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at
-  local pane="$1" current_resets_at="$2"
+ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = current 5h usage_pct (belt-and-braces, #11)
+  local pane="$1" current_resets_at="$2" usage_pct="${3:-}"
   local state
   state="$(ar_read --arg p "$pane" '.panes[$p].state // empty')"
   [ -z "$state" ] && return 0
@@ -178,18 +212,46 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at
       return 0
     fi
 
-    if [ "$current_resets_at" != "$stored_resets_at" ] && [ -n "$current_resets_at" ]; then
-      # 5h window has rolled over since we parked this pane. Re-check the
-      # scrollback ONE more time immediately before acting (paranoia
-      # matches the spec wording -- we already confirmed tail_fp ==
-      # stored_fp above, but re-fingerprint right here so the check is
-      # against the freshest possible read, not a value computed earlier
-      # in this function).
+    # #11: trigger is a TIME comparison against the resets_at we recorded
+    # AT PARKING TIME, never a string inequality against the freshest
+    # poll's resets_at. A rolling 5h window's resets_at drifts continuously
+    # as usage moves through it -- comparing strings meant a few minutes of
+    # drift read as a rollover and resumed a pane mid-window into a still-
+    # exhausted pool (the incident this fix exists for). Once real wall-
+    # clock time has reached the stored deadline, that window has
+    # necessarily elapsed regardless of what the freshest resets_at says.
+    local stored_epoch
+    stored_epoch=""
+    if [ -n "$stored_resets_at" ] && [ "$stored_resets_at" != "null" ]; then
+      stored_epoch="$(ar_epoch_from_iso8601 "$stored_resets_at" 2>/dev/null || echo "")"
+    fi
+    if [ -z "$stored_epoch" ]; then
+      return 0 # nothing parseable to compare against yet -- stay parked
+    fi
+
+    if [ "$(ar_now_epoch)" -ge "$stored_epoch" ]; then
+      # Window has genuinely time-reset. Re-check the scrollback ONE more
+      # time immediately before acting (paranoia matches the spec wording
+      # -- we already confirmed tail_fp == stored_fp above, but
+      # re-fingerprint right here so the check is against the freshest
+      # possible read, not a value computed earlier in this function).
       local recheck_fp
       recheck_fp="$(ar_fingerprint "$pane")"
       if [ "$recheck_fp" != "$stored_fp" ]; then
         ar_log "$pane changed between reset-detection and re-check -- skipping resume, dropping tracking"
         ar_write --arg p "$pane" 'del(.panes[$p])'
+        return 0
+      fi
+
+      # Belt-and-braces (#11): only resume into quota we've confirmed is
+      # actually available. An unreadable/missing usage_pct fails SAFE (not
+      # resumed) rather than guessing -- same "never guess" posture as the
+      # epoch parse above. Tracking is deliberately KEPT (not dropped) so
+      # the next gatekeeper iteration re-checks usage again once it (likely
+      # briefly) drops back down, rather than permanently handing a still-
+      # throttled pane back to Ahmad the way a real budget exhaustion does.
+      if [ -z "$usage_pct" ] || ! [ "$usage_pct" -lt "$AR_RESUME_USAGE_CEILING" ] 2>/dev/null; then
+        ar_log "$pane's window reset at $stored_resets_at but usage is still ${usage_pct:-unknown}% (>= ${AR_RESUME_USAGE_CEILING}% ceiling) -- not resuming yet, will re-check next iteration"
         return 0
       fi
 
@@ -211,12 +273,70 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at
 }
 
 # Convenience: poll every currently-tracked pane. Call once per gatekeeper
-# iteration with the latest five_hour.resets_at.
-ar_poll_all() { # $1 = current five_hour resets_at
-  local current_resets_at="$1" pane
+# iteration with the latest five_hour.resets_at and current 5h usage_pct.
+ar_poll_all() { # $1 = current five_hour resets_at, $2 = current 5h usage_pct
+  local current_resets_at="$1" usage_pct="${2:-}" pane
   ar_ensure_state_file
   while IFS= read -r pane; do
     [ -z "$pane" ] && continue
-    ar_poll_pane "$pane" "$current_resets_at"
+    ar_poll_pane "$pane" "$current_resets_at" "$usage_pct"
   done < <(ar_read '.panes | keys[]')
+}
+
+# --- #10: quota-stop PreToolUse gate flag -----------------------------
+# gatekeeper.sh (writer) and the quota-stop-gate hooks (readers) share
+# AR_QUOTA_STOP_FLAG above as the single path. This file only ever WRITES
+# via ar_write_quota_stop_flag and CLEARS via
+# ar_clear_quota_stop_flag_if_reset -- the hooks only ever read it.
+
+# ar_write_quota_stop_flag <pool> <pct> <fallback> [resets_at ISO-8601]
+# -- pool is one of "5h" | "weekly" | "both" (matches AGENTS.md's [pool]
+# fill-in). resets_at is OPTIONAL and, when given, is converted to an
+# epoch up front and stored as resets_at_epoch -- this is what lets
+# ar_clear_quota_stop_flag_if_reset auto-lift the gate on a genuine
+# time-based window reset (the #11<->#10 seam) without re-parsing anything
+# later or depending on any pane being tracked. Gate-1 only calls this with
+# a resets_at for the "5h" pool: weekly crossings never auto-anything per
+# existing policy (see file header), and "both" needs a human regardless
+# (agy's pool has no comparable resets_at this codebase can read yet) --
+# both of those pools are FLAGGED as leaving resets_at_epoch null, which
+# means only the explicit manual clear (lib/quota-stop-clear.sh) lifts
+# them. FLAG (per this ticket's own instructions): this asymmetry --
+# "5h" auto-clears, "weekly"/"both" require a human -- was a deliberate
+# call made while implementing, not an explicit line in the Gate-1 plan;
+# confirm it matches intent.
+ar_write_quota_stop_flag() {
+  local pool="$1" pct="$2" fallback="$3" resets_at="${4:-}" epoch=""
+  mkdir -p "$(dirname "$AR_QUOTA_STOP_FLAG")"
+  if [ -n "$resets_at" ]; then
+    epoch="$(ar_epoch_from_iso8601 "$resets_at" 2>/dev/null || echo "")"
+  fi
+  jq -n --arg pool "$pool" --arg pct "$pct" --arg fallback "$fallback" \
+    --arg epoch "$epoch" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{pool: $pool, pct: (($pct|tonumber?) // 0), fallback: $fallback,
+      resets_at_epoch: (if $epoch == "" then null else ($epoch|tonumber) end),
+      at: $at}' > "$AR_QUOTA_STOP_FLAG"
+  ar_log "quota-stop flag written (pool=$pool pct=$pct fallback=$fallback)"
+}
+
+# ar_clear_quota_stop_flag_if_reset -- the #11<->#10 seam: lifts the
+# PreToolUse gate ONLY once the window that triggered it has genuinely
+# time-reset (epoch comparison against resets_at_epoch captured when the
+# flag was written), never a usage-percentage heuristic -- dropping below
+# some % mid-window is not the same as the window actually rolling over,
+# and clearing on that would reopen the exact drift bug #11 exists to fix.
+# A flag with no resets_at_epoch (weekly/both, see
+# ar_write_quota_stop_flag) is left alone here; only
+# lib/quota-stop-clear.sh's explicit manual clear lifts those. Call once
+# per gatekeeper iteration, unconditionally (same posture as ar_poll_all).
+ar_clear_quota_stop_flag_if_reset() {
+  [ -f "$AR_QUOTA_STOP_FLAG" ] || return 0
+  local flag_epoch pool
+  flag_epoch="$(jq -r '.resets_at_epoch // empty' "$AR_QUOTA_STOP_FLAG" 2>/dev/null)"
+  [ -z "$flag_epoch" ] && return 0
+  if [ "$(ar_now_epoch)" -ge "$flag_epoch" ]; then
+    pool="$(jq -r '.pool // "?"' "$AR_QUOTA_STOP_FLAG" 2>/dev/null)"
+    rm -f "$AR_QUOTA_STOP_FLAG"
+    ar_log "quota-stop flag cleared -- window reset (pool=$pool)"
+  fi
 }

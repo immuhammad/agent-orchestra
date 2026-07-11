@@ -46,10 +46,19 @@ export DISPATCH_SESSION
 export DISPATCH_CANON_DIR
 export GATEKEEPER_ALERT_STATE_FILE
 export GATEKEEPER_BUDGET_LOG
+export GATEKEEPER_LIVENESS_RATELIMIT_PANES
+export GATEKEEPER_LIVENESS_HANDOFF_FILE
 GATEKEEPER_HEARTBEAT_FILE="$(mktemp)"
 GATEKEEPER_LIVENESS_LOG="$(mktemp)"
 AUTO_RESUME_STATE_FILE="$(mktemp)"
 GATEKEEPER_NOTIFY_SESSION="$TEST_SESSION"
+# #11 secondary gap: gatekeeper-liveness.sh's rate-limit-stuck heuristic
+# defaults to watching the REAL "harness:0.1" (Builder) pane and reading
+# the caller-cwd-resolved real handoff.md -- same class of leak T26 already
+# fixed for GATEKEEPER_LIVENESS_TARGET/DISPATCH_SESSION above. Both must
+# point at throwaway locations for the whole run.
+GATEKEEPER_LIVENESS_RATELIMIT_PANES="$TEST_SESSION:0.1"
+GATEKEEPER_LIVENESS_HANDOFF_FILE="$(mktemp)"
 # issue #105: alerts now route through dispatch.sh (gk_alert_orchestra),
 # which has its OWN session target (pane_for_agent hardcoded "harness"
 # otherwise, ignoring GATEKEEPER_NOTIFY_SESSION entirely -- found writing
@@ -96,7 +105,7 @@ cleanup() {
   [ -n "$GATEKEEPER_PID" ] && kill "$GATEKEEPER_PID" >/dev/null 2>&1
   [ -n "$LIVENESS_PID" ] && kill "$LIVENESS_PID" >/dev/null 2>&1
   tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
-  rm -f "$GATEKEEPER_HEARTBEAT_FILE" "$GATEKEEPER_LIVENESS_LOG" "$AUTO_RESUME_STATE_FILE"
+  rm -f "$GATEKEEPER_HEARTBEAT_FILE" "$GATEKEEPER_LIVENESS_LOG" "$AUTO_RESUME_STATE_FILE" "$GATEKEEPER_LIVENESS_HANDOFF_FILE"
 }
 trap cleanup EXIT
 
