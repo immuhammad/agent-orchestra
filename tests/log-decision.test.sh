@@ -5,7 +5,8 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-SCRIPT="$DIR/log-decision.sh"
+LIB="$(cd "$DIR/../lib" && pwd)"
+SCRIPT="$LIB/log-decision.sh"
 
 PASS=0
 FAIL=0
@@ -84,21 +85,24 @@ echo "== issue #99: log-decision.sh resolves to the MAIN checkout's decisions.lo
 SCRATCH_ROOT="$(mktemp -d)"
 SCRATCH_ROOT="$(cd "$SCRATCH_ROOT" && pwd -P)"
 MAIN_REPO="$SCRATCH_ROOT/main-repo"
-mkdir -p "$MAIN_REPO/.harness"
+mkdir -p "$MAIN_REPO"
 git -C "$MAIN_REPO" init -q
 git -C "$MAIN_REPO" config user.email "test@test.local"
 git -C "$MAIN_REPO" config user.name "test"
+# orchestrator.yaml is the project-root marker (issue #116); committed so
+# `git worktree add` gives the worktree its own tracked copy too, which is
+# what exercises the git-common-dir redirect below (a naive walk-up alone
+# would stop at the worktree's own copy).
+echo "project: scratch" > "$MAIN_REPO/orchestrator.yaml"
 echo "x" > "$MAIN_REPO/file.txt"
-git -C "$MAIN_REPO" add file.txt
+git -C "$MAIN_REPO" add file.txt orchestrator.yaml
 git -C "$MAIN_REPO" commit -q -m "init"
-cp "$SCRIPT" "$DIR/harness-root.sh" "$MAIN_REPO/.harness/"
 WT_REPO="$SCRATCH_ROOT/wt-issue-1"
 git -C "$MAIN_REPO" worktree add -q -b feature/scratch "$WT_REPO" >/dev/null 2>&1
-mkdir -p "$WT_REPO/.harness"
-cp "$SCRIPT" "$DIR/harness-root.sh" "$WT_REPO/.harness/"
 # No LOG_DECISION_FILE override here -- exercising the real default
-# resolution, run from inside the WORKTREE.
-(cd "$WT_REPO" && bash .harness/log-decision.sh "Builder|Sonnet|worktree-canonical test") >/dev/null 2>&1
+# resolution (orchestrator.yaml discovery + worktree redirect), running
+# the REAL production script from inside the WORKTREE.
+(cd "$WT_REPO" && bash "$SCRIPT" "Builder|Sonnet|worktree-canonical test") >/dev/null 2>&1
 if grep -q 'worktree-canonical test' "$MAIN_REPO/.harness/decisions.log" 2>/dev/null; then
   pass "decision logged from inside a worktree landed in the MAIN checkout's decisions.log"
 else

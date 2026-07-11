@@ -38,6 +38,13 @@ LOCK_DIR="${LOG_DECISION_LOCK_DIR:-$(_ld_canon_dir)/.decisions.lock}"
 
 IFS='|' read -r ROLE MODEL DECISION <<< "$ARG"
 
+# issue #116: the new deployment model doesn't guarantee .harness/ exists
+# yet on a project's first-ever decision log (previously always true,
+# since this script lived inside .harness/ itself). Without this,
+# `mkdir "$LOCK_DIR"` fails every time (no parent dir), silently forcing
+# every call down the slow "lock held after 5s" path.
+mkdir -p "$(dirname "$LOG_FILE")"
+
 acquire_lock() {
   local attempts=0
   # 100 * 0.05s = 5s max wait before proceeding unlocked -- a slow/dead
