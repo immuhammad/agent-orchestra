@@ -39,7 +39,7 @@ roles:
 protected_paths:
   - career-ops/
 EOF
-  source "$DIR/orc-config.sh"
+  source "$DIR/../lib/orc-config.sh"
   echo "PROJECT=$(orc_get_scalar project)"
   echo "BRANCH=$(orc_get_scalar integration_branch)"
   echo "ORCH_MODEL=$(orc_get_role_model orchestra)"
@@ -60,7 +60,7 @@ protected_paths:
   - career-ops/
   - vendor/legacy/
 EOF
-  source "$DIR/orc-config.sh"
+  source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/block.out"
 assert_eq "block-list count" "2" "$(wc -l < "$TMP/block.out" | tr -d ' ')"
@@ -74,7 +74,7 @@ echo "== orc-config.sh: protected_paths (inline list) =="
 project: test-project
 protected_paths: [career-ops/, docs/frozen/]
 EOF
-  source "$DIR/orc-config.sh"
+  source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/inline.out"
 assert_eq "inline-list count" "2" "$(wc -l < "$TMP/inline.out" | tr -d ' ')"
@@ -85,7 +85,7 @@ echo "== orc-config.sh: fail-closed fallback =="
 (
   cd "$TMP"
   rm -f orchestrator.yaml
-  source "$DIR/orc-config.sh"
+  source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/missing.out"
 assert_eq "missing config falls back to career-ops/" "career-ops/" "$(cat "$TMP/missing.out")"
@@ -96,7 +96,7 @@ assert_eq "missing config falls back to career-ops/" "career-ops/" "$(cat "$TMP/
 project: test-project
 protected_paths:
 EOF
-  source "$DIR/orc-config.sh"
+  source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/empty-key.out"
 assert_eq "empty protected_paths key falls back to career-ops/" "career-ops/" "$(cat "$TMP/empty-key.out")"
@@ -104,7 +104,7 @@ assert_eq "empty protected_paths key falls back to career-ops/" "career-ops/" "$
 (
   cd "$TMP"
   printf 'this is not yaml at all {{{ :::' > orchestrator.yaml
-  source "$DIR/orc-config.sh"
+  source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/garbage.out"
 assert_eq "malformed config falls back to career-ops/" "career-ops/" "$(cat "$TMP/garbage.out")"
@@ -125,7 +125,7 @@ protected_paths:
   - career-ops/
 EOF
   ORC_SESSION="$SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 \
-    bash -c "source '$DIR/orc.sh'; orc_build_session" 2> "$TMP/build.err"
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$TMP/build.err"
 )
 
 PANE_COUNT="$(tmux list-panes -t "$SESSION" 2>/dev/null | wc -l | tr -d ' ')"

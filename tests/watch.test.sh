@@ -4,6 +4,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+LIB="$(cd "$DIR/../lib" && pwd)"
 TEST_SESSION="harness-watch-test"
 
 PASS=0
@@ -14,7 +15,7 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 TMP="$(mktemp -d)"
 cleanup() {
   tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
-  rm -rf "$TMP" "$DIR/inbox/testcopilot" "$DIR/inbox/testorchestra"
+  rm -rf "$TMP"
 }
 trap cleanup EXIT
 
@@ -26,7 +27,7 @@ WATCH_FLAGGED_DEAD_FILE="$TMP/flagged-dead"
 DISPATCH_DEFERRED_FILE="$TMP/deferred-nudges"
 WATCH_EVENTS_LOG="$TMP/events.log"
 export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE DISPATCH_DEFERRED_FILE WATCH_EVENTS_LOG
-source "$DIR/watch.sh"
+source "$LIB/watch.sh"
 
 echo "== mw_extract_issue: parses linked issue from title+body text =="
 [ "$(mw_extract_issue 'Closes #34.')" = "34" ] && pass "Closes #N" || fail "Closes #N"
@@ -217,12 +218,12 @@ else
 fi
 
 echo "== mw_notify_pick: dispatches via dispatch_main assign orchestra (write + nudge-if-idle) =="
-if grep -q 'dispatch_main assign orchestra "\$pr"' "$DIR/watch.sh"; then
+if grep -q 'dispatch_main assign orchestra "\$pr"' "$LIB/watch.sh"; then
   pass "mw_notify_pick routes through dispatch_main's assign verb (durable .msg + nudge-if-idle)"
 else
   fail "mw_notify_pick should call dispatch_main assign orchestra, not a raw pane write"
 fi
-if grep -q 'PICK next per PHASE-3-PLAN' "$DIR/watch.sh"; then
+if grep -q 'PICK next per PHASE-3-PLAN' "$LIB/watch.sh"; then
   pass "the PICK-next message text matches the ticket's specified wording"
 else
   fail "expected the 'PICK next per PHASE-3-PLAN' wording in mw_notify_pick"
