@@ -25,6 +25,11 @@ run_guard() {
   local tmp
   tmp="$(mktemp -d)"
   git init -q "$tmp"
+  # A fresh CI runner has no global git identity configured (unlike a dev
+  # machine, which always happened to have one already) -- set it locally
+  # so `git commit` doesn't fail with "empty ident name".
+  git -C "$tmp" config user.email "test@test.local"
+  git -C "$tmp" config user.name "test"
   git -C "$tmp" commit -q --allow-empty -m init
   git -C "$tmp" branch -f "$branch" HEAD >/dev/null 2>&1 || true
   git -C "$tmp" checkout -q "$branch" 2>/dev/null || git -C "$tmp" checkout -q -b "$branch"
@@ -115,6 +120,8 @@ run_guard_worktree_push() {
   local main_repo worktree_dir
   main_repo="$(mktemp -d)"
   git init -q "$main_repo"
+  git -C "$main_repo" config user.email "test@test.local"
+  git -C "$main_repo" config user.name "test"
   git -C "$main_repo" commit -q --allow-empty -m init
   git -C "$main_repo" branch -f uat HEAD >/dev/null 2>&1 || true
   git -C "$main_repo" checkout -q uat 2>/dev/null || git -C "$main_repo" checkout -q -b uat
