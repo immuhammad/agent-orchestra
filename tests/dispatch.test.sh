@@ -131,6 +131,48 @@ rm -f "$DEFERRED_TEST_FILE"
 unset -f pane_for_agent
 source "$DISPATCH"
 
+echo "== issue #33: pane_is_idle trusts a FRESH hook-based state file over a screen-scrape misread =="
+source "$DIR/../lib/pane-state-lib.sh"
+tmux split-window -h -t "$TEST_SESSION:0" 2>&1
+GHOST_TARGET="$TEST_SESSION:0.3"
+# Simulate Claude Code's input-box hint/ghost text rendering after a bare
+# prompt char -- capture-pane can't tell this apart from real pending
+# input, so the OLD screen-scrape-only heuristic reads this pane as "busy"
+# (prompt has trailing content) even though it is genuinely idle. This is
+# the exact false-busy failure mode issue #33 exists to fix.
+tmux send-keys -t "$GHOST_TARGET" "printf '❯ Try \"fix the auth bug\"\\n'; sleep 30" Enter 2>&1
+sleep 1
+GHOST_PANE_ID="$(tmux display-message -p -t "$GHOST_TARGET" '#{pane_id}')"
+pane_state_write "$GHOST_PANE_ID" "idle"
+
+if pane_is_idle "$GHOST_TARGET"; then
+  pass "issue #33: a fresh hook state file (idle) overrides the ghost-text screen-scrape false-busy read"
+else
+  fail "issue #33: pane_is_idle should trust the fresh hook state file (idle) over the ghost-text screen-scrape misread"
+fi
+tmux send-keys -t "$GHOST_TARGET" C-c 2>&1
+
+echo "== issue #33: pane_is_idle falls back to screen-scraping when no hook state file exists (e.g. agy's pane) =="
+NOSTATE_TARGET="$TEST_SESSION:0.0"
+NOSTATE_PANE_ID="$(tmux display-message -p -t "$NOSTATE_TARGET" '#{pane_id}')"
+rm -f "$PANE_STATE_DIR/$(pane_state_sanitize "$NOSTATE_PANE_ID")"
+if pane_is_idle "$NOSTATE_TARGET"; then
+  pass "issue #33: no hook state file -- falls back to screen-scrape (plain shell-prompt pane correctly idle)"
+else
+  fail "issue #33: expected fallback to screen-scrape to still detect the plain shell-prompt pane as idle"
+fi
+
+echo "== issue #33: pane_is_idle ignores a STALE hook state file, falls back to screen-scraping =="
+STALE_PANE_ID="$NOSTATE_PANE_ID"
+mkdir -p "$PANE_STATE_DIR"
+echo "busy 1000000000" > "$PANE_STATE_DIR/$(pane_state_sanitize "$STALE_PANE_ID")"
+if pane_is_idle "$NOSTATE_TARGET"; then
+  pass "issue #33: a stale 'busy' state file is ignored -- falls back to screen-scrape (shell-prompt = idle)"
+else
+  fail "issue #33: a stale hook state file should not override the screen-scrape fallback"
+fi
+rm -f "$PANE_STATE_DIR/$(pane_state_sanitize "$STALE_PANE_ID")"
+
 echo "== message verb: writes .msg, no nudge, no ack wait =="
 mkdir -p "$CANON_DIR/inbox/testagent"
 OUT="$(bash "$DISPATCH" message testagent 9001 "hello" 2>&1)"

@@ -7,11 +7,19 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/pane-state.sh busy" }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": ".*",
         "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/quota-stop-gate.sh" }
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/quota-stop-gate.sh" },
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/pane-state.sh busy" }
         ]
       },
       {
@@ -37,7 +45,8 @@
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/check-handoff.sh" }
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/check-handoff.sh" },
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/pane-state.sh idle" }
         ]
       }
     ],

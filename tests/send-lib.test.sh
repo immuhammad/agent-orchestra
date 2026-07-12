@@ -68,6 +68,40 @@ else
   fail "expected exactly 1 Enter in the retry branch, got $RETRY_ENTER_COUNT"
 fi
 
+echo "== send_submit: issue #33 -- ALWAYS clears (C-u) before the FIRST type attempt, not just on retry =="
+# The retry branch already C-u's on a stuck-input RE-attempt (tested
+# above), but that only catches send_submit's OWN text getting stuck. The
+# stranded-input gotcha (live-hit three times per issue #33/#38) is
+# leftover content sitting in the pane BEFORE send_submit is ever called
+# (e.g. ghost/hint text, a half-typed prior message) -- that stray content
+# is still there when the FIRST attempt types over it, corrupting the
+# submitted line. Fix: clear unconditionally before the first type, not
+# only after detecting a stuck retry.
+FIRST_TYPE_LINE="$(printf '%s\n' "$SUBMIT_BODY" | grep -n -- '-l -- "\$text"' | head -1 | cut -d: -f1)"
+PRE_FIRST_TYPE="$(printf '%s\n' "$SUBMIT_BODY" | head -n "$FIRST_TYPE_LINE")"
+if printf '%s\n' "$PRE_FIRST_TYPE" | grep -qF 'C-u'; then
+  pass "send_submit clears (C-u) before its first type attempt, not only on retry"
+else
+  fail "send_submit should C-u clear the pane BEFORE typing the first time (stranded-input gotcha, issue #33/#38)"
+fi
+
+echo "== send_submit: live -- clears pre-existing stray input before typing (issue #33 stranded-input gotcha) =="
+tmux new-session -d -s "$TEST_SESSION" -n stray sh >/dev/null 2>&1
+sleep 1
+# Leave stray, un-submitted text sitting on the input line (no Enter) --
+# simulates leftover ghost/hint-adjacent content from a prior interaction.
+tmux send-keys -t "$TEST_SESSION:0.0" -l -- "STRAY_LEFTOVER" >/dev/null 2>&1
+sleep 0.3
+send_submit "$TEST_SESSION:0.0" "printf 'CLEAN_SUBMIT_OK\\n'"
+sleep 0.5
+PANE_OUT="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>/dev/null)"
+if echo "$PANE_OUT" | grep -q "CLEAN_SUBMIT_OK" && ! echo "$PANE_OUT" | grep -q "STRAY_LEFTOVERprintf"; then
+  pass "send_submit cleared the stray leftover input before typing -- command executed cleanly"
+else
+  fail "send_submit should have cleared stray leftover input before typing (pane: $PANE_OUT)"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1
+
 echo "== send_meaningful_tail: filters blank padding before a caller's tail -N (issue #86 dogfood) =="
 tmux new-session -d -s "$TEST_SESSION" -n pad -x 200 -y 50 >/dev/null 2>&1
 tmux send-keys -t "$TEST_SESSION:0.0" "printf 'REALCONTENT\\n'; sleep 30" Enter >/dev/null 2>&1

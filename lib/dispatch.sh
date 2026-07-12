@@ -27,6 +27,8 @@ source "$DIR/send-lib.sh"
 source "$DIR/harness-root.sh"
 # shellcheck source=./orc-config.sh
 source "$DIR/orc-config.sh"
+# shellcheck source=./pane-state-lib.sh
+source "$DIR/pane-state-lib.sh"
 # issue #99: inbox/deferred-nudges are per-repo STATE, not per-checkout --
 # every worktree has its own gitignored .harness/inbox, so a dispatch run
 # from inside a worktree must still land in the MAIN checkout's inbox, not
@@ -39,6 +41,13 @@ elif ! CANON_DIR="$(harness_canonical_dir "$PWD")"; then
   echo "dispatch.sh: could not resolve project root (see error above); set ORC_PROJECT_ROOT or run from inside a project with orchestrator.yaml" >&2
   exit 1
 fi
+
+# issue #33: pane-state-lib.sh's PANE_STATE_DIR default resolves off
+# CANON_DIR at SOURCE time, which was too early above (CANON_DIR wasn't
+# resolved yet) -- set it explicitly now that CANON_DIR is known, so
+# pane_is_idle's hook-state read (below) lands in the same place
+# hooks/pane-state.sh writes to.
+PANE_STATE_DIR="$CANON_DIR/state/pane-state"
 
 # T24 (issue #34): deferred nudges used to be fire-and-forget -- if a nudge
 # was skipped because the target pane was busy, nothing ever retried it, so
@@ -143,7 +152,24 @@ pane_busy_markers() {
 # time, but a nudge into a genuinely busy pane injects stray keystrokes into
 # whatever it's mid-generating.
 pane_is_idle() {
-  local target="$1" agent="${2:-}" cmd tail markers
+  local target="$1" agent="${2:-}" cmd tail markers pane_id hook_state
+  # issue #33: a Claude Code pane's own hooks (UserPromptSubmit/
+  # PreToolUse -> busy, Stop -> idle) write ground truth, keyed by
+  # $TMUX_PANE -- authoritative wherever it's fresh, since it needs no
+  # guessing about what's rendered on screen (unlike the capture-pane
+  # heuristic below, which cannot tell Claude Code's input hint/ghost text
+  # from real pending content and misreads busy/idle as a result). A pane
+  # with no fresh hook state (agy's pane -- a different TUI whose process
+  # never fires these hooks -- or a pane whose hook hasn't written yet)
+  # falls through to the screen-scrape heuristic unchanged.
+  pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
+  if [ -n "$pane_id" ]; then
+    hook_state="$(pane_state_read "$pane_id" 2>/dev/null || echo '')"
+    case "$hook_state" in
+      idle) return 0 ;;
+      busy) return 1 ;;
+    esac
+  fi
   cmd="$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null || echo '')"
   case "$cmd" in
     ""|bash|zsh|sh|fish) return 0 ;;

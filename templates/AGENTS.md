@@ -83,14 +83,20 @@ agent-orchestra's own #107 decision log for the reasoning).
   `control-room` at launch). An out-of-range pane index does not error —
   it resolves to the invoking client's current pane — so double-check
   pane count before targeting by index.
-- Review-gated draft-PR flow: Builder opens PRs as **DRAFT**.
-  `dispatch.sh handoff <reviewer> <issue> "..."` (sync, bounded wait) —
-  the returned `.ack` plus the posted PR review comment carries the
-  APPROVE/REQUEST-CHANGES verdict (confirm via `gh pr view`; the `.ack`
-  itself is just receipt-of-delivery, not the verdict). On APPROVE:
-  `gh pr ready` + comment the issue. On REQUEST-CHANGES: fix in the same
-  worktree and re-`handoff`. You (Gate 2) only ever see ready, CI-green,
-  reviewer-passed PRs.
+- Review-gated draft-PR flow: Builder opens PRs as **DRAFT**, then
+  `dispatch.sh assign <reviewer> <issue> "..."` (fire-and-forget — a real
+  review can run long, and a bounded `handoff` poll that outruns its
+  timeout strands an already-completed verdict; this live-happened on PR
+  #30's security review, issue #38). Builder does NOT block on this
+  dispatch: it polls the PR itself (`gh pr view`) for the review comment.
+  On completion the reviewer PUSHES its own verdict back —
+  `dispatch.sh assign <requester> <issue> "APPROVE: ..."` or
+  `"REQUEST-CHANGES: ..."` — as a durable inbox message plus a nudge, in
+  addition to posting the PR review comment; completion flows as a
+  pushed message, not something the requester polls a bounded wait for.
+  On APPROVE: `gh pr ready` + comment the issue. On REQUEST-CHANGES: fix
+  in the same worktree and re-`assign`. You (Gate 2) only ever see ready,
+  CI-green, reviewer-passed PRs.
 - PR-body closing-keyword hygiene: GitHub (and merge-watch, same regex)
   treats "closes/fixes/resolves #N" ANYWHERE in a PR's title or body as a
   real closing reference, not just in the intended `Closes #N.` line.
@@ -99,13 +105,14 @@ agent-orchestra's own #107 decision log for the reasoning).
   description of past/unrelated work can't be misread as a new closing
   reference.
 - Review-dispatch `.msg` template: every
-  `dispatch.sh handoff <reviewer> <issue> "..."` message MUST state the
+  `dispatch.sh assign <reviewer> <issue> "..."` message MUST state the
   single-writer rule inline (below) — a reviewer's own hook config is a
   best-effort deny-list, not a substitute for the instruction actually
   reaching it. Minimum wording: "Review PR #<n> for issue #<n>. Run your
-  /code-review skill (applies `review-protocol.md`). Post your
-  verdict as a PR review comment (APPROVE/REQUEST-CHANGES) and ack this
-  message. Do NOT edit handoff.md or run git write ops
+  /code-review skill (applies `review-protocol.md`). Post your verdict as
+  a PR review comment (APPROVE/REQUEST-CHANGES), then push it back to me
+  with `dispatch.sh assign <requester> <issue> "<verdict>"` — do not wait
+  to be polled. Do NOT edit handoff.md or run git write ops
   (restore/checkout/commit/reset) in this checkout — see the
   single-writer rule below." If the diff touches auth, a `guard*.sh`
   script, or any push/merge path, it's a **risky diff** — also explicitly

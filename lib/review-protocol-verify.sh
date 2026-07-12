@@ -131,6 +131,31 @@ else
   pass "GEMINI.md has no legacy .harness/review-protocol.md reference"
 fi
 
+echo "== issue #38: review-gated flow PUSHES the verdict back (assign), not a bounded handoff poll =="
+# The old flow dispatched the reviewer via `handoff` (a synchronous,
+# ~120s-bounded poll for the .ack) -- a review that legitimately outran
+# the timeout (agy's PR #30 security review did, live) left the verdict
+# stranded: the reviewer HAD approved, but the requester gave up waiting
+# and never saw it. Fix per the ratified design: dispatch the reviewer via
+# `assign` (fire-and-forget, no timeout to outrun), and on completion the
+# reviewer pushes its own verdict back as a durable `assign` message to
+# the requester's inbox instead of the requester polling a bounded wait.
+if grep -qF 'dispatch.sh handoff <reviewer>' "$AGENTS_FILE" 2>/dev/null; then
+  fail "issue #38: AGENTS.md's review-gated flow still dispatches the reviewer via a bounded 'handoff' poll -- use 'assign' plus a pushed-back verdict instead"
+else
+  pass "issue #38: review-gated flow no longer dispatches the reviewer via 'handoff'"
+fi
+if grep -qF 'dispatch.sh assign <reviewer>' "$AGENTS_FILE" 2>/dev/null; then
+  pass "issue #38: review-gated flow dispatches the reviewer via 'assign' (fire-and-forget)"
+else
+  fail "issue #38: expected AGENTS.md to dispatch the reviewer via 'dispatch.sh assign <reviewer>'"
+fi
+if grep -qi "push.*verdict\|verdict.*push" "$AGENTS_FILE" 2>/dev/null; then
+  pass "issue #38: AGENTS.md documents the reviewer pushing its verdict back on completion"
+else
+  fail "issue #38: expected AGENTS.md to instruct the reviewer to PUSH its verdict back on completion, not leave the requester polling a bounded handoff"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
