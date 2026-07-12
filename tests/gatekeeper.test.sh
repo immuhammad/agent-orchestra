@@ -468,6 +468,49 @@ else
   pass "gatekeeper.sh contains no hardcoded 'harness:0.N' pane target"
 fi
 
+echo "== issue #19 follow-up: gatekeeper-liveness.sh / gatekeeper.sh DEFAULTS (no override) derive from THIS project's orchestrator.yaml, not 'harness' =="
+# Unlike every other block in this file (which pins GATEKEEPER_LIVENESS_TARGET
+# / GATEKEEPER_NOTIFY_SESSION / GATEKEEPER_CANON_DIR to a throwaway session so
+# a real 80%+ crossing during a test run can't reach the real "harness"
+# session), THIS block specifically tests what the DEFAULT resolves to when
+# none of those are set -- the exact gap the bug #19 follow-up flagged.
+# Two different projects (own orchestrator.yaml, own cwd) must resolve to
+# two DIFFERENT session defaults, same two-session-isolation shape as
+# dispatch.test.sh's own issue #19 regression case.
+PROJECT_C="$(mktemp -d)"
+PROJECT_D="$(mktemp -d)"
+echo "project: project-c" > "$PROJECT_C/orchestrator.yaml"
+echo "project: project-d" > "$PROJECT_D/orchestrator.yaml"
+
+LIVENESS_TARGET_C="$(cd "$PROJECT_C" && env -u GATEKEEPER_LIVENESS_TARGET -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$LIVENESS'; echo \"\$TARGET\"" 2>&1)"
+LIVENESS_TARGET_D="$(cd "$PROJECT_D" && env -u GATEKEEPER_LIVENESS_TARGET -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$LIVENESS'; echo \"\$TARGET\"" 2>&1)"
+
+if [ "$LIVENESS_TARGET_C" = "project-c:0.0" ]; then
+  pass "gatekeeper-liveness.sh's default TARGET derives from project-c's own orchestrator.yaml"
+else
+  fail "expected project-c:0.0, got $LIVENESS_TARGET_C"
+fi
+if [ -n "$LIVENESS_TARGET_C" ] && [ "$LIVENESS_TARGET_C" != "$LIVENESS_TARGET_D" ]; then
+  pass "gatekeeper-liveness.sh's default TARGET differs between two projects (never collides on 'harness:0.0')"
+else
+  fail "CORRECTNESS REGRESSION (issue #19 follow-up): two projects resolved to the same liveness TARGET ($LIVENESS_TARGET_C / $LIVENESS_TARGET_D)"
+fi
+
+NOTIFY_SESSION_C="$(cd "$PROJECT_C" && env -u GATEKEEPER_NOTIFY_SESSION -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$GATEKEEPER'; echo \"\$NOTIFY_SESSION\"" 2>&1)"
+NOTIFY_SESSION_D="$(cd "$PROJECT_D" && env -u GATEKEEPER_NOTIFY_SESSION -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$GATEKEEPER'; echo \"\$NOTIFY_SESSION\"" 2>&1)"
+
+if [ "$NOTIFY_SESSION_C" = "project-c" ]; then
+  pass "gatekeeper.sh's default NOTIFY_SESSION derives from project-c's own orchestrator.yaml"
+else
+  fail "expected project-c, got $NOTIFY_SESSION_C"
+fi
+if [ -n "$NOTIFY_SESSION_C" ] && [ "$NOTIFY_SESSION_C" != "$NOTIFY_SESSION_D" ]; then
+  pass "gatekeeper.sh's default NOTIFY_SESSION differs between two projects (never collides on 'harness')"
+else
+  fail "CORRECTNESS REGRESSION (issue #19 follow-up): two projects resolved to the same NOTIFY_SESSION ($NOTIFY_SESSION_C / $NOTIFY_SESSION_D)"
+fi
+rm -rf "$PROJECT_C" "$PROJECT_D"
+
 echo "== T26 VERIFY: zero traffic reached the real harness session across this entire run =="
 # A before/after COUNT of leak-marker lines, not a byte-exact snapshot diff
 # and not a bare presence check:

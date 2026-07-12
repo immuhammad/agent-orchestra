@@ -44,7 +44,12 @@ CHECK_INTERVAL="${GATEKEEPER_LIVENESS_INTERVAL:-60}"
 # 2x that plus slack tolerates one slow iteration (e.g. a slow curl to the
 # usage endpoint) without a false-positive warning.
 STALE_AFTER="${GATEKEEPER_LIVENESS_STALE_AFTER:-660}"
-TARGET="${GATEKEEPER_LIVENESS_TARGET:-harness:0.0}"
+# issue #19 follow-up: used to hardcode "harness:0.0" -- reuse
+# $DISPATCH_SESSION (already derived above via dispatch.sh's own
+# orc_session_name-based resolution, issue #18 item 7/#19) instead of
+# re-deriving it, so this can't drift from dispatch.sh's own session
+# targeting and two clone-per-project rooms never collide here either.
+TARGET="${GATEKEEPER_LIVENESS_TARGET:-$DISPATCH_SESSION:0.0}"
 ALERTED=false
 
 # #11 secondary gap: which pane(s) to watch for "CLI alive but
@@ -54,7 +59,7 @@ ALERTED=false
 # incident actually happened to; space-separated so more panes can be added
 # without a code change. HANDOFF_FILE is the same handoff.md
 # hooks/rate-limit-handoff.sh writes its "## RATE-LIMITED" section into.
-RATELIMIT_WATCH_PANES="${GATEKEEPER_LIVENESS_RATELIMIT_PANES:-harness:0.1}"
+RATELIMIT_WATCH_PANES="${GATEKEEPER_LIVENESS_RATELIMIT_PANES:-$DISPATCH_SESSION:0.1}"
 HANDOFF_FILE="${GATEKEEPER_LIVENESS_HANDOFF_FILE:-$(_gkl_canon_dir)/handoff.md}"
 # Best-effort/tunable: the actual raw text a rate-limited Claude Code CLI
 # leaves in scrollback hasn't been captured verbatim in this codebase yet

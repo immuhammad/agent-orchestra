@@ -69,10 +69,16 @@ source "$DIR/dispatch.sh"
 
 # T26: which tmux session gk_alert_orchestra's nudge targets. Overridable so
 # tests can point every alert at a throwaway session instead of the real
-# "harness" one -- a test that types into a live agent pane at real quota
+# session -- a test that types into a live agent pane at real quota
 # thresholds reads as a genuine user prompt, which is a safety bug, not just
 # noise (confirmed live during T19/T20 testing).
-NOTIFY_SESSION="${GATEKEEPER_NOTIFY_SESSION:-harness}"
+#
+# issue #19 follow-up: used to hardcode "harness" -- reuse $DISPATCH_SESSION
+# (already derived above via dispatch.sh's own orc_session_name-based
+# resolution, issue #18 item 7/#19) instead of re-deriving it, so this can't
+# drift from dispatch.sh's own session targeting and two clone-per-project
+# rooms never collide here either.
+NOTIFY_SESSION="${GATEKEEPER_NOTIFY_SESSION:-$DISPATCH_SESSION}"
 
 # issue #105 Task 1: alert state persisted to a JSON file (mirrors
 # auto-resume-state.json's pattern) -- an in-memory-only CLAUDE_ALERTED/
