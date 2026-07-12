@@ -15,8 +15,9 @@ watch-flagged-dead
 # dual-installed skill pack (bin/orc-install-skills dogfooded on this repo
 # itself, e.g. for agy to review here) -- skills/ is the source, these are
 # installed copies, never tracked
-.claude/skills/
-.agents/skills/
+.claude/*
+.agents/*
+.harness/*
 
 # per-project root files (issue #18 item 4) -- each project that adopts
 # this harness copies these from templates/ and customizes its own copy;
@@ -26,3 +27,4 @@ watch-flagged-dead
 /CLAUDE.md
 /GEMINI.md
 /review-protocol.md
+/project/*
