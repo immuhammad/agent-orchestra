@@ -11,15 +11,42 @@
 # default was a leftover from this harness's original single-consumer
 # extraction; project-agnostic by design now that every project is its own
 # clone). Missing/malformed config means EMPTY protected_paths, not a
-# widened set of blocked writes -- the harness core itself (bin/lib/hooks/
-# .harness) is separately protected by guard.sh's own logic, not this
-# list, so an empty default here doesn't unprotect the harness.
+# widened set of blocked writes. This does NOT unprotect the harness core:
+# script-exec/git-ops are separately covered by guard.sh's own G-series
+# rules, and hook CONFIG (.claude/, .agents/) is separately covered by
+# orc_is_harness_config_path below -- neither depends on this
+# project-configurable list (issue #31: a missing/empty protected_paths
+# must never leave .claude/settings.json or .agents/hooks.json editable,
+# since those wire the guards themselves).
 #
 # Path resolution: ORC_CONFIG_FILE overrides (tests use this); otherwise
 # "orchestrator.yaml" resolved relative to CWD, since guard hooks and `orc`
 # both run with CWD at the project repo root.
 
 ORC_DEFAULT_PROTECTED_PATHS=""
+
+# orc_harness_config_dirs -- one hardcoded default-protected dir per line:
+# .claude/ and .agents/, which wire the harness's OWN enforcement (guard.sh,
+# guard-write.sh, quota-stop-gate.sh, the Stop hook, agy's guard hooks).
+# Issue #31 (agy's probe-3 on PR #30): these must be protected BY DEFAULT,
+# independent of orchestrator.yaml's protected_paths -- otherwise a missing
+# config entry (or an adversarial/malfunctioning agent editing
+# orchestrator.yaml first) leaves the config that wires a guard editable by
+# the very agent that guard is meant to constrain. Single source list so
+# guard.sh's Bash-command check and guard-write.sh's Write/Edit-path check
+# (via orc_is_harness_config_path below) can never drift apart.
+orc_harness_config_dirs() {
+  printf '%s\n' ".claude/" ".agents/"
+}
+
+# orc_is_harness_config_path <path> -- true if path falls under one of
+# orc_harness_config_dirs. Used by guard-write.sh (Write/Edit tool calls).
+orc_is_harness_config_path() {
+  case "$1" in
+    .claude/*|*/.claude/*|.agents/*|*/.agents/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 orc_config_file() {
   echo "${ORC_CONFIG_FILE:-orchestrator.yaml}"

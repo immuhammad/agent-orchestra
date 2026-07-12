@@ -75,6 +75,28 @@ expect_blocked "custom protected_paths blocks its own path" \
 expect_allowed "custom protected_paths does not widen to anything not listed" \
   "career-ops/x.txt" "$CUSTOM_YAML"
 
+echo "== issue #31: .claude/ and .agents/ are protected BY DEFAULT, independent of orchestrator.yaml =="
+expect_blocked "write into .claude/settings.json is blocked with NO orchestrator.yaml at all" \
+  ".claude/settings.json"
+expect_blocked "write into .agents/hooks.json is blocked with NO orchestrator.yaml at all" \
+  ".agents/hooks.json"
+expect_blocked "write into a nested .claude/ path is blocked" \
+  "some/nested/.claude/settings.local.json"
+expect_blocked ".claude/ default protection is NOT overridden by an orchestrator.yaml that doesn't mention it" \
+  ".claude/settings.json" "$CUSTOM_YAML"
+
+run_guard_write ".claude/settings.json"
+if echo "$GUARD_OUT" | grep -q "templates/settings.json"; then
+  echo "PASS: blocked-write message names the sanctioned edit path (templates/settings.json)"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: expected the blocked-write message to name templates/settings.json as the sanctioned edit path, got: $GUARD_OUT"
+  FAIL=$((FAIL + 1))
+fi
+
+expect_allowed "a normal project write (unrelated to .claude//.agents/) is still allowed" \
+  "src/some-feature.js"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

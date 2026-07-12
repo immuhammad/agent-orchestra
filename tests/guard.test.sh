@@ -195,6 +195,19 @@ expect_allowed "custom protected_paths does not widen to anything not listed" \
 expect_blocked "inline-list protected_paths blocks a listed path" \
   "cp a docs/frozen/b" "feature/issue-99" "$INLINE_YAML"
 
+echo "== issue #31: .claude/ and .agents/ are protected BY DEFAULT against Bash-redirect writes too, independent of orchestrator.yaml =="
+# agy's probe-3 on PR #30: an agent could spoof ORC_ONESHOT by editing
+# .claude/settings.json -- guard-write.sh (the Write/Edit tool guard) is one
+# path in, but a Bash redirect (`echo ... > .claude/settings.json`) bypasses
+# the Write/Edit tool entirely and only guard.sh's command-string inspection
+# would ever see it. Both guards must close this, not just one.
+expect_blocked "Bash redirect into .claude/settings.json is blocked with NO orchestrator.yaml at all" \
+  "echo 'ORC_ONESHOT=1 bash hooks/check-handoff.sh' > .claude/settings.json" "feature/issue-99" "$NO_YAML"
+expect_blocked "Bash redirect into .agents/hooks.json is blocked with NO orchestrator.yaml at all" \
+  "echo hi > .agents/hooks.json" "feature/issue-99" "$NO_YAML"
+expect_blocked ".claude/ default protection (Bash path) is NOT overridden by an orchestrator.yaml that doesn't mention it" \
+  "echo hi > .claude/settings.json" "feature/issue-99" "$CUSTOM_YAML"
+
 echo "== issue #116 follow-up (agy REQUEST-CHANGES on PR #3): protected branches include the CONFIGURED integration_branch =="
 DEVELOP_YAML=$'integration_branch: develop'
 expect_blocked "git push targeting a CONFIGURED custom integration_branch is blocked, not just main/uat" \

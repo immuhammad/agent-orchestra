@@ -216,10 +216,26 @@ done <<< "$(echo "$COMMAND" | sed -E 's/(;|\&\&|\|\||\|)/\n/g')"
 # than loosening the destructive-write rule.
 # T21: protected paths come ONLY from orchestrator.yaml (project,
 # protected_paths) via orc-config.sh -- EMPTY if the config is
-# missing/malformed (issue #18 B-i: no hardcoded project-specific default;
-# the harness core itself is separately protected by this script's own
-# G-series rules, not this list).
+# missing/malformed (issue #18 B-i: no hardcoded project-specific default).
+# This does NOT unprotect the harness core: script-exec/git-ops are
+# separately covered by this script's own G-series rules above, and hook
+# CONFIG (.claude/, .agents/) is separately covered by the
+# orc_is_harness_config_path check just below -- neither depends on this
+# project-configurable list.
 if echo "$COMMAND" | grep -Eq '>|>>|tee |cp |mv |touch |mkdir |sed -i|rm '; then
+  # issue #31 (agy's probe-3 on PR #30): a Bash redirect (`echo ... >
+  # .claude/settings.json`) bypasses the Write/Edit tool entirely, so
+  # guard-write.sh's own default protection of .claude/.agents/ never sees
+  # it -- this script's command-string inspection is the only thing that
+  # can catch it. Checked BY DEFAULT, same as guard-write.sh, independent of
+  # orchestrator.yaml's protected_paths.
+  while IFS= read -r default_path; do
+    if echo "$COMMAND" | grep -Eq "$(echo "$default_path" | sed -E 's/[][(){}.*+?^$|\\]/\\&/g')"; then
+      echo "guard.sh: blocked write into '$default_path' -- .claude/ and .agents/ are protected by default (they wire guard.sh/guard-write.sh/quota-stop-gate.sh/the Stop hook). To change hook wiring: edit templates/settings.json or templates/agents-hooks.json (the tracked source of truth) and re-sync into this room: $COMMAND" >&2
+      exit 2
+    fi
+  done <<< "$(orc_harness_config_dirs)"
+
   while IFS= read -r protected; do
     [ -z "$protected" ] && continue
     protected_re="$(echo "$protected" | sed -E 's/[][(){}.*+?^$|\\]/\\&/g')"
