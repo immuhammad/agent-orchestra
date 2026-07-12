@@ -202,14 +202,20 @@ nudge_agent() {
 # existing poll loop below already waits for the .ack to appear no matter
 # who writes it.
 scribe_spawn_headless() {
-  local msg_file="$1" ack_file="$2" msg_body prompt
+  local msg_file="$1" ack_file="$2" msg_body prompt project_name
   msg_body="$(cat "$msg_file" 2>/dev/null)"
+  # issue #18 B3: this used to hardcode "career-ops-harness" (this
+  # harness's original single-consumer project) -- project-agnostic now,
+  # reading THIS project's own name from orchestrator.yaml like every
+  # other role/session-name derivation in this file.
+  project_name="$(orc_get_scalar project)"
+  project_name="${project_name:-this project}"
   # Plain concatenation, not a heredoc: an unquoted heredoc's lexer tracks
   # quote state while scanning for $(...)/`...`, and a stray apostrophe in
   # prose (e.g. "doesn't") opens an unterminated single-quote from its
   # point of view -- breaks the WHOLE script's parse, not just this
   # function (found the hard way writing this very function).
-  prompt="You are the scribe agent for career-ops-harness, spawned one-shot to handle a single dispatched task (issue #89: scribe has no standing pane -- this headless run IS the scribe for this one message).
+  prompt="You are the scribe agent for ${project_name}, spawned one-shot to handle a single dispatched task (issue #89: scribe has no standing pane -- this headless run IS the scribe for this one message).
 
 Dispatch message:
 $msg_body

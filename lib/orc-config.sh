@@ -6,17 +6,20 @@
 # general YAML parser. It supports scalars (`key: value`) and `protected_paths`
 # as either an inline list (`[a, b]`) or a block list (`- a` / `- b`).
 #
-# Fail-closed contract (guards depend on this): if the config file is
-# missing, unreadable, or the requested key isn't found/parseable,
-# orc_protected_paths always falls back to the hardcoded default
-# (career-ops/) rather than returning nothing -- a missing/broken config
-# must never widen what's writable.
+# issue #18 (B-i): protected_paths comes ONLY from orchestrator.yaml --
+# there is no hardcoded project-specific default (the old "career-ops/"
+# default was a leftover from this harness's original single-consumer
+# extraction; project-agnostic by design now that every project is its own
+# clone). Missing/malformed config means EMPTY protected_paths, not a
+# widened set of blocked writes -- the harness core itself (bin/lib/hooks/
+# .harness) is separately protected by guard.sh's own logic, not this
+# list, so an empty default here doesn't unprotect the harness.
 #
 # Path resolution: ORC_CONFIG_FILE overrides (tests use this); otherwise
 # "orchestrator.yaml" resolved relative to CWD, since guard hooks and `orc`
 # both run with CWD at the project repo root.
 
-ORC_DEFAULT_PROTECTED_PATHS="career-ops/"
+ORC_DEFAULT_PROTECTED_PATHS=""
 
 orc_config_file() {
   echo "${ORC_CONFIG_FILE:-orchestrator.yaml}"
@@ -45,16 +48,16 @@ orc_get_scalar() {
   ' "$yaml"
 }
 
-# orc_protected_paths -- prints one protected path per line. Falls back to
-# the hardcoded default if the config is missing, has no protected_paths
-# key, or the key parses to an empty list (all treated as "malformed" per
-# the fail-closed contract in T21's ticket).
+# orc_protected_paths -- prints one protected path per line, or nothing at
+# all if the config is missing, has no protected_paths key, or the key
+# parses to an empty list (ORC_DEFAULT_PROTECTED_PATHS is empty, issue #18
+# B-i -- see the header comment above).
 orc_protected_paths() {
   local yaml
   yaml="$(orc_config_file)"
 
   if [ ! -f "$yaml" ]; then
-    echo "$ORC_DEFAULT_PROTECTED_PATHS"
+    [ -n "$ORC_DEFAULT_PROTECTED_PATHS" ] && echo "$ORC_DEFAULT_PROTECTED_PATHS"
     return 0
   fi
 
@@ -88,7 +91,7 @@ orc_protected_paths() {
   ' "$yaml")"
 
   if [ -z "$paths" ]; then
-    echo "$ORC_DEFAULT_PROTECTED_PATHS"
+    [ -n "$ORC_DEFAULT_PROTECTED_PATHS" ] && echo "$ORC_DEFAULT_PROTECTED_PATHS"
     return 0
   fi
 

@@ -98,7 +98,7 @@ echo "== regression: pre-existing G-series behaviors =="
 expect_blocked "rm -rf is still blocked"                 "rm -rf /tmp/foo"
 expect_blocked "git push --force is still blocked"       "git push --force origin feature/x"
 expect_blocked "git reset --hard is still blocked"       "git reset --hard HEAD~1"
-expect_blocked "write into career-ops/ is still blocked" "echo hi > career-ops/x.txt"
+expect_allowed "no orchestrator.yaml: write anywhere is allowed, no hardcoded default path (issue #18 B-i)" "echo hi > some-dir/x.txt"
 expect_blocked "script exec outside .harness/ is still blocked" "bash /tmp/whatever.sh"
 expect_allowed "script exec inside .harness/ is still allowed"  "bash .harness/log-decision.sh 'a|b|c'"
 expect_allowed "ordinary read command is allowed"        "ls -la"
@@ -175,23 +175,23 @@ expect_worktree_blocked "'cd worktree && git push origin main' still blocked (ex
 expect_worktree_blocked "bare 'git push' with NO cd still blocked (hook CWD itself is on uat)" \
   "git push"
 
-echo "== T21: protected paths from orchestrator.yaml =="
+echo "== T21 / issue #18 B-i: protected paths from orchestrator.yaml, EMPTY default (no hardcoded project name) =="
 NO_YAML=""
-CAREER_OPS_YAML=$'protected_paths:\n  - career-ops/'
+EXAMPLE_YAML=$'protected_paths:\n  - vendor/legacy/'
 CUSTOM_YAML=$'protected_paths:\n  - vendor/legacy/'
 INLINE_YAML='protected_paths: [vendor/legacy/, docs/frozen/]'
 MALFORMED_YAML='this is not yaml at all {{{ :::'
 
-expect_blocked "missing orchestrator.yaml still blocks career-ops/ (fail closed)" \
+expect_allowed "missing orchestrator.yaml: the OLD hardcoded default (career-ops/) is gone, write allowed (issue #18 B-i)" \
   "echo hi > career-ops/x.txt" "feature/issue-99" "$NO_YAML"
-expect_blocked "malformed orchestrator.yaml still blocks career-ops/ (fail closed)" \
+expect_allowed "malformed orchestrator.yaml: the OLD hardcoded default (career-ops/) is gone, write allowed (issue #18 B-i)" \
   "echo hi > career-ops/x.txt" "feature/issue-99" "$MALFORMED_YAML"
-expect_blocked "config explicitly listing career-ops/ blocks it" \
-  "echo hi > career-ops/x.txt" "feature/issue-99" "$CAREER_OPS_YAML"
+expect_blocked "config explicitly listing a path blocks it" \
+  "echo hi > vendor/legacy/x.txt" "feature/issue-99" "$EXAMPLE_YAML"
 expect_blocked "custom protected_paths blocks its own path" \
   "echo hi > vendor/legacy/x.txt" "feature/issue-99" "$CUSTOM_YAML"
-expect_allowed "custom protected_paths no longer blocks career-ops/" \
-  "echo hi > career-ops/x.txt" "feature/issue-99" "$CUSTOM_YAML"
+expect_allowed "custom protected_paths does not widen to anything not listed" \
+  "echo hi > some-other-dir/x.txt" "feature/issue-99" "$CUSTOM_YAML"
 expect_blocked "inline-list protected_paths blocks a listed path" \
   "cp a docs/frozen/b" "feature/issue-99" "$INLINE_YAML"
 

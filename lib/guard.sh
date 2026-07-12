@@ -49,9 +49,9 @@ guard_cwd="$PWD"
 # integration_branch (issue #116), and guard.sh not doing the same left a
 # real gap: a project configuring integration_branch: develop could
 # git push/merge straight to it, completely unguarded. Kept main/uat as
-# defaults too (not just a fallback) since career-ops-harness's real
-# deployment uses uat and many others default to main -- configuring one
-# custom branch shouldn't silently un-protect the other common name.
+# defaults too (not just a fallback) since real deployments commonly use
+# uat as well as main -- configuring one custom branch shouldn't silently
+# un-protect the other common name.
 CONFIGURED_INTEGRATION_BRANCH="$(orc_get_scalar integration_branch)"
 
 while IFS= read -r seg; do
@@ -193,15 +193,18 @@ while IFS= read -r seg; do
 done <<< "$(echo "$COMMAND" | sed -E 's/(;|\&\&|\|\||\|)/\n/g')"
 
 # This check stays whole-string (not position-anchored like the dangerous-
-# command check above): a redirect like `echo hi > career-ops/x` legitimately
+# command check above): a redirect like `echo hi > vendor/x` legitimately
 # has its `>` mid-command, so anchoring to segment-start would miss real
 # writes. It shares the same accepted FP class as a result -- e.g. prose
-# mentioning both "career-ops/" and a write verb (a commit message describing
-# this very rule triggered it during T3) -- accepted per T3 policy rather
+# mentioning both a protected path and a write verb (a commit message
+# describing this very rule triggered it during T3, against career-ops/,
+# this repo's protected path at the time) -- accepted per T3 policy rather
 # than loosening the destructive-write rule.
-# T21: protected paths now come from orchestrator.yaml (project, protected_paths)
-# via orc-config.sh, falling back to the hardcoded career-ops/ default if the
-# config is missing/malformed (fail closed -- see orc-config.sh's contract).
+# T21: protected paths come ONLY from orchestrator.yaml (project,
+# protected_paths) via orc-config.sh -- EMPTY if the config is
+# missing/malformed (issue #18 B-i: no hardcoded project-specific default;
+# the harness core itself is separately protected by this script's own
+# G-series rules, not this list).
 if echo "$COMMAND" | grep -Eq '>|>>|tee |cp |mv |touch |mkdir |sed -i|rm '; then
   while IFS= read -r protected; do
     [ -z "$protected" ] && continue

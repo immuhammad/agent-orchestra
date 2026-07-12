@@ -111,14 +111,14 @@ assert_eq "inline-list count" "2" "$(wc -l < "$TMP/inline.out" | tr -d ' ')"
 grep -q '^career-ops/$' "$TMP/inline.out" && pass "inline-list contains career-ops/" || fail "inline-list contains career-ops/"
 grep -q '^docs/frozen/$' "$TMP/inline.out" && pass "inline-list contains docs/frozen/" || fail "inline-list contains docs/frozen/"
 
-echo "== orc-config.sh: fail-closed fallback =="
+echo "== orc-config.sh: EMPTY default, no hardcoded project name (issue #18 B-i) =="
 (
   cd "$TMP"
   rm -f orchestrator.yaml
   source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/missing.out"
-assert_eq "missing config falls back to career-ops/" "career-ops/" "$(cat "$TMP/missing.out")"
+assert_eq "missing config: no protected paths (protected_paths comes ONLY from orchestrator.yaml)" "" "$(cat "$TMP/missing.out")"
 
 (
   cd "$TMP"
@@ -129,7 +129,7 @@ EOF
   source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/empty-key.out"
-assert_eq "empty protected_paths key falls back to career-ops/" "career-ops/" "$(cat "$TMP/empty-key.out")"
+assert_eq "empty protected_paths key: no protected paths" "" "$(cat "$TMP/empty-key.out")"
 
 (
   cd "$TMP"
@@ -137,7 +137,7 @@ assert_eq "empty protected_paths key falls back to career-ops/" "career-ops/" "$
   source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/garbage.out"
-assert_eq "malformed config falls back to career-ops/" "career-ops/" "$(cat "$TMP/garbage.out")"
+assert_eq "malformed config: no protected paths" "" "$(cat "$TMP/garbage.out")"
 
 echo "== orc.sh: orc_build_session builds the control room from config =="
 SESSION="orctest-$$"

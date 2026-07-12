@@ -262,6 +262,11 @@ if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9010.msg >/dev/null 2>&1; then
 else
   fail "expected the .msg in the copilot inbox dir (scribe's alias target)"
 fi
+if ! grep -q "career-ops-harness" "$CLAUDE_CALLS"; then
+  pass "issue #18 B3: the scribe prompt no longer hardcodes 'career-ops-harness' (project-agnostic)"
+else
+  fail "scribe prompt should not hardcode career-ops-harness: $(cat "$CLAUDE_CALLS")"
+fi
 
 echo "== issue #89: 'copilot' alias resolves to the SAME inbox/spawn behavior as 'scribe' =="
 : > "$CLAUDE_CALLS"
