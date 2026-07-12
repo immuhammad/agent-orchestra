@@ -156,33 +156,47 @@ while IFS= read -r seg; do
   # root, ORC_INSTALL_ROOT, computed above), not by directory NAME -- an
   # arbitrary directory elsewhere named lib/hooks/tests is still blocked.
   #
-  # issue #18 item 8 (B1): clone-per-project self-dogfood rooms nest the
-  # dev-target clone under this installation's own project/<name>/ (see
-  # this repo's own project/agent-orchestra/) -- trusted by NAME, same as
-  # .harness/, since the ORC_INSTALL_ROOT/resolved_dir check below requires
-  # the referenced directory to actually exist under guard_cwd to `cd` into
-  # it, which fails for a relative project/<name>/... path whenever
-  # guard_cwd isn't already sitting inside this installation's own tree
-  # (e.g. a throwaway/relocated hook CWD). project/<name>/'s worktrees
-  # (project/<name>/.worktrees/<branch>/...) match the same glob, arbitrary
-  # depth, exactly like .harness/'s own nesting.
+  # issue #18 item 8 (B1) / agy REQUEST-CHANGES on PR #17 (path-traversal
+  # fix): clone-per-project self-dogfood rooms nest the dev-target clone
+  # under this installation's own project/<name>/ (see this repo's own
+  # project/agent-orchestra/). This USED to be trusted by a raw NAME-glob
+  # match on $SCRIPT with no resolution at all -- `bash
+  # project/../../../tmp/evil.sh` satisfied the glob outright (it starts
+  # with "project/"), bypassing the ORC_INSTALL_ROOT location check below
+  # entirely. Fixed by resolving project/<name>/... the SAME way as every
+  # other script -- to its REAL canonicalized directory, required to fall
+  # under ORC_INSTALL_ROOT -- except the base it resolves FROM is
+  # ORC_INSTALL_ROOT itself (project/ is always this installation's OWN
+  # nested dir, so this doesn't depend on guard_cwd already sitting inside
+  # this installation's tree, which is what the old glob shortcut was
+  # working around). project/<name>/'s worktrees resolve the same way,
+  # arbitrary depth, since they're still real subdirectories under
+  # ORC_INSTALL_ROOT/project/<name>/.
   if echo "$trimmed" | grep -Eq '^(bash|sh|zsh|source|\.)[[:space:]]+[^[:space:]-]'; then
     SCRIPT="$(echo "$trimmed" | awk '{print $2}')"
     case "$SCRIPT" in
       .harness/*|./.harness/*|*/.harness/*)
         : # trusted location, allow
         ;;
-      project/*|./project/*|*/project/*)
-        : # trusted: nested clone-per-project dev target (+ its worktrees)
-        ;;
       *)
+        case "$SCRIPT" in
+          project/*|./project/*)
+            resolve_base="$ORC_INSTALL_ROOT"
+            ;;
+          *)
+            resolve_base="$guard_cwd"
+            ;;
+        esac
         # `|| true`: under `set -e`, a plain assignment from a failing
         # command substitution (the cd chain fails when SCRIPT's directory
         # doesn't exist) aborts the whole script here instead of falling
-        # through to the empty-resolved_dir blocked branch below.
-        resolved_dir="$(cd "$guard_cwd" 2>/dev/null && cd "$(dirname "$SCRIPT")" 2>/dev/null && pwd)" || true
+        # through to the empty-resolved_dir blocked branch below. `pwd -P`
+        # (not plain `pwd`) canonicalizes symlinks too, so a project/<name>/
+        # symlink (or an out-pointing symlink anywhere else in this check)
+        # can't smuggle a path outside ORC_INSTALL_ROOT either.
+        resolved_dir="$(cd "$resolve_base" 2>/dev/null && cd "$(dirname "$SCRIPT")" 2>/dev/null && pwd -P)" || true
         if [ -n "$resolved_dir" ] && [[ "$resolved_dir" == "$ORC_INSTALL_ROOT"* ]]; then
-          : # trusted: this orc installation's own bin/lib/hooks/tests/etc.
+          : # trusted: this orc installation's own bin/lib/hooks/tests/project/etc.
         else
           echo "guard.sh: blocked script execution outside .harness/ or this orc installation ($ORC_INSTALL_ROOT) (bypasses command-string inspection, see G13): $trimmed" >&2
           exit 2

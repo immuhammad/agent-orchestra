@@ -250,19 +250,97 @@ else
   echo "FAIL: a directory named lib/ outside this installation should still be blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
 fi
 
-echo "== issue #18 B1 (item 8): script-exec trusts the nested project/<name>/ dev-target clone (+ its worktrees), same as .harness/ =="
-run_guard_at_repo_root "bash project/agent-orchestra/tests/guard.test.sh"
-if [ "$GUARD_STATUS" -eq 0 ]; then
+echo "== issue #18 B1 (item 8) + agy REQUEST-CHANGES (PR #17): script-exec trusts the nested project/<name>/ dev-target clone (+ its worktrees) by REAL location, same as .harness/ =="
+# A dedicated sandbox (throwaway install root with a COPY of guard.sh and
+# real files under project/<name>/...) rather than this repo's own
+# checkout: the FIX requires real directory resolution (`cd` + `pwd -P`),
+# and this worktree doesn't nest a project/agent-orchestra/ inside itself
+# (only the OUTER self-dogfood checkout does), so there's no real path
+# here to resolve against.
+GUARD_SRC="$GUARD"
+ORC_CONFIG_SRC="$DIR/../lib/orc-config.sh"
+
+run_guard_in_sandbox() { # $1 = command
+  local command="$1"
+  local sandbox out status
+  sandbox="$(mktemp -d)"
+  sandbox="$(cd "$sandbox" && pwd -P)"
+  mkdir -p "$sandbox/lib" "$sandbox/project/agent-orchestra/tests" \
+    "$sandbox/project/agent-orchestra/.worktrees/issue-11-10/tests"
+  cp "$GUARD_SRC" "$sandbox/lib/guard.sh"
+  cp "$ORC_CONFIG_SRC" "$sandbox/lib/orc-config.sh"
+  touch "$sandbox/project/agent-orchestra/tests/real.sh"
+  touch "$sandbox/project/agent-orchestra/.worktrees/issue-11-10/tests/real.sh"
+  local payload
+  payload="$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')"
+  out="$(cd "$sandbox" && echo "$payload" | bash lib/guard.sh 2>&1)"
+  status=$?
+  rm -rf "$sandbox"
+  SANDBOX_OUT="$out"
+  SANDBOX_STATUS=$status
+}
+
+run_guard_in_sandbox "bash project/agent-orchestra/tests/real.sh"
+if [ "$SANDBOX_STATUS" -eq 0 ]; then
   echo "PASS: a script under project/<name>/ (the nested clone-per-project dev target) is trusted"; PASS=$((PASS + 1))
 else
-  echo "FAIL: a script under project/<name>/ should be trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+  echo "FAIL: a script under project/<name>/ should be trusted (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
 fi
 
-run_guard_at_repo_root "bash project/agent-orchestra/.worktrees/issue-11-10/tests/guard.test.sh"
-if [ "$GUARD_STATUS" -eq 0 ]; then
+run_guard_in_sandbox "bash project/agent-orchestra/.worktrees/issue-11-10/tests/real.sh"
+if [ "$SANDBOX_STATUS" -eq 0 ]; then
   echo "PASS: a script under a project/<name>/.worktrees/<branch>/ path is also trusted"; PASS=$((PASS + 1))
 else
-  echo "FAIL: a script under a project/ worktree should be trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+  echo "FAIL: a script under a project/ worktree should be trusted (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
+fi
+
+echo "== agy REQUEST-CHANGES (PR #17): project/ trust must resolve the REAL canonicalized directory, not glob-match the raw string (path traversal + symlink-out) =="
+# The project/*|./project/*|*/project/* glob used to match the RAW $SCRIPT
+# string with no resolution at all -- `bash project/../../../tmp/evil.sh`
+# satisfied the glob (starts with "project/") and was trusted outright,
+# completely bypassing the ORC_INSTALL_ROOT location check that gates
+# every other path.
+run_guard_in_sandbox "bash project/../../../../../../../../tmp/evil.sh"
+if [ "$SANDBOX_STATUS" -eq 2 ]; then
+  echo "PASS: SECURITY -- a project/../../.. traversal escaping the install root is blocked, not trusted by the raw glob"; PASS=$((PASS + 1))
+else
+  echo "FAIL: SECURITY REGRESSION -- project/../../.. traversal should be blocked (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_in_sandbox2() { # $1 = command, builds a sandbox with a symlink + a sibling dir
+  local command="$1"
+  local sandbox outside out status
+  sandbox="$(mktemp -d)"
+  sandbox="$(cd "$sandbox" && pwd -P)"
+  outside="$(mktemp -d)"
+  outside="$(cd "$outside" && pwd -P)"
+  mkdir -p "$sandbox/lib" "$sandbox/project"
+  cp "$GUARD_SRC" "$sandbox/lib/guard.sh"
+  cp "$ORC_CONFIG_SRC" "$sandbox/lib/orc-config.sh"
+  echo "evil" > "$outside/evil.sh"
+  ln -s "$outside" "$sandbox/project/escape"
+  ln -s "$outside" "$sandbox/project-evil"
+  local payload
+  payload="$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')"
+  out="$(cd "$sandbox" && echo "$payload" | bash lib/guard.sh 2>&1)"
+  status=$?
+  rm -rf "$sandbox" "$outside"
+  SANDBOX_OUT="$out"
+  SANDBOX_STATUS=$status
+}
+
+run_guard_in_sandbox2 "bash project/escape/evil.sh"
+if [ "$SANDBOX_STATUS" -eq 2 ]; then
+  echo "PASS: SECURITY -- a symlink under project/ that resolves OUTSIDE the install root is blocked"; PASS=$((PASS + 1))
+else
+  echo "FAIL: SECURITY REGRESSION -- a project/ symlink escaping the install root should be blocked (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_in_sandbox2 "bash project-evil/evil.sh"
+if [ "$SANDBOX_STATUS" -eq 2 ]; then
+  echo "PASS: a sibling dir merely NAMED project-evil/ (prefix collision, not actually project/) is still resolved by real location, not trusted by name"; PASS=$((PASS + 1))
+else
+  echo "FAIL: project-evil/ (prefix collision, resolves outside the install root) should still be blocked (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
 fi
 
 echo ""
