@@ -34,6 +34,19 @@ orc_build_session() {
   implementer_model="$(orc_get_role_model implementer)"
   implementer_model="${implementer_model:-sonnet}"
 
+  # issue #22: assert the inbox dirs dispatch.sh actually writes to exist,
+  # rather than trusting a hand-made layout -- a fresh clone-per-project
+  # room used to have NO seeding step at all, so dispatch.sh's own
+  # "no inbox for agent" guard hard-failed the first time anything dispatched
+  # to an agent nobody had mkdir'd by hand. This is the live agent-name set
+  # dispatch.sh's pane_for_agent/inbox_dir_name actually resolve to -- NOT
+  # the `roles:` block above, whose keys (implementer/tester/reviewer) name
+  # a different axis (per-role model config) than these fixed dispatch
+  # identities. No legacy `copilot` dir: inbox_dir_name() now aliases it
+  # INTO scribe/, so scribe/ alone is the one live physical directory.
+  mkdir -p ./.harness/inbox/orchestra ./.harness/inbox/builder \
+    ./.harness/inbox/agy ./.harness/inbox/scribe
+
   tmux new-session -d -s "$session" -n main
   tmux rename-window -t "$session:main" "control-room"
   tmux set -t "$session:0" pane-border-status top
@@ -85,6 +98,17 @@ orc_build_session() {
   # on a literal first invocation.
   if [ "${ORC_SKIP_MERGE_WATCH_SEED:-0}" != "1" ]; then
     bash "$ORC_LIB_DIR/orc-seed-merge-watch.sh" || true
+  fi
+
+  # issue #10/#31: .claude/settings.json is a gitignored per-room artifact
+  # -- a hand-assembled or drifted copy can silently omit a hook and
+  # nothing catches it (exactly how the quota-stop-gate went un-wired for
+  # this room's whole life). Non-fatal (a config problem `orc up` can't fix
+  # itself shouldn't block the room from starting) but LOUD: the check
+  # itself writes an explicit WARNING to stderr on any omission, so this
+  # can't rot unseen the way #10 did.
+  if [ "${ORC_SKIP_HOOK_WIRING_CHECK:-0}" != "1" ]; then
+    bash "$ORC_LIB_DIR/check-hook-wiring.sh" ./.claude/settings.json || true
   fi
 
   tmux select-pane -t "$session:0.0"

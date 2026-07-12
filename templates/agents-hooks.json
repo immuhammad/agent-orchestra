@@ -1,0 +1,19 @@
+{
+  "agy-guard": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash lib/guard-quota-stop-agy.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash lib/guard-agy.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -87,15 +87,18 @@ pane_for_agent() {
 }
 
 # inbox_dir_name <agent> -- resolves the on-disk inbox directory for an
-# agent name. `scribe` is the current display name (issue #89), but its
-# real inbox history (including the suspect-ack cleanup from #89's own
-# scope) lives under the original `copilot` directory -- renaming the
-# directory would fragment that history, so both names deliberately
-# resolve to the SAME physical inbox instead.
+# agent name. `scribe` is the current display name (issue #89) AND the
+# current physical directory -- a fresh clone-per-project room is seeded
+# with inbox/scribe/, not inbox/copilot/ (issue #22: aliasing scribe TO
+# copilot made dispatch hard-fail in every fresh room, since no clone has a
+# copilot/ dir or history to preserve). `copilot` is kept as a legacy verb
+# that aliases INTO scribe/, so a caller still using the old name lands
+# somewhere valid instead of failing outright; it is not itself a live
+# inbox directory in any room this repo creates.
 inbox_dir_name() {
   case "$1" in
-    scribe) echo "copilot" ;;
-    *)      echo "$1" ;;
+    copilot) echo "scribe" ;;
+    *)       echo "$1" ;;
   esac
 }
 
@@ -202,7 +205,8 @@ nudge_agent() {
 # existing poll loop below already waits for the .ack to appear no matter
 # who writes it.
 scribe_spawn_headless() {
-  local msg_file="$1" ack_file="$2" msg_body prompt project_name
+  local msg_file="$1" ack_file="$2" msg_body prompt project_name allowed_tools log_file
+  local spawn_id scratch_dir
   msg_body="$(cat "$msg_file" 2>/dev/null)"
   # issue #18 B3: this used to hardcode "career-ops-harness" (this
   # harness's original single-consumer project) -- project-agnostic now,
@@ -210,6 +214,23 @@ scribe_spawn_headless() {
   # other role/session-name derivation in this file.
   project_name="$(orc_get_scalar project)"
   project_name="${project_name:-this project}"
+
+  # $$ (this shell's PID), not just a timestamp: date has no portable
+  # sub-second resolution (GNU %N isn't available on macOS/BSD date), and
+  # two scribe spawns landing in the same second would otherwise clobber
+  # each other's log file/scratch dir.
+  spawn_id="$(date '+%Y%m%d%H%M%S')-$$"
+  mkdir -p "$CANON_DIR/state"
+  log_file="$CANON_DIR/state/scribe-${spawn_id}.log"
+  # agy PROBE 1 (PR #30 REQUEST-CHANGES): gh issue/pr comment needs
+  # --body-file <tmpfile> (the guard false-positives on inline --body), and
+  # creating that tmpfile is a Write to a path that is NOT $ack_file -- the
+  # scribe deadlocked on an unanswerable permission prompt the moment it
+  # tried to post a real comment. Give it a scratch dir it owns, created
+  # BEFORE the spawn so the grant below is real, not aspirational.
+  scratch_dir="$CANON_DIR/state/scribe-${spawn_id}"
+  mkdir -p "$scratch_dir"
+
   # Plain concatenation, not a heredoc: an unquoted heredoc's lexer tracks
   # quote state while scanning for $(...)/`...`, and a stray apostrophe in
   # prose (e.g. "doesn't") opens an unterminated single-quote from its
@@ -220,9 +241,42 @@ scribe_spawn_headless() {
 Dispatch message:
 $msg_body
 
-Do the judgment task described above. When finished, write exactly one line -- what you did, or SKIPPED: <reason> if it does not apply -- to this file: $ack_file
+Do the judgment task described above. If you need to post a gh issue/PR comment with a multi-line body, write the body text to a file under this scratch directory first (e.g. ${scratch_dir}/comment.md), using the Write tool, then pass it as --body-file to gh -- do not use an inline --body argument. This scratch directory is yours alone; do not write anywhere else except your own ack file below.
+When finished, write exactly one line -- what you did, or SKIPPED: <reason> if it does not apply -- to this file: $ack_file
 Do nothing else outside the scope of this message."
-  ( claude -p --model haiku "$prompt" >/dev/null 2>&1 & )
+
+  # issue #23, reworked after agy's PR #30 REQUEST-CHANGES (3 findings):
+  #  (a) ORC_ONESHOT=1 tells check-handoff.sh's Stop hook to exempt this
+  #      session -- a one-shot's own .session-start marker is always newer
+  #      than any handoff.md written before it spawned, and per AGENTS.md's
+  #      single-writer rule the scribe must never write that file anyway.
+  #      SAFE ONLY because issue #31 protects .claude/.agents/ by default
+  #      now (see check-handoff.sh's comment) -- otherwise this flag would
+  #      be spoofable by editing the Stop hook's own command.
+  #  (b) --allowedTools grants EXACTLY what the scribe's job needs: the gh
+  #      subcommands AGENTS.md scopes Reviewer/Scribe output to (scoped to
+  #      specific subcommands -- comment/close/view -- with the colon-
+  #      prefix form, not a bare 'gh pr'/'gh issue' string prefix, which
+  #      would also match any hypothetical subcommand merely sharing that
+  #      prefix), a Write grant scoped to its own scratch dir (PROBE 1) plus
+  #      its ack file, and log-decision.sh. Never blocks on a permission
+  #      prompt a headless `-p` run cannot answer. This narrows what Claude
+  #      attempts without asking -- the PreToolUse guards (guard.sh/
+  #      guard-write.sh) still run underneath it, so this is not a
+  #      --dangerously-skip-permissions substitute.
+  #  (c) stdout+stderr go to a real log file, not /dev/null -- and if the
+  #      process exits without ever writing $ack_file, we write a
+  #      SPAWN-FAILED ack ourselves so a dead/blocked/crashed run is never
+  #      silent again (previously indistinguishable from a never-started
+  #      one).
+  allowed_tools="Read,Grep,Glob,Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh issue view:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(bash lib/log-decision.sh:*),Write($scratch_dir/**),Write($ack_file)"
+
+  (
+    ORC_ONESHOT=1 claude -p --model haiku --allowedTools "$allowed_tools" "$prompt" >"$log_file" 2>&1
+    if [ ! -s "$ack_file" ]; then
+      echo "SPAWN-FAILED: headless scribe exited without writing an ack -- see $log_file" > "$ack_file"
+    fi
+  ) &
 }
 
 # retry_deferred_nudges (T24) -- drains DEFERRED_FILE, re-attempting a nudge

@@ -225,9 +225,9 @@ rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
 echo "== issue #89: assign/handoff scribe spawns a one-shot headless run, not a pane nudge =="
 # Its own scratch CANON_DIR (via DISPATCH_CANON_DIR) so this never touches
-# the real copilot inbox's actual history.
+# a real project's inbox history.
 SCRIBE_SCRATCH="$(mktemp -d)"
-mkdir -p "$SCRIBE_SCRATCH/inbox/copilot"
+mkdir -p "$SCRIBE_SCRATCH/inbox/scribe"
 CLAUDE_CALLS="$SCRIBE_SCRATCH/claude-calls.log"
 : > "$CLAUDE_CALLS"
 # Fake `claude` on PATH (dispatch_main runs as a subprocess via `bash
@@ -237,7 +237,7 @@ FAKE_BIN="$SCRIBE_SCRATCH/bin"
 mkdir -p "$FAKE_BIN"
 cat > "$FAKE_BIN/claude" <<'FAKECLAUDE'
 #!/bin/bash
-echo "$*" >> "$CLAUDE_CALLS_FILE"
+echo "ORC_ONESHOT=${ORC_ONESHOT:-unset} ARGS: $*" >> "$CLAUDE_CALLS_FILE"
 # Find the .ack path the prompt asked us to write to and write a receipt,
 # simulating the real headless run completing its judgment task.
 ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
@@ -257,22 +257,94 @@ if grep -q -- "--model haiku" "$CLAUDE_CALLS"; then
 else
   fail "expected the spawned claude call to use --model haiku: $(cat "$CLAUDE_CALLS")"
 fi
-if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9010.msg >/dev/null 2>&1; then
-  pass "the .msg still landed in the durable inbox (copilot dir -- scribe's real physical inbox)"
+if ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9010.msg >/dev/null 2>&1; then
+  pass "the .msg landed in the durable inbox (scribe dir -- scribe's real physical inbox, issue #22)"
 else
-  fail "expected the .msg in the copilot inbox dir (scribe's alias target)"
+  fail "expected the .msg in the scribe inbox dir"
 fi
 if ! grep -q "career-ops-harness" "$CLAUDE_CALLS"; then
   pass "issue #18 B3: the scribe prompt no longer hardcodes 'career-ops-harness' (project-agnostic)"
 else
   fail "scribe prompt should not hardcode career-ops-harness: $(cat "$CLAUDE_CALLS")"
 fi
+if grep -q "ORC_ONESHOT=1" "$CLAUDE_CALLS"; then
+  pass "issue #23: headless scribe runs with ORC_ONESHOT=1 exported (exempts it from the handoff Stop hook)"
+else
+  fail "issue #23: expected ORC_ONESHOT=1 in the spawned claude's environment: $(cat "$CLAUDE_CALLS")"
+fi
+if grep -q -- "--allowedTools" "$CLAUDE_CALLS"; then
+  pass "issue #23: headless scribe is spawned with explicit --allowedTools (never blocks on an unanswerable prompt)"
+else
+  fail "issue #23: expected --allowedTools in the spawned claude call: $(cat "$CLAUDE_CALLS")"
+fi
+if grep -q -- "--dangerously-skip-permissions" "$CLAUDE_CALLS"; then
+  fail "issue #23: must NOT widen the blast radius with --dangerously-skip-permissions -- scope with --allowedTools instead"
+else
+  pass "issue #23: headless scribe does not bypass permissions wholesale"
+fi
+ACK_9010="$(ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9010.ack 2>/dev/null | head -1)"
+if [ -n "$ACK_9010" ] && grep -qF "Write($ACK_9010)" "$CLAUDE_CALLS"; then
+  pass "issue #23: --allowedTools scopes the Write grant to exactly this dispatch's own .ack path"
+else
+  fail "issue #23: expected --allowedTools to scope Write to $ACK_9010: $(cat "$CLAUDE_CALLS")"
+fi
 
-echo "== issue #89: 'copilot' alias resolves to the SAME inbox/spawn behavior as 'scribe' =="
+echo "== agy PROBE 1 (PR #30 REQUEST-CHANGES): scribe gets a scoped scratch-dir Write grant to create gh --body-file tmpfiles =="
+# gh issue comment/pr comment need --body-file <tmpfile> (the guard
+# false-positives on inline --body); creating that tmpfile is a Write to a
+# path that is NOT $ack_file. Without a scoped scratch dir, the scribe
+# deadlocks on an unanswerable permission prompt the moment it tries to
+# post a real comment (agy's live-confirmed PROBE 1).
+SCRATCH_GRANT="$(grep -oE 'Write\([^)]*state/scribe-[^)]*\*\*?\)' "$CLAUDE_CALLS" | head -1)"
+if [ -n "$SCRATCH_GRANT" ]; then
+  pass "agy PROBE 1: --allowedTools grants a scoped scratch-dir Write (found: $SCRATCH_GRANT)"
+else
+  fail "agy PROBE 1: expected a scoped scratch-dir Write grant (e.g. Write(.../state/scribe-<id>/**)) in: $(cat "$CLAUDE_CALLS")"
+fi
+SCRATCH_DIR_PATH="$(echo "$SCRATCH_GRANT" | sed -E 's/^Write\((.*)\/\*\*?\)$/\1/')"
+if [ -n "$SCRATCH_DIR_PATH" ] && [ -d "$SCRATCH_DIR_PATH" ]; then
+  pass "agy PROBE 1: the granted scratch dir actually exists before the spawn (not just claimed in the grant)"
+else
+  fail "agy PROBE 1: expected the scratch dir ($SCRATCH_DIR_PATH) to exist on disk"
+fi
+if grep -q "state/scribe-" "$CLAUDE_CALLS" && grep -qi "body-file\|scratch" "$CLAUDE_CALLS"; then
+  pass "agy PROBE 1: the prompt tells the scribe to use the scratch dir for gh --body-file tmpfiles"
+else
+  fail "agy PROBE 1: expected the prompt to instruct the scribe to write body-files under its scratch dir"
+fi
+
+echo "== agy PROBE 2 (PR #30 REQUEST-CHANGES): every Bash(...) allowedTools entry uses valid, precisely-scoped syntax =="
+# agy: 'Bash(gh pr *)' (space form) does not parse the way this harness
+# intends -- standardize on the colon prefix form, AND keep each entry
+# scoped to a specific subcommand (comment/close/view), not a bare 'gh pr'/
+# 'gh issue' prefix -- a bare prefix is a raw STRING prefix match, and 'gh
+# pr' is also a literal string-prefix of any hypothetical 'gh pr<anything>'
+# subcommand, which is broader than intended for a headless one-shot.
+BASH_ENTRIES="$(grep -oE 'Bash\([^)]*\)' "$CLAUDE_CALLS")"
+BAD_ENTRY=""
+while IFS= read -r entry; do
+  [ -z "$entry" ] && continue
+  case "$entry" in
+    Bash\(gh\ issue\ comment:\*\)|Bash\(gh\ issue\ close:\*\)|Bash\(gh\ issue\ view:\*\)|Bash\(gh\ pr\ comment:\*\)|Bash\(gh\ pr\ view:\*\)|Bash\(bash\ lib/log-decision.sh:\*\)) ;;
+    *) BAD_ENTRY="$entry" ;;
+  esac
+done <<< "$BASH_ENTRIES"
+if [ -z "$BAD_ENTRY" ] && [ -n "$BASH_ENTRIES" ]; then
+  pass "agy PROBE 2: every Bash(...) entry is a precisely-scoped, colon-suffixed subcommand grant"
+else
+  fail "agy PROBE 2: found an unexpected/imprecise Bash(...) entry: '$BAD_ENTRY' -- full list: $BASH_ENTRIES"
+fi
+if grep -qF "Bash(gh pr *)" "$CLAUDE_CALLS"; then
+  fail "agy PROBE 2 REGRESSION: the invalid/imprecise space-wildcard 'Bash(gh pr *)' entry is still present"
+else
+  pass "agy PROBE 2: the old imprecise 'Bash(gh pr *)' entry is gone"
+fi
+
+echo "== issue #22: legacy 'copilot' verb resolves INTO 'scribe's physical inbox dir (inverted alias) =="
 : > "$CLAUDE_CALLS"
 OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign copilot 9011 "another judgment task" 2>&1)"
 sleep 1
-if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9011.msg >/dev/null 2>&1; then
+if ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9011.msg >/dev/null 2>&1; then
   pass "'copilot' still lands in the same physical inbox dir as 'scribe'"
 else
   fail "'copilot' alias should resolve to the same inbox dir as 'scribe'"
@@ -292,7 +364,58 @@ if [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q "received"; then
 else
   fail "handoff scribe should receive the spawned run's .ack (status=$STATUS): $OUT"
 fi
+echo "== issue #23: a headless run that exits WITHOUT writing an ack gets a SPAWN-FAILED ack, and output is logged, not swallowed =="
+CRASH_BIN="$SCRIBE_SCRATCH/crash-bin"
+mkdir -p "$CRASH_BIN"
+cat > "$CRASH_BIN/claude" <<'CRASHCLAUDE'
+#!/bin/bash
+echo "simulated crash: no human to answer the permission prompt" >&2
+exit 1
+CRASHCLAUDE
+chmod +x "$CRASH_BIN/claude"
+OUT="$(PATH="$CRASH_BIN:$PATH" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign scribe 9013 "this run will crash" 2>&1)"
+sleep 1
+ACK_9013="$(ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9013.ack 2>/dev/null | head -1)"
+if [ -n "$ACK_9013" ] && grep -q "^SPAWN-FAILED" "$ACK_9013"; then
+  pass "issue #23: a crashed/no-ack headless run leaves a diagnosable SPAWN-FAILED ack, not silence"
+else
+  fail "issue #23: expected a SPAWN-FAILED ack after the headless run exited without one (found: ${ACK_9013:-none})"
+fi
+LOG_FILE="$(ls "$SCRIBE_SCRATCH"/state/scribe-*.log 2>/dev/null | tail -1)"
+if [ -n "$LOG_FILE" ] && grep -q "simulated crash" "$LOG_FILE"; then
+  pass "issue #23: the headless run's stderr is captured in a log file, not sent to /dev/null"
+else
+  fail "issue #23: expected the crash's stderr in a .harness/state/scribe-*.log file (found: ${LOG_FILE:-none})"
+fi
 rm -rf "$SCRIBE_SCRATCH"
+
+echo "== issue #22: assign scribe succeeds in a FRESH room seeded only with inbox/scribe/ (no legacy copilot/) =="
+FRESH_ROOM="$(mktemp -d)"
+mkdir -p "$FRESH_ROOM/inbox/scribe"
+CLAUDE_CALLS2="$FRESH_ROOM/claude-calls.log"
+: > "$CLAUDE_CALLS2"
+OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS2" DISPATCH_CANON_DIR="$FRESH_ROOM" bash "$DISPATCH" assign scribe 9020 "fresh room task" 2>&1)"
+sleep 1
+if ls "$FRESH_ROOM"/inbox/scribe/*-9020.msg >/dev/null 2>&1; then
+  pass "issue #22: assign scribe writes .msg into inbox/scribe/ in a fresh room with no copilot/ dir"
+else
+  fail "issue #22: assign scribe should resolve to inbox/scribe/ in a fresh clone-per-project room (got: $OUT)"
+fi
+rm -rf "$FRESH_ROOM"
+
+echo "== issue #22: legacy 'copilot' dispatch verb still lands somewhere valid (aliases TO scribe/, not the reverse) =="
+LEGACY_ROOM="$(mktemp -d)"
+mkdir -p "$LEGACY_ROOM/inbox/scribe"
+CLAUDE_CALLS3="$LEGACY_ROOM/claude-calls.log"
+: > "$CLAUDE_CALLS3"
+OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS3" DISPATCH_CANON_DIR="$LEGACY_ROOM" bash "$DISPATCH" assign copilot 9021 "legacy verb task" 2>&1)"
+sleep 1
+if ls "$LEGACY_ROOM"/inbox/scribe/*-9021.msg >/dev/null 2>&1; then
+  pass "issue #22: legacy 'copilot' verb resolves into inbox/scribe/ (inverted alias)"
+else
+  fail "issue #22: legacy 'copilot' verb should resolve into inbox/scribe/, not require a copilot/ dir (got: $OUT)"
+fi
+rm -rf "$LEGACY_ROOM"
 
 echo "== unmapped agent name: never nudges (pane_for_agent has no entry) =="
 OUT="$(bash "$DISPATCH" assign testagent 9005 "hello" 2>&1)"

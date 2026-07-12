@@ -171,7 +171,16 @@ while true; do
       if [ "$age" -ge "$STALE_AFTER" ]; then
         if [ "$ALERTED" = false ]; then
           echo "$(date) - ALERT: gatekeeper heartbeat stale (${age}s, expected every ~${STALE_AFTER}s)" >> "$LOG"
-          tmux send-keys -t "$TARGET" "gatekeeper watchdog: no heartbeat for ${age}s -- gatekeeper.sh may have died. Check pane 4." C-m 2>/dev/null
+          # issue #24: this used to be a raw one-shot `send-keys` with text
+          # and C-m in the SAME burst -- exactly the pattern send-lib.sh's
+          # send_submit() exists to prevent (Claude Code's TUI drops an
+          # Enter that arrives in the same burst as pasted text), and it
+          # was also keystroke-only with no durable copy, so a busy or dead
+          # pane lost the alert entirely (the #105 lesson, missed on this
+          # one path). dispatch_main assign orchestra (already used above
+          # in gkl_check_rate_limit_stuck) gives both for free: a durable
+          # .msg is the guarantee, the nudge is only the doorbell.
+          dispatch_main assign orchestra "gatekeeper-stale-heartbeat" "gatekeeper watchdog: no heartbeat for ${age}s -- gatekeeper.sh may have died. Check pane 4." >/dev/null 2>&1
           ALERTED=true
         fi
       else

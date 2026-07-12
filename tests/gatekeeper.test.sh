@@ -201,9 +201,11 @@ else
   fail "gatekeeper.sh did not write a heartbeat file"
 fi
 
-echo "== liveness: warns pane 0 (isolated test pane) when heartbeat goes stale =="
+echo "== issue #24: liveness alerts via a durable orchestra .msg (dispatch_main), not raw send-keys text+Enter in one burst =="
 # Fast intervals for a quick test: liveness checks every 1s, and considers
 # the heartbeat stale after 3s of silence.
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
+tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
 echo "1" > "$GATEKEEPER_HEARTBEAT_FILE"  # an ancient (epoch=1) heartbeat -- immediately stale
 GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
   GATEKEEPER_LIVENESS_TARGET="$TEST_SESSION:0.0" \
@@ -212,10 +214,26 @@ LIVENESS_PID=$!
 disown
 sleep 5
 CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
-if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
-  pass "liveness watchdog warned the target pane on a stale heartbeat"
+ORCH_MSGS_STALE=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_STALE[0]}" ]; then
+  pass "liveness watchdog wrote a durable .msg to orchestra's inbox on a stale heartbeat"
 else
-  fail "expected a stale-heartbeat warning in the target pane, got: $CAPTURE"
+  fail "expected a durable orchestra .msg for the stale heartbeat, found none"
+fi
+if [ -e "${ORCH_MSGS_STALE[0]}" ] && grep -q "no heartbeat" "${ORCH_MSGS_STALE[0]}" 2>/dev/null; then
+  pass "the .msg contains the actual stale-heartbeat text"
+else
+  fail "expected the orchestra .msg to contain the stale-heartbeat text: $(cat "${ORCH_MSGS_STALE[0]}" 2>/dev/null)"
+fi
+if echo "$CAPTURE" | grep -q "check inbox"; then
+  pass "the target pane was nudged with 'check inbox' (send_submit), not typed the raw alert text"
+else
+  fail "expected a 'check inbox' nudge on the target pane, got: $CAPTURE"
+fi
+if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
+  fail "issue #24: the raw alert text should NOT be typed directly into the pane (that's the stranded-input bug) -- got: $CAPTURE"
+else
+  pass "issue #24: no raw alert text was typed directly into the pane"
 fi
 if grep -q "ALERT: gatekeeper heartbeat stale" "$GATEKEEPER_LIVENESS_LOG" 2>/dev/null; then
   pass "liveness watchdog logged the alert to its own log file (not the tracked budget.log)"
@@ -237,18 +255,18 @@ echo "== regression (Ahmad fold-in, PR#17 rework finding 6): an EMPTY heartbeat 
 # tick, not a false alert.
 : > "$GATEKEEPER_HEARTBEAT_FILE"  # empty, not missing -- the exact race condition
 : > "$GATEKEEPER_LIVENESS_LOG"
-tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
 GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
   GATEKEEPER_LIVENESS_TARGET="$TEST_SESSION:0.0" \
   bash "$LIVENESS" >/dev/null 2>&1 &
 LIVENESS_PID=$!
 disown
 sleep 4
-CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
 kill "$LIVENESS_PID" >/dev/null 2>&1
 LIVENESS_PID=""
-if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
-  fail "SECURITY/RELIABILITY REGRESSION (finding 6): an empty heartbeat file produced a false death alert: $CAPTURE"
+ORCH_MSGS_EMPTY=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_EMPTY[0]}" ]; then
+  fail "SECURITY/RELIABILITY REGRESSION (finding 6): an empty heartbeat file produced a false death alert .msg: $(cat "${ORCH_MSGS_EMPTY[0]}" 2>/dev/null)"
 else
   pass "an empty heartbeat file produces NO false alert (skips the tick instead of treating '' as epoch 0)"
 fi
@@ -261,25 +279,25 @@ fi
 echo "== regression (finding 6): a genuinely-old but VALID numeric heartbeat still alerts (the fix doesn't over-correct) =="
 echo "1" > "$GATEKEEPER_HEARTBEAT_FILE"  # ancient (epoch=1) -- a real, valid, stale heartbeat
 : > "$GATEKEEPER_LIVENESS_LOG"
-tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
 GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
   GATEKEEPER_LIVENESS_TARGET="$TEST_SESSION:0.0" \
   bash "$LIVENESS" >/dev/null 2>&1 &
 LIVENESS_PID=$!
 disown
 sleep 4
-CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
 kill "$LIVENESS_PID" >/dev/null 2>&1
 LIVENESS_PID=""
-if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
-  pass "a genuinely stale, validly-numeric heartbeat still triggers a real alert"
+ORCH_MSGS_VALID=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_VALID[0]}" ]; then
+  pass "a genuinely stale, validly-numeric heartbeat still triggers a real alert .msg"
 else
-  fail "the empty-heartbeat fix over-corrected -- a real stale heartbeat should still alert, got: $CAPTURE"
+  fail "the empty-heartbeat fix over-corrected -- a real stale heartbeat should still alert"
 fi
 
 echo "== liveness: does NOT warn while the heartbeat stays fresh =="
-tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
 : > "$GATEKEEPER_LIVENESS_LOG"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
 date +%s > "$GATEKEEPER_HEARTBEAT_FILE"
 ( while true; do date +%s > "$GATEKEEPER_HEARTBEAT_FILE"; sleep 1; done ) &
 REFRESHER_PID=$!
@@ -290,22 +308,22 @@ GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
 LIVENESS_PID=$!
 disown
 sleep 5
-CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
 kill "$REFRESHER_PID" >/dev/null 2>&1
 kill "$LIVENESS_PID" >/dev/null 2>&1
 LIVENESS_PID=""
-if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
-  fail "liveness watchdog warned even though the heartbeat stayed fresh: $CAPTURE"
+ORCH_MSGS_FRESH=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_FRESH[0]}" ]; then
+  fail "liveness watchdog alerted even though the heartbeat stayed fresh: $(cat "${ORCH_MSGS_FRESH[0]}" 2>/dev/null)"
 else
   pass "liveness watchdog stayed quiet while the heartbeat stayed fresh"
 fi
 
 echo "== liveness: this is literally 'kill gatekeeper -> warning appears' =="
 rm -f "$GATEKEEPER_HEARTBEAT_FILE"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
 GATEKEEPER_INTERVAL=2 bash "$GATEKEEPER" >/dev/null 2>&1 &
 GATEKEEPER_PID=$!
 disown
-tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
 sleep 8 # let it write at least one real heartbeat (see #86 note above on notify() timing)
 if [ ! -f "$GATEKEEPER_HEARTBEAT_FILE" ]; then
   fail "gatekeeper.sh (live) never wrote a heartbeat before the kill"
@@ -319,13 +337,13 @@ else
   LIVENESS_PID=$!
   disown
   sleep 6
-  CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
   kill "$LIVENESS_PID" >/dev/null 2>&1
   LIVENESS_PID=""
-  if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
-    pass "killing the real gatekeeper.sh process -> liveness warning appeared"
+  ORCH_MSGS_KILLED=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+  if [ -e "${ORCH_MSGS_KILLED[0]}" ]; then
+    pass "killing the real gatekeeper.sh process -> liveness warning .msg appeared"
   else
-    fail "killing gatekeeper.sh should have produced a liveness warning: $CAPTURE"
+    fail "killing gatekeeper.sh should have produced a liveness warning .msg"
   fi
 fi
 
