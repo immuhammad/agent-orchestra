@@ -93,8 +93,12 @@ echo "== Claude Code dialect: allow-listed Bash invocations pass even while gate
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/log-decision.sh \"role|model|decision\""}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "log-decision.sh invocation allowed while gated" || fail "log-decision.sh should be allowed while gated, got $GATE_STATUS"
 
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra 11-10 DONE"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "dispatch.sh invocation (report-back), a DIRECT local invocation, allowed while gated" || fail "dispatch.sh should be allowed while gated, got $GATE_STATUS"
+
+echo "== issue #18 B1: the orc-exec.sh trampoline is gone -- a trampoline-prefixed invocation is no longer specially unwrapped =="
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash .harness/orc-exec.sh lib/dispatch.sh assign orchestra 11-10 DONE"}}'
-[ "$GATE_STATUS" -eq 0 ] && pass "dispatch.sh invocation (report-back) allowed while gated" || fail "dispatch.sh should be allowed while gated, got $GATE_STATUS"
+[ "$GATE_STATUS" -eq 2 ] && pass "an orc-exec.sh-prefixed invocation is blocked -- the allow-list matches DIRECT invocations only, no trampoline unwrapping" || fail "expected the dead trampoline prefix to no longer bypass the allow-list, got $GATE_STATUS: $GATE_OUT"
 
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/quota-stop-clear.sh \"Ahmad: continue\""}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "quota-stop-clear.sh invocation allowed while gated" || fail "quota-stop-clear.sh should be allowed while gated, got $GATE_STATUS"

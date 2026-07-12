@@ -200,9 +200,9 @@ qsg_split_top_level() {
 # a/b/c answer was recorded" signal, see that file's own header for why
 # this is a deliberate human action, not an inferred heuristic).
 #
-# Requires the ENTIRE command to be (optionally through an interpreter and
-# the orc-exec.sh trampoline) exactly one of those three invocations --
-# NOT merely contain the script name anywhere in the string. The original
+# Requires the ENTIRE command to be (optionally through an interpreter)
+# exactly one of those three invocations -- NOT merely contain the script
+# name anywhere in the string. The original
 # version of this function used an unanchored `grep` substring search,
 # which let a compound command smuggle anything alongside an allow-listed
 # clause (`rm -rf /whatever && bash lib/dispatch.sh assign orchestra x
@@ -233,9 +233,6 @@ qsg_command_allowed() {
     case "$rest" in
       bash\ *) rest="${rest#bash }" ;;
       sh\ *) rest="${rest#sh }" ;;
-    esac
-    case "$rest" in
-      *orc-exec.sh\ *) rest="${rest#*orc-exec.sh }" ;;
     esac
     case "$rest" in
       lib/dispatch.sh|lib/dispatch.sh\ *|*/lib/dispatch.sh|*/lib/dispatch.sh\ *) ;;

@@ -6,9 +6,10 @@
 # call is refused except a small allow-list (lib/quota-stop-lib.sh) that
 # lets a blocked session still park honestly and report back.
 #
-# Wired via .claude/settings.json's PreToolUse (matcher ".*") through the
-# orc-exec.sh trampoline, same as lib/guard.sh / lib/guard-write.sh.
-# House pattern (guard.sh:73): block by echoing the reason to stderr and
+# Wired via .claude/settings.json's PreToolUse (matcher ".*"), invoked
+# directly (`bash "$CLAUDE_PROJECT_DIR"/hooks/quota-stop-gate.sh`), same as
+# lib/guard.sh / lib/guard-write.sh. House pattern (guard.sh:73): block by
+# echoing the reason to stderr and
 # `exit 2` -- Claude Code shows stderr to the model and does not run the
 # tool.
 set -uo pipefail
