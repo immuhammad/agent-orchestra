@@ -80,6 +80,21 @@ qsg_lexical_normalize() {
   return 0
 }
 
+# _qsg_normalize_target <file_path> -- resolves file_path to an absolute
+# path (relative to $PWD if not already absolute) and lexically normalizes
+# it. Shared by every path-allow-list function below so there is exactly
+# ONE normalize+anchor implementation for both read and write checks (#40
+# -- do not fork a second copy of this logic).
+_qsg_normalize_target() {
+  local file_path="$1" resolved
+  [ -z "$file_path" ] && return 1
+  case "$file_path" in
+    /*) resolved="$file_path" ;;
+    *) resolved="$PWD/$file_path" ;;
+  esac
+  qsg_lexical_normalize "$resolved"
+}
+
 # qsg_path_allowed <file_path> <canon_dir> -- the ONLY Write/Edit targets a
 # gated session may still touch: its own handoff.md update and
 # decisions.log append (AGENTS.md Quota Failsafe: "update handoff.md
@@ -97,17 +112,35 @@ qsg_lexical_normalize() {
 # file_path and canon_dir are normalized before comparison so a traversal
 # component can never survive into the match.
 qsg_path_allowed() {
-  local file_path="$1" canon_dir="$2" resolved normalized canon_normalized
-  [ -z "$file_path" ] && return 1
-  case "$file_path" in
-    /*) resolved="$file_path" ;;
-    *) resolved="$PWD/$file_path" ;;
-  esac
-  normalized="$(qsg_lexical_normalize "$resolved")" || return 1
+  local file_path="$1" canon_dir="$2" normalized canon_normalized
+  normalized="$(_qsg_normalize_target "$file_path")" || return 1
   canon_normalized="$(qsg_lexical_normalize "$canon_dir")" || return 1
   case "$normalized" in
     "$canon_normalized/handoff.md"|"$canon_normalized/decisions.log") return 0 ;;
     "$canon_normalized"/inbox/*/*.ack|"$canon_normalized"/inbox/*/*.msg) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# qsg_read_allowed <file_path> <canon_dir> -- (#40) the ONLY Read targets a
+# gated session may still touch. Before this, qsg_path_allowed's coverage
+# was Write/Edit only -- a gated agent was ordered by the failsafe message
+# to "update handoff.md" while unable to READ handoff.md, decisions.log,
+# the inbox, or even this hook to find where the flag lives, a real
+# deadlock hit live by Orchestra (2026-07-12, .harness/decisions.log).
+# Everything qsg_path_allowed covers, PLUS the flag itself (a gated agent
+# needs to be able to see what's blocking it). Shares
+# _qsg_normalize_target/qsg_lexical_normalize with qsg_path_allowed -- same
+# traversal guard, so a `..` escape is rejected here exactly like it is
+# for writes.
+qsg_read_allowed() {
+  local file_path="$1" canon_dir="$2" normalized canon_normalized
+  normalized="$(_qsg_normalize_target "$file_path")" || return 1
+  canon_normalized="$(qsg_lexical_normalize "$canon_dir")" || return 1
+  case "$normalized" in
+    "$canon_normalized/handoff.md"|"$canon_normalized/decisions.log") return 0 ;;
+    "$canon_normalized"/inbox/*/*.ack|"$canon_normalized"/inbox/*/*.msg) return 0 ;;
+    "$canon_normalized/state/quota-stop") return 0 ;;
     *) return 1 ;;
   esac
 }

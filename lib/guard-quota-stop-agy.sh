@@ -62,6 +62,6 @@ if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
 fi
 
 MSG="$(qsg_failsafe_message "$FLAG_PATH")"
-REASON="quota-stop-gate: tool blocked -- an active quota-stop flag means the AGENTS.md Quota Failsafe applies. Update handoff.md, then ask exactly: ${MSG}"
+REASON="quota-stop-gate: tool blocked -- an active quota-stop flag means the AGENTS.md Quota Failsafe applies. Update handoff.md, then ask exactly: ${MSG} (clearing this flag is human-directed, not something to infer or resolve on your own -- once Ahmad answers, ask Ahmad to run lib/quota-stop-clear.sh, or run it yourself ONLY once you actually have that answer)"
 echo "{\"decision\":\"deny\", \"reason\":$(jq -Rn --arg m "$REASON" '$m')}"
 exit 0

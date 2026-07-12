@@ -47,6 +47,16 @@ case "$TOOL_NAME" in
       exit 0
     fi
     ;;
+  Read)
+    # #40: a gated agent must be able to READ the state it's ordered to
+    # act on (handoff.md, decisions.log, the inbox, the flag itself) --
+    # without this, "update handoff.md" is an order the agent has no way
+    # to obey (see qsg_read_allowed's header for the live deadlock this
+    # closes).
+    if [ -n "$FILE_PATH" ] && qsg_read_allowed "$FILE_PATH" "$CANON_DIR"; then
+      exit 0
+    fi
+    ;;
   Bash)
     if [ -n "$COMMAND" ] && qsg_command_allowed "$COMMAND" "$CANON_DIR"; then
       exit 0
@@ -54,6 +64,6 @@ case "$TOOL_NAME" in
     ;;
 esac
 
-echo "quota-stop-gate.sh: tool blocked -- an active quota-stop flag means the AGENTS.md Quota Failsafe applies. Update handoff.md, then ask exactly this, verbatim and nothing else:" >&2
+echo "quota-stop-gate.sh: tool blocked -- an active quota-stop flag means the AGENTS.md Quota Failsafe applies. Update handoff.md, then ask exactly this, verbatim and nothing else (clearing this flag is human-directed, not something to infer or resolve on your own -- once Ahmad answers, ask Ahmad to run lib/quota-stop-clear.sh, or run it yourself ONLY once you actually have that answer):" >&2
 qsg_failsafe_message "$FLAG_PATH" >&2
 exit 2
