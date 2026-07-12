@@ -45,6 +45,36 @@ else
   fail "expected '12', got '$(pane_state_sanitize "%12")'"
 fi
 
+echo "== SECURITY (agy PR #45 REQUEST-CHANGES): pane_state_sanitize rejects a path-traversal pane_id, not just strips '%' =="
+# hooks/pane-state.sh trusts \$TMUX_PANE verbatim -- any agent invoking a
+# tool can `export TMUX_PANE=...` before it, since it's an ordinary
+# inherited env var, not something tmux re-verifies per hook call. A
+# strip-only sanitizer (the pre-fix `${1#%}`) let a traversal payload
+# reach pane_state_write's `$PANE_STATE_DIR/<result>` untouched, letting
+# an agent overwrite an arbitrary file outside PANE_STATE_DIR (e.g.
+# .git/config, .harness/handoff.md) merely by tampering with its own
+# environment before a tool call.
+TRAVERSAL_TARGET="$SCRATCH/outside-pane-state-dir"
+echo "PRE-EXISTING-CONTENT" > "$TRAVERSAL_TARGET"
+# PANE_STATE_DIR is "$SCRATCH/state" (one level below SCRATCH), so exactly
+# one "../" from there reaches $TRAVERSAL_TARGET.
+pane_state_write "../outside-pane-state-dir" "busy" 2>/dev/null
+if [ "$(cat "$TRAVERSAL_TARGET")" = "PRE-EXISTING-CONTENT" ]; then
+  pass "pane_state_write did not let a '../'-laden pane_id escape PANE_STATE_DIR"
+else
+  fail "SECURITY: pane_state_write overwrote a file outside PANE_STATE_DIR via a traversal pane_id -- got: $(cat "$TRAVERSAL_TARGET" 2>/dev/null)"
+fi
+if pane_state_sanitize "../../../../etc/passwd" >/dev/null 2>&1; then
+  fail "SECURITY: pane_state_sanitize should reject a non-tmux-shaped pane_id (traversal payload), not accept it"
+else
+  pass "pane_state_sanitize rejects a traversal payload outright (not a real tmux pane_id shape)"
+fi
+if [ "$(pane_state_sanitize "%12" 2>/dev/null)" = "12" ]; then
+  pass "pane_state_sanitize still accepts a genuine tmux pane_id ('%12' -> '12')"
+else
+  fail "pane_state_sanitize regressed on a genuine tmux pane_id"
+fi
+
 echo "== pane_state_read: missing pane_id returns nothing (exit 1) =="
 if pane_state_read "%no-such-pane" >/dev/null 2>&1; then
   fail "expected pane_state_read to fail for a pane with no state file"
