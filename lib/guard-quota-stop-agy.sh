@@ -38,21 +38,23 @@ fi
 
 # FLAG/PROBE (finding 4, agy's dedicated security review of PR #17's
 # rework request): the CommandLine-only check above traps agy -- its
-# file-write tools (e.g. a write_to_file-shaped call) have empty
-# CommandLine, so an agy session could never obey the Quota Failsafe's
-# "update handoff.md" instruction while gated. No agy PreToolUse payload
-# shape for a file-write tool call is confirmed anywhere in this codebase
-# or its docs, so this tries SEVERAL plausible field-name conventions
-# defensively -- guessing wrong on any one is still strictly better than
-# the prior all-or-nothing trap. This is a BEST-EFFORT canary, NOT a
-# confirmed fix: tests/quota-stop-gate.test.sh documents the exact shapes
-# probed here so a real agy PreToolUse trace for a file-write call can
-# confirm or correct them in one diff. MUST be live-verified before Gate
-# 2 (matches this repo's canary-verify-each-agy-mechanism rule).
+# file-write tools (e.g. write_to_file) have empty CommandLine, so an agy
+# session could never obey the Quota Failsafe's "update handoff.md"
+# instruction while gated.
+#
+# CONFIRMED live 2026-07-12 (real agy PreToolUse trace, a genuine native
+# write): the payload shape is
+# {"toolCall":{"name":"write_to_file","args":{"CodeContent":"...",
+# "Description":"...","Overwrite":true,"TargetFile":"/abs/path"}}} --
+# `.toolCall.args.TargetFile` (CapitalCase) is the confirmed primary key,
+# same capitalization convention as the already-confirmed
+# `.toolCall.args.CommandLine` above. FilePath/file_path are kept as
+# minimal defensive fallbacks ONLY for other write-shaped agy tools
+# (edit/replace) that haven't been traced yet -- not because TargetFile
+# itself is still in doubt.
 FILE_PATH=$(echo "$INPUT" | jq -r '
-  .toolCall.args.FilePath // .toolCall.args.filePath // .toolCall.args.file_path //
-  .toolCall.args.TargetFile // .toolCall.args.targetFile //
-  .toolCall.args.Path // .toolCall.args.path // empty
+  .toolCall.args.TargetFile //
+  .toolCall.args.FilePath // .toolCall.args.file_path // empty
 ')
 if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
   echo '{"decision":"allow"}'

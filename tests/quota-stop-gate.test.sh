@@ -202,24 +202,31 @@ rm -rf "$NOROOT2"
 DECISION="$(echo "$OUT" | jq -r '.decision // empty' 2>/dev/null)"
 [ "$DECISION" = "deny" ] && pass "agy: unresolvable root -> deny decision (fails closed), not allow" || fail "SECURITY REGRESSION (finding 3, agy): expected a deny decision, got: $OUT"
 
-echo "== regression (agy PR#17 rework, finding 4): agy file-write canary -- a plausible write-tool payload shape is allow-listed for handoff.md =="
-# CANARY, not a confirmed fix (see lib/guard-quota-stop-agy.sh's own FLAG
-# comment): no real agy PreToolUse payload for a file-write tool call is
-# confirmed in this codebase. This documents the exact field-name
-# candidates tried (FilePath here) so a live agy trace can validate or
-# correct them. If agy's REAL shape differs, this test (not just the
-# hook) needs updating once confirmed.
-run_agy_gate '{"toolCall":{"args":{"FilePath":".harness/handoff.md"}}}'
+echo "== finding-4 (PR#17 flag 4), CONFIRMED live 2026-07-12: agy's real write-tool payload shape (name=write_to_file, args.TargetFile) is allow-listed for handoff.md =="
+# The exact live-captured payload shape (redacted path/content): a genuine
+# agy PreToolUse call for a native file write is
+# {"toolCall":{"name":"write_to_file","args":{"CodeContent":"...",
+# "Description":"...","Overwrite":true,"TargetFile":"/abs/path"}}}.
+# TargetFile (CapitalCase) is now the CONFIRMED primary key, not a guess.
+run_agy_gate '{"toolCall":{"name":"write_to_file","args":{"CodeContent":"trace-capture-ok","Description":"test","Overwrite":true,"TargetFile":".harness/handoff.md"}}}'
 if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
-  pass "agy: a FilePath-shaped write-tool call targeting handoff.md is allowed while gated (was previously trapped -- empty CommandLine always fell through to deny)"
+  pass "agy: a real write_to_file call targeting handoff.md is allowed while gated (was previously trapped -- empty CommandLine always fell through to deny)"
 else
-  fail "agy file-write canary: expected handoff.md write to be allowed via the FilePath probe, got: $GATE_OUT"
+  fail "agy file-write gate: expected handoff.md write to be allowed via the confirmed TargetFile key, got: $GATE_OUT"
 fi
-run_agy_gate '{"toolCall":{"args":{"FilePath":"/tmp/some-other-file-not-allowlisted.txt"}}}'
+run_agy_gate '{"toolCall":{"name":"write_to_file","args":{"CodeContent":"trace-capture-ok","Description":"test","Overwrite":true,"TargetFile":"/tmp/some-other-file-not-allowlisted.txt"}}}'
 if echo "$GATE_OUT" | jq -e '.decision == "deny"' >/dev/null 2>&1; then
-  pass "agy: a FilePath-shaped write-tool call targeting a NON-allow-listed path is still blocked while gated"
+  pass "agy: a real write_to_file call targeting a NON-allow-listed path is still blocked while gated"
 else
-  fail "agy file-write canary: a non-allow-listed path should still be denied, got: $GATE_OUT"
+  fail "agy file-write gate: a non-allow-listed path should still be denied, got: $GATE_OUT"
+fi
+
+echo "== finding-4: the confirmed TargetFile key works standalone, without any of the OLD 7-way speculative guess keys present =="
+run_agy_gate '{"toolCall":{"name":"write_to_file","args":{"TargetFile":".harness/decisions.log"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: TargetFile alone (no FilePath/filePath/Path/etc.) correctly resolves an allow-listed path"
+else
+  fail "agy: TargetFile alone should resolve an allow-listed path, got: $GATE_OUT"
 fi
 
 echo "== lib/quota-stop-clear.sh: clears an active flag and logs it =="
