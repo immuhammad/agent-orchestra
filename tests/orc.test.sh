@@ -51,6 +51,36 @@ assert_eq "integration_branch scalar" "uat"         "$(grep '^BRANCH=' "$TMP/sca
 assert_eq "roles.orchestra.model"   "opus"          "$(grep '^ORCH_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 assert_eq "roles.implementer.model" "sonnet"        "$(grep '^IMPL_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 
+echo "== orc-config.sh: orc_session_name (issue #18 item 7 / #19) =="
+(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: my-cool-project
+EOF
+  source "$DIR/../lib/orc-config.sh"
+  orc_session_name fallback
+) > "$TMP/session.out"
+assert_eq "session name derives from orchestrator.yaml's project" "my-cool-project" "$(cat "$TMP/session.out")"
+
+(
+  cd "$TMP"
+  rm -f orchestrator.yaml
+  source "$DIR/../lib/orc-config.sh"
+  orc_session_name my-fallback
+) > "$TMP/session-fallback.out"
+assert_eq "session name falls back when no orchestrator.yaml" "my-fallback" "$(cat "$TMP/session-fallback.out")"
+
+(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: client.acme:prod
+EOF
+  source "$DIR/../lib/orc-config.sh"
+  orc_session_name fallback
+) > "$TMP/session-sanitized.out"
+assert_eq "session name sanitizes tmux's own separators (. and :)" "client-acme-prod" "$(cat "$TMP/session-sanitized.out")"
+rm -f "$TMP/orchestrator.yaml"
+
 echo "== orc-config.sh: protected_paths (block list) =="
 (
   cd "$TMP"
@@ -140,6 +170,25 @@ grep -q 'orchestra_model=opus' "$TMP/build.err" && pass "build log reports orche
 grep -q 'protected_paths=career-ops/' "$TMP/build.err" && pass "build log reports protected_paths from yaml" || fail "build log reports protected_paths from yaml"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+echo "== orc.sh: ORC_SESSION defaults to THIS project's own session, not a shared 'harness' (issue #18 item 7 / #19) =="
+DEFAULT_SESSION_OUT="$(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: second-clone-project
+EOF
+  unset ORC_SESSION
+  bash -c "source '$DIR/../bin/orc'; echo \"\$ORC_SESSION\""
+)"
+assert_eq "ORC_SESSION derives from orchestrator.yaml's project, unset by default" "second-clone-project" "$DEFAULT_SESSION_OUT"
+
+ENV_OVERRIDE_OUT="$(
+  cd "$TMP"
+  ORC_SESSION="explicit-override" \
+    bash -c "source '$DIR/../bin/orc'; echo \"\$ORC_SESSION\""
+)"
+assert_eq "ORC_SESSION env override still wins over orchestrator.yaml" "explicit-override" "$ENV_OVERRIDE_OUT"
+rm -f "$TMP/orchestrator.yaml"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

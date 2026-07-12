@@ -125,3 +125,28 @@ orc_get_role_model() {
     }
   ' "$yaml"
 }
+
+# orc_session_name [fallback] -- derives the tmux SESSION name this
+# project's control room runs under, from orchestrator.yaml's `project`
+# scalar (falling back to the given default, or "harness", if unset).
+#
+# issue #18 item 7 + issue #19: `orc up` and dispatch.sh/watch.sh's pane
+# targeting both used to default to a hardcoded "harness" session name --
+# harmless with one project running, but with two clone-per-project
+# control rooms live at once, a hardcoded default nudges the WRONG
+# project's session (live-repro'd in issue #19: dispatch nudged a stale
+# `harness:0.1` pane instead of the actual project's session). Deriving
+# from THIS project's own orchestrator.yaml (the same file bin/orc and
+# dispatch.sh already resolve against) means every clone's session name is
+# unique to its own project by construction, not by convention.
+#
+# '.' and ':' are sanitized to '-' since tmux reserves both as separators
+# in its own session:window.pane target syntax (a literal '.' or ':' in a
+# session name would make `$session:0.0`-style targets ambiguous).
+orc_session_name() {
+  local fallback="${1:-harness}"
+  local name
+  name="$(orc_get_scalar project)"
+  name="${name:-$fallback}"
+  echo "$name" | tr '.:' '--'
+}

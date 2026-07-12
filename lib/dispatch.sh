@@ -25,6 +25,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "$DIR/send-lib.sh"
 # shellcheck source=./harness-root.sh
 source "$DIR/harness-root.sh"
+# shellcheck source=./orc-config.sh
+source "$DIR/orc-config.sh"
 # issue #99: inbox/deferred-nudges are per-repo STATE, not per-checkout --
 # every worktree has its own gitignored .harness/inbox, so a dispatch run
 # from inside a worktree must still land in the MAIN checkout's inbox, not
@@ -55,7 +57,16 @@ DEFERRED_FILE="${DISPATCH_DEFERRED_FILE:-$CANON_DIR/deferred-nudges}"
 # dispatch-routed alerts, since pane_for_agent hardcoded "harness"
 # regardless (found writing this ticket's own tests: a real 80%+ crossing
 # during a test run would have nudged the REAL harness:0.0 pane).
-DISPATCH_SESSION="${DISPATCH_SESSION:-harness}"
+#
+# issue #19 (cross-project nudge collision, live-repro'd): a hardcoded
+# "harness" default is harmless with ONE project's control room running,
+# but with two clone-per-project rooms live at once it nudges the WRONG
+# project's session -- dispatch.sh sent `check inbox` keystrokes into a
+# stale, unrelated project's pane instead of the actual target's. Derive
+# the default from THIS project's own orchestrator.yaml (orc_session_name,
+# same helper `orc up` uses) via CANON_DIR's project root, so every
+# project's session name is unique to it by construction, not convention.
+DISPATCH_SESSION="${DISPATCH_SESSION:-$(ORC_CONFIG_FILE="$(dirname "$CANON_DIR")/orchestrator.yaml" orc_session_name harness)}"
 
 # Pane map (see AGENTS.md Dispatch Protocol): tmux session $DISPATCH_SESSION
 # (production: "harness"), window 0, tiled. Agents without a live pane in
