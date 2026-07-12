@@ -295,6 +295,50 @@ else
   fail "agy: TargetFile alone should resolve an allow-listed path, got: $GATE_OUT"
 fi
 
+echo "== #40 round 2 (agy REQUEST-CHANGES on PR #52): agy's OWN read-tool calls were still fully deadlocked -- .* PreToolUse matcher (templates/agents-hooks.json) covers agy's reads too, but the gate never extracted a read-tool path or called qsg_read_allowed =="
+# agy's dedicated security pass reported its real read-tool payload carries
+# the target path as .toolCall.args.AbsolutePath (or .toolCall.args.DirectoryPath
+# for a directory-shaped read) -- not independently trace-captured in this
+# codebase yet (see lib/guard-quota-stop-agy.sh's own header note), but
+# taken on agy's authority the same way TargetFile originally was before
+# its own live-trace confirmation.
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/handoff.md"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: a read-tool call (AbsolutePath) targeting handoff.md is allowed while gated"
+else
+  fail "#40 round 2: agy Read of handoff.md should be allowed while gated, got: $GATE_OUT"
+fi
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/state/quota-stop"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: a read-tool call targeting the flag itself is allowed while gated (the agent can see what's blocking it)"
+else
+  fail "#40 round 2: agy Read of the flag should be allowed while gated, got: $GATE_OUT"
+fi
+
+run_agy_gate '{"toolCall":{"name":"read_file","args":{"DirectoryPath":".harness/inbox/orchestra/20260711-99.msg"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: the DirectoryPath fallback key also resolves an allow-listed inbox .msg"
+else
+  fail "#40 round 2: agy Read via DirectoryPath should be allowed for an allow-listed path, got: $GATE_OUT"
+fi
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":"README.md"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a read-tool call for a NON-allow-listed file is still denied while gated" || fail "#40 round 2: agy Read of an unrelated file should be denied, got: $GATE_OUT"
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":"/etc/passwd"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a read-tool call for /etc/passwd is denied while gated" || fail "SECURITY: agy Read of /etc/passwd should be denied while gated, got: $GATE_OUT"
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/inbox/builder/../../../../etc/passwd"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a .. traversal in a read-tool call is still denied while gated" || fail "SECURITY REGRESSION: agy Read traversal bypass allowed, got: $GATE_OUT"
+
+run_agy_gate '{"toolCall":{"name":"write_to_file","args":{"AbsolutePath":".harness/state/quota-stop"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a WRITE-shaped tool name carrying a read-shaped key (AbsolutePath) is NOT granted the read allow-list's extra flag-path access" || fail "SECURITY REGRESSION: a write-named tool call bypassed into read-only territory via AbsolutePath, got: $GATE_OUT"
+
 echo "== lib/quota-stop-clear.sh: clears an active flag and logs it =="
 write_flag "5h" "88" "agy"
 AR_LOG_TMP="$(mktemp)"
