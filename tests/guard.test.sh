@@ -250,6 +250,21 @@ else
   echo "FAIL: a directory named lib/ outside this installation should still be blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
 fi
 
+echo "== issue #18 B1 (item 8): script-exec trusts the nested project/<name>/ dev-target clone (+ its worktrees), same as .harness/ =="
+run_guard_at_repo_root "bash project/agent-orchestra/tests/guard.test.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: a script under project/<name>/ (the nested clone-per-project dev target) is trusted"; PASS=$((PASS + 1))
+else
+  echo "FAIL: a script under project/<name>/ should be trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_at_repo_root "bash project/agent-orchestra/.worktrees/issue-11-10/tests/guard.test.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: a script under a project/<name>/.worktrees/<branch>/ path is also trusted"; PASS=$((PASS + 1))
+else
+  echo "FAIL: a script under a project/ worktree should be trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

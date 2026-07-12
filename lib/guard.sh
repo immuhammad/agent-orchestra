@@ -155,11 +155,25 @@ while IFS= read -r seg; do
   # LOCATION (does the script fall under THIS guard.sh's own installation
   # root, ORC_INSTALL_ROOT, computed above), not by directory NAME -- an
   # arbitrary directory elsewhere named lib/hooks/tests is still blocked.
+  #
+  # issue #18 item 8 (B1): clone-per-project self-dogfood rooms nest the
+  # dev-target clone under this installation's own project/<name>/ (see
+  # this repo's own project/agent-orchestra/) -- trusted by NAME, same as
+  # .harness/, since the ORC_INSTALL_ROOT/resolved_dir check below requires
+  # the referenced directory to actually exist under guard_cwd to `cd` into
+  # it, which fails for a relative project/<name>/... path whenever
+  # guard_cwd isn't already sitting inside this installation's own tree
+  # (e.g. a throwaway/relocated hook CWD). project/<name>/'s worktrees
+  # (project/<name>/.worktrees/<branch>/...) match the same glob, arbitrary
+  # depth, exactly like .harness/'s own nesting.
   if echo "$trimmed" | grep -Eq '^(bash|sh|zsh|source|\.)[[:space:]]+[^[:space:]-]'; then
     SCRIPT="$(echo "$trimmed" | awk '{print $2}')"
     case "$SCRIPT" in
       .harness/*|./.harness/*|*/.harness/*)
         : # trusted location, allow
+        ;;
+      project/*|./project/*|*/project/*)
+        : # trusted: nested clone-per-project dev target (+ its worktrees)
         ;;
       *)
         # `|| true`: under `set -e`, a plain assignment from a failing
