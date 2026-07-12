@@ -55,7 +55,9 @@ expect_denied "rm -rf is still denied"                "rm -rf /tmp/whatever"
 expect_denied "git push --force is still denied"      "git push --force origin uat"
 expect_denied "push -f shorthand is still denied"      "git push -f origin uat"
 expect_denied "git clean is still denied"              "git clean -fd"
-expect_denied "write into career-ops/ is still denied" "echo hi > career-ops/x.txt"
+
+echo "== issue #18 B-i: the OLD project-specific career-ops/ ban is gone (project-agnostic) =="
+expect_allowed "write into career-ops/ is no longer specially denied" "echo hi > career-ops/x.txt"
 
 echo "== T27: read ops remain allowed for review =="
 expect_allowed "git diff is allowed"                  "git diff origin/uat...feature/issue-50"

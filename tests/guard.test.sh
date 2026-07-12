@@ -98,7 +98,7 @@ echo "== regression: pre-existing G-series behaviors =="
 expect_blocked "rm -rf is still blocked"                 "rm -rf /tmp/foo"
 expect_blocked "git push --force is still blocked"       "git push --force origin feature/x"
 expect_blocked "git reset --hard is still blocked"       "git reset --hard HEAD~1"
-expect_blocked "write into career-ops/ is still blocked" "echo hi > career-ops/x.txt"
+expect_allowed "no orchestrator.yaml: write anywhere is allowed, no hardcoded default path (issue #18 B-i)" "echo hi > some-dir/x.txt"
 expect_blocked "script exec outside .harness/ is still blocked" "bash /tmp/whatever.sh"
 expect_allowed "script exec inside .harness/ is still allowed"  "bash .harness/log-decision.sh 'a|b|c'"
 expect_allowed "ordinary read command is allowed"        "ls -la"
@@ -175,23 +175,23 @@ expect_worktree_blocked "'cd worktree && git push origin main' still blocked (ex
 expect_worktree_blocked "bare 'git push' with NO cd still blocked (hook CWD itself is on uat)" \
   "git push"
 
-echo "== T21: protected paths from orchestrator.yaml =="
+echo "== T21 / issue #18 B-i: protected paths from orchestrator.yaml, EMPTY default (no hardcoded project name) =="
 NO_YAML=""
-CAREER_OPS_YAML=$'protected_paths:\n  - career-ops/'
+EXAMPLE_YAML=$'protected_paths:\n  - vendor/legacy/'
 CUSTOM_YAML=$'protected_paths:\n  - vendor/legacy/'
 INLINE_YAML='protected_paths: [vendor/legacy/, docs/frozen/]'
 MALFORMED_YAML='this is not yaml at all {{{ :::'
 
-expect_blocked "missing orchestrator.yaml still blocks career-ops/ (fail closed)" \
+expect_allowed "missing orchestrator.yaml: the OLD hardcoded default (career-ops/) is gone, write allowed (issue #18 B-i)" \
   "echo hi > career-ops/x.txt" "feature/issue-99" "$NO_YAML"
-expect_blocked "malformed orchestrator.yaml still blocks career-ops/ (fail closed)" \
+expect_allowed "malformed orchestrator.yaml: the OLD hardcoded default (career-ops/) is gone, write allowed (issue #18 B-i)" \
   "echo hi > career-ops/x.txt" "feature/issue-99" "$MALFORMED_YAML"
-expect_blocked "config explicitly listing career-ops/ blocks it" \
-  "echo hi > career-ops/x.txt" "feature/issue-99" "$CAREER_OPS_YAML"
+expect_blocked "config explicitly listing a path blocks it" \
+  "echo hi > vendor/legacy/x.txt" "feature/issue-99" "$EXAMPLE_YAML"
 expect_blocked "custom protected_paths blocks its own path" \
   "echo hi > vendor/legacy/x.txt" "feature/issue-99" "$CUSTOM_YAML"
-expect_allowed "custom protected_paths no longer blocks career-ops/" \
-  "echo hi > career-ops/x.txt" "feature/issue-99" "$CUSTOM_YAML"
+expect_allowed "custom protected_paths does not widen to anything not listed" \
+  "echo hi > some-other-dir/x.txt" "feature/issue-99" "$CUSTOM_YAML"
 expect_blocked "inline-list protected_paths blocks a listed path" \
   "cp a docs/frozen/b" "feature/issue-99" "$INLINE_YAML"
 
@@ -248,6 +248,99 @@ if [ "$GUARD_STATUS" -eq 2 ]; then
   echo "PASS: a directory merely NAMED lib/ elsewhere (not this installation) is still blocked, not trusted by name alone"; PASS=$((PASS + 1))
 else
   echo "FAIL: a directory named lib/ outside this installation should still be blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+echo "== issue #18 B1 (item 8) + agy REQUEST-CHANGES (PR #17): script-exec trusts the nested project/<name>/ dev-target clone (+ its worktrees) by REAL location, same as .harness/ =="
+# A dedicated sandbox (throwaway install root with a COPY of guard.sh and
+# real files under project/<name>/...) rather than this repo's own
+# checkout: the FIX requires real directory resolution (`cd` + `pwd -P`),
+# and this worktree doesn't nest a project/agent-orchestra/ inside itself
+# (only the OUTER self-dogfood checkout does), so there's no real path
+# here to resolve against.
+GUARD_SRC="$GUARD"
+ORC_CONFIG_SRC="$DIR/../lib/orc-config.sh"
+
+run_guard_in_sandbox() { # $1 = command
+  local command="$1"
+  local sandbox out status
+  sandbox="$(mktemp -d)"
+  sandbox="$(cd "$sandbox" && pwd -P)"
+  mkdir -p "$sandbox/lib" "$sandbox/project/agent-orchestra/tests" \
+    "$sandbox/project/agent-orchestra/.worktrees/issue-11-10/tests"
+  cp "$GUARD_SRC" "$sandbox/lib/guard.sh"
+  cp "$ORC_CONFIG_SRC" "$sandbox/lib/orc-config.sh"
+  touch "$sandbox/project/agent-orchestra/tests/real.sh"
+  touch "$sandbox/project/agent-orchestra/.worktrees/issue-11-10/tests/real.sh"
+  local payload
+  payload="$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')"
+  out="$(cd "$sandbox" && echo "$payload" | bash lib/guard.sh 2>&1)"
+  status=$?
+  rm -rf "$sandbox"
+  SANDBOX_OUT="$out"
+  SANDBOX_STATUS=$status
+}
+
+run_guard_in_sandbox "bash project/agent-orchestra/tests/real.sh"
+if [ "$SANDBOX_STATUS" -eq 0 ]; then
+  echo "PASS: a script under project/<name>/ (the nested clone-per-project dev target) is trusted"; PASS=$((PASS + 1))
+else
+  echo "FAIL: a script under project/<name>/ should be trusted (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_in_sandbox "bash project/agent-orchestra/.worktrees/issue-11-10/tests/real.sh"
+if [ "$SANDBOX_STATUS" -eq 0 ]; then
+  echo "PASS: a script under a project/<name>/.worktrees/<branch>/ path is also trusted"; PASS=$((PASS + 1))
+else
+  echo "FAIL: a script under a project/ worktree should be trusted (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
+fi
+
+echo "== agy REQUEST-CHANGES (PR #17): project/ trust must resolve the REAL canonicalized directory, not glob-match the raw string (path traversal + symlink-out) =="
+# The project/*|./project/*|*/project/* glob used to match the RAW $SCRIPT
+# string with no resolution at all -- `bash project/../../../tmp/evil.sh`
+# satisfied the glob (starts with "project/") and was trusted outright,
+# completely bypassing the ORC_INSTALL_ROOT location check that gates
+# every other path.
+run_guard_in_sandbox "bash project/../../../../../../../../tmp/evil.sh"
+if [ "$SANDBOX_STATUS" -eq 2 ]; then
+  echo "PASS: SECURITY -- a project/../../.. traversal escaping the install root is blocked, not trusted by the raw glob"; PASS=$((PASS + 1))
+else
+  echo "FAIL: SECURITY REGRESSION -- project/../../.. traversal should be blocked (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_in_sandbox2() { # $1 = command, builds a sandbox with a symlink + a sibling dir
+  local command="$1"
+  local sandbox outside out status
+  sandbox="$(mktemp -d)"
+  sandbox="$(cd "$sandbox" && pwd -P)"
+  outside="$(mktemp -d)"
+  outside="$(cd "$outside" && pwd -P)"
+  mkdir -p "$sandbox/lib" "$sandbox/project"
+  cp "$GUARD_SRC" "$sandbox/lib/guard.sh"
+  cp "$ORC_CONFIG_SRC" "$sandbox/lib/orc-config.sh"
+  echo "evil" > "$outside/evil.sh"
+  ln -s "$outside" "$sandbox/project/escape"
+  ln -s "$outside" "$sandbox/project-evil"
+  local payload
+  payload="$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')"
+  out="$(cd "$sandbox" && echo "$payload" | bash lib/guard.sh 2>&1)"
+  status=$?
+  rm -rf "$sandbox" "$outside"
+  SANDBOX_OUT="$out"
+  SANDBOX_STATUS=$status
+}
+
+run_guard_in_sandbox2 "bash project/escape/evil.sh"
+if [ "$SANDBOX_STATUS" -eq 2 ]; then
+  echo "PASS: SECURITY -- a symlink under project/ that resolves OUTSIDE the install root is blocked"; PASS=$((PASS + 1))
+else
+  echo "FAIL: SECURITY REGRESSION -- a project/ symlink escaping the install root should be blocked (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
+fi
+
+run_guard_in_sandbox2 "bash project-evil/evil.sh"
+if [ "$SANDBOX_STATUS" -eq 2 ]; then
+  echo "PASS: a sibling dir merely NAMED project-evil/ (prefix collision, not actually project/) is still resolved by real location, not trusted by name"; PASS=$((PASS + 1))
+else
+  echo "FAIL: project-evil/ (prefix collision, resolves outside the install root) should still be blocked (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
 fi
 
 echo ""

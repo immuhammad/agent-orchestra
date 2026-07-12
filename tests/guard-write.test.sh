@@ -59,20 +59,20 @@ expect_allowed() {
   fi
 }
 
-echo "== regression: default career-ops/ blocking =="
-expect_blocked "write into career-ops/ is blocked (no config)"       "career-ops/x.txt"
-expect_blocked "write into nested career-ops/ is blocked (no config)" "src/career-ops/x.txt"
-expect_allowed "write outside career-ops/ is allowed (no config)"     "extension/x.txt"
+echo "== issue #18 B-i: EMPTY default, no hardcoded project name (no config) =="
+expect_allowed "write into career-ops/ is allowed (no config, old default is gone)"        "career-ops/x.txt"
+expect_allowed "write into nested career-ops/ is allowed (no config, old default is gone)" "src/career-ops/x.txt"
+expect_allowed "write outside career-ops/ is allowed (no config)"                          "extension/x.txt"
 
 echo "== T21: protected paths from orchestrator.yaml =="
 CUSTOM_YAML=$'protected_paths:\n  - vendor/legacy/'
 MALFORMED_YAML='this is not yaml at all {{{ :::'
 
-expect_blocked "malformed config still blocks career-ops/ (fail closed)" \
+expect_allowed "malformed config: no protected paths (issue #18 B-i)" \
   "career-ops/x.txt" "$MALFORMED_YAML"
 expect_blocked "custom protected_paths blocks its own path" \
   "vendor/legacy/x.txt" "$CUSTOM_YAML"
-expect_allowed "custom protected_paths no longer blocks career-ops/" \
+expect_allowed "custom protected_paths does not widen to anything not listed" \
   "career-ops/x.txt" "$CUSTOM_YAML"
 
 echo ""

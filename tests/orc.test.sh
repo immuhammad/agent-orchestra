@@ -51,6 +51,36 @@ assert_eq "integration_branch scalar" "uat"         "$(grep '^BRANCH=' "$TMP/sca
 assert_eq "roles.orchestra.model"   "opus"          "$(grep '^ORCH_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 assert_eq "roles.implementer.model" "sonnet"        "$(grep '^IMPL_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 
+echo "== orc-config.sh: orc_session_name (issue #18 item 7 / #19) =="
+(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: my-cool-project
+EOF
+  source "$DIR/../lib/orc-config.sh"
+  orc_session_name fallback
+) > "$TMP/session.out"
+assert_eq "session name derives from orchestrator.yaml's project" "my-cool-project" "$(cat "$TMP/session.out")"
+
+(
+  cd "$TMP"
+  rm -f orchestrator.yaml
+  source "$DIR/../lib/orc-config.sh"
+  orc_session_name my-fallback
+) > "$TMP/session-fallback.out"
+assert_eq "session name falls back when no orchestrator.yaml" "my-fallback" "$(cat "$TMP/session-fallback.out")"
+
+(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: client.acme:prod
+EOF
+  source "$DIR/../lib/orc-config.sh"
+  orc_session_name fallback
+) > "$TMP/session-sanitized.out"
+assert_eq "session name sanitizes tmux's own separators (. and :)" "client-acme-prod" "$(cat "$TMP/session-sanitized.out")"
+rm -f "$TMP/orchestrator.yaml"
+
 echo "== orc-config.sh: protected_paths (block list) =="
 (
   cd "$TMP"
@@ -81,14 +111,14 @@ assert_eq "inline-list count" "2" "$(wc -l < "$TMP/inline.out" | tr -d ' ')"
 grep -q '^career-ops/$' "$TMP/inline.out" && pass "inline-list contains career-ops/" || fail "inline-list contains career-ops/"
 grep -q '^docs/frozen/$' "$TMP/inline.out" && pass "inline-list contains docs/frozen/" || fail "inline-list contains docs/frozen/"
 
-echo "== orc-config.sh: fail-closed fallback =="
+echo "== orc-config.sh: EMPTY default, no hardcoded project name (issue #18 B-i) =="
 (
   cd "$TMP"
   rm -f orchestrator.yaml
   source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/missing.out"
-assert_eq "missing config falls back to career-ops/" "career-ops/" "$(cat "$TMP/missing.out")"
+assert_eq "missing config: no protected paths (protected_paths comes ONLY from orchestrator.yaml)" "" "$(cat "$TMP/missing.out")"
 
 (
   cd "$TMP"
@@ -99,7 +129,7 @@ EOF
   source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/empty-key.out"
-assert_eq "empty protected_paths key falls back to career-ops/" "career-ops/" "$(cat "$TMP/empty-key.out")"
+assert_eq "empty protected_paths key: no protected paths" "" "$(cat "$TMP/empty-key.out")"
 
 (
   cd "$TMP"
@@ -107,7 +137,7 @@ assert_eq "empty protected_paths key falls back to career-ops/" "career-ops/" "$
   source "$DIR/../lib/orc-config.sh"
   orc_protected_paths
 ) > "$TMP/garbage.out"
-assert_eq "malformed config falls back to career-ops/" "career-ops/" "$(cat "$TMP/garbage.out")"
+assert_eq "malformed config: no protected paths" "" "$(cat "$TMP/garbage.out")"
 
 echo "== orc.sh: orc_build_session builds the control room from config =="
 SESSION="orctest-$$"
@@ -124,7 +154,7 @@ roles:
 protected_paths:
   - career-ops/
 EOF
-  ORC_SESSION="$SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 \
+  ORC_SESSION="$SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$TMP/build.err"
 )
 
@@ -140,6 +170,70 @@ grep -q 'orchestra_model=opus' "$TMP/build.err" && pass "build log reports orche
 grep -q 'protected_paths=career-ops/' "$TMP/build.err" && pass "build log reports protected_paths from yaml" || fail "build log reports protected_paths from yaml"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+echo "== orc.sh: ORC_SESSION defaults to THIS project's own session, not a shared 'harness' (issue #18 item 7 / #19) =="
+DEFAULT_SESSION_OUT="$(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: second-clone-project
+EOF
+  unset ORC_SESSION
+  bash -c "source '$DIR/../bin/orc'; echo \"\$ORC_SESSION\""
+)"
+assert_eq "ORC_SESSION derives from orchestrator.yaml's project, unset by default" "second-clone-project" "$DEFAULT_SESSION_OUT"
+
+ENV_OVERRIDE_OUT="$(
+  cd "$TMP"
+  ORC_SESSION="explicit-override" \
+    bash -c "source '$DIR/../bin/orc'; echo \"\$ORC_SESSION\""
+)"
+assert_eq "ORC_SESSION env override still wins over orchestrator.yaml" "explicit-override" "$ENV_OVERRIDE_OUT"
+rm -f "$TMP/orchestrator.yaml"
+
+echo "== orc.sh: orc_build_session seeds merge-watch-state on a fresh room (issue #18 item 5 / C1) =="
+SEED_SESSION="orctest-seed-$$"
+SEED_TMP="$(mktemp -d)"
+FAKE_GH_BIN="$SEED_TMP/bin"
+mkdir -p "$FAKE_GH_BIN"
+cat > "$FAKE_GH_BIN/gh" <<'FAKEGH'
+#!/bin/bash
+# Emulates `gh pr list ... --jq '.[] | ...'` against an empty result set --
+# real gh+jq prints nothing for an empty array, not a literal "[]".
+true
+FAKEGH
+chmod +x "$FAKE_GH_BIN/gh"
+(
+  cd "$SEED_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: seed-test-project
+EOF
+  PATH="$FAKE_GH_BIN:$PATH" ORC_SESSION="$SEED_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SEED_TMP/build.err"
+)
+if [ -f "$SEED_TMP/.harness/merge-watch-state" ]; then
+  pass "orc_build_session seeded merge-watch-state on a fresh room (state file now exists)"
+else
+  fail "expected .harness/merge-watch-state to exist after orc_build_session: $(cat "$SEED_TMP/build.err" 2>/dev/null)"
+fi
+tmux kill-session -t "$SEED_SESSION" 2>/dev/null || true
+
+SEED_TMP2="$(mktemp -d)"
+(
+  cd "$SEED_TMP2"
+  cat > orchestrator.yaml <<'EOF'
+project: seed-skip-test-project
+EOF
+  mkdir -p .harness
+  ORC_SESSION="orctest-seedskip-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SEED_TMP2/build.err"
+)
+if [ ! -f "$SEED_TMP2/.harness/merge-watch-state" ]; then
+  pass "ORC_SKIP_MERGE_WATCH_SEED=1 skips seeding entirely"
+else
+  fail "ORC_SKIP_MERGE_WATCH_SEED=1 should have skipped seeding"
+fi
+tmux kill-session -t "orctest-seedskip-$$" 2>/dev/null || true
+rm -rf "$SEED_TMP" "$SEED_TMP2"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

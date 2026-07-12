@@ -12,7 +12,11 @@ ORC_LIB_DIR="$(cd "$ORC_SCRIPT_DIR/../lib" && pwd)"
 # shellcheck source=../lib/orc-config.sh
 source "$ORC_LIB_DIR/orc-config.sh"
 
-ORC_SESSION="${ORC_SESSION:-harness}"
+# issue #18 item 7 + issue #19: derive the session name from THIS
+# project's own orchestrator.yaml (orc_session_name, lib/orc-config.sh) so
+# every clone-per-project control room gets its own session, not a shared
+# hardcoded "harness" default -- ORC_SESSION still overrides outright.
+ORC_SESSION="${ORC_SESSION:-$(orc_session_name "$(basename "$(pwd)")")}"
 
 # orc_build_session -- everything `orc up` does except the final attach.
 # Split out so tests can build a throwaway session, assert on it, and tear
@@ -65,13 +69,22 @@ orc_build_session() {
 
   # Gatekeeper liveness watchdog (T19): independent background process, not
   # a pane, so a gatekeeper crash/hang can't also silence its own warning.
-  # Log lands in the CONSUMER project's state dir (91b), not this
-  # installation's checkout, so multiple projects sharing one orc install
-  # don't clobber each other's liveness logs.
+  # Log lands in THIS clone's own state dir (./.harness/state, cwd-relative
+  # -- clone-per-project means there's no shared install to clobber).
   if [ "${ORC_SKIP_LIVENESS:-0}" != "1" ]; then
     mkdir -p ./.harness/state
     nohup "$ORC_LIB_DIR/gatekeeper-liveness.sh" >> ./.harness/state/gatekeeper-liveness.log 2>&1 &
     disown
+  fi
+
+  # issue #18 item 5 (C1): seed merge-watch-state on a fresh room so
+  # watch.sh's merge-watch doesn't replay comment+close on every already-
+  # merged PR and fire a stale "PICK next" nudge. Idempotent (the helper
+  # itself no-ops once the state file exists) and non-fatal (never aborts
+  # `orc up` on a gh hiccup) -- safe to call unconditionally here, not just
+  # on a literal first invocation.
+  if [ "${ORC_SKIP_MERGE_WATCH_SEED:-0}" != "1" ]; then
+    bash "$ORC_LIB_DIR/orc-seed-merge-watch.sh" || true
   fi
 
   tmux select-pane -t "$session:0.0"

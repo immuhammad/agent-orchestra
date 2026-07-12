@@ -6,17 +6,20 @@
 # general YAML parser. It supports scalars (`key: value`) and `protected_paths`
 # as either an inline list (`[a, b]`) or a block list (`- a` / `- b`).
 #
-# Fail-closed contract (guards depend on this): if the config file is
-# missing, unreadable, or the requested key isn't found/parseable,
-# orc_protected_paths always falls back to the hardcoded default
-# (career-ops/) rather than returning nothing -- a missing/broken config
-# must never widen what's writable.
+# issue #18 (B-i): protected_paths comes ONLY from orchestrator.yaml --
+# there is no hardcoded project-specific default (the old "career-ops/"
+# default was a leftover from this harness's original single-consumer
+# extraction; project-agnostic by design now that every project is its own
+# clone). Missing/malformed config means EMPTY protected_paths, not a
+# widened set of blocked writes -- the harness core itself (bin/lib/hooks/
+# .harness) is separately protected by guard.sh's own logic, not this
+# list, so an empty default here doesn't unprotect the harness.
 #
 # Path resolution: ORC_CONFIG_FILE overrides (tests use this); otherwise
 # "orchestrator.yaml" resolved relative to CWD, since guard hooks and `orc`
 # both run with CWD at the project repo root.
 
-ORC_DEFAULT_PROTECTED_PATHS="career-ops/"
+ORC_DEFAULT_PROTECTED_PATHS=""
 
 orc_config_file() {
   echo "${ORC_CONFIG_FILE:-orchestrator.yaml}"
@@ -45,16 +48,16 @@ orc_get_scalar() {
   ' "$yaml"
 }
 
-# orc_protected_paths -- prints one protected path per line. Falls back to
-# the hardcoded default if the config is missing, has no protected_paths
-# key, or the key parses to an empty list (all treated as "malformed" per
-# the fail-closed contract in T21's ticket).
+# orc_protected_paths -- prints one protected path per line, or nothing at
+# all if the config is missing, has no protected_paths key, or the key
+# parses to an empty list (ORC_DEFAULT_PROTECTED_PATHS is empty, issue #18
+# B-i -- see the header comment above).
 orc_protected_paths() {
   local yaml
   yaml="$(orc_config_file)"
 
   if [ ! -f "$yaml" ]; then
-    echo "$ORC_DEFAULT_PROTECTED_PATHS"
+    [ -n "$ORC_DEFAULT_PROTECTED_PATHS" ] && echo "$ORC_DEFAULT_PROTECTED_PATHS"
     return 0
   fi
 
@@ -88,7 +91,7 @@ orc_protected_paths() {
   ' "$yaml")"
 
   if [ -z "$paths" ]; then
-    echo "$ORC_DEFAULT_PROTECTED_PATHS"
+    [ -n "$ORC_DEFAULT_PROTECTED_PATHS" ] && echo "$ORC_DEFAULT_PROTECTED_PATHS"
     return 0
   fi
 
@@ -124,4 +127,29 @@ orc_get_role_model() {
       }
     }
   ' "$yaml"
+}
+
+# orc_session_name [fallback] -- derives the tmux SESSION name this
+# project's control room runs under, from orchestrator.yaml's `project`
+# scalar (falling back to the given default, or "harness", if unset).
+#
+# issue #18 item 7 + issue #19: `orc up` and dispatch.sh/watch.sh's pane
+# targeting both used to default to a hardcoded "harness" session name --
+# harmless with one project running, but with two clone-per-project
+# control rooms live at once, a hardcoded default nudges the WRONG
+# project's session (live-repro'd in issue #19: dispatch nudged a stale
+# `harness:0.1` pane instead of the actual project's session). Deriving
+# from THIS project's own orchestrator.yaml (the same file bin/orc and
+# dispatch.sh already resolve against) means every clone's session name is
+# unique to its own project by construction, not by convention.
+#
+# '.' and ':' are sanitized to '-' since tmux reserves both as separators
+# in its own session:window.pane target syntax (a literal '.' or ':' in a
+# session name would make `$session:0.0`-style targets ambiguous).
+orc_session_name() {
+  local fallback="${1:-harness}"
+  local name
+  name="$(orc_get_scalar project)"
+  name="${name:-$fallback}"
+  echo "$name" | tr '.:' '--'
 }

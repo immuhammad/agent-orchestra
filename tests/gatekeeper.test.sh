@@ -46,10 +46,19 @@ export DISPATCH_SESSION
 export DISPATCH_CANON_DIR
 export GATEKEEPER_ALERT_STATE_FILE
 export GATEKEEPER_BUDGET_LOG
+export GATEKEEPER_LIVENESS_RATELIMIT_PANES
+export GATEKEEPER_LIVENESS_HANDOFF_FILE
 GATEKEEPER_HEARTBEAT_FILE="$(mktemp)"
 GATEKEEPER_LIVENESS_LOG="$(mktemp)"
 AUTO_RESUME_STATE_FILE="$(mktemp)"
 GATEKEEPER_NOTIFY_SESSION="$TEST_SESSION"
+# #11 secondary gap: gatekeeper-liveness.sh's rate-limit-stuck heuristic
+# defaults to watching the REAL "harness:0.1" (Builder) pane and reading
+# the caller-cwd-resolved real handoff.md -- same class of leak T26 already
+# fixed for GATEKEEPER_LIVENESS_TARGET/DISPATCH_SESSION above. Both must
+# point at throwaway locations for the whole run.
+GATEKEEPER_LIVENESS_RATELIMIT_PANES="$TEST_SESSION:0.1"
+GATEKEEPER_LIVENESS_HANDOFF_FILE="$(mktemp)"
 # issue #105: alerts now route through dispatch.sh (gk_alert_orchestra),
 # which has its OWN session target (pane_for_agent hardcoded "harness"
 # otherwise, ignoring GATEKEEPER_NOTIFY_SESSION entirely -- found writing
@@ -96,7 +105,7 @@ cleanup() {
   [ -n "$GATEKEEPER_PID" ] && kill "$GATEKEEPER_PID" >/dev/null 2>&1
   [ -n "$LIVENESS_PID" ] && kill "$LIVENESS_PID" >/dev/null 2>&1
   tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
-  rm -f "$GATEKEEPER_HEARTBEAT_FILE" "$GATEKEEPER_LIVENESS_LOG" "$AUTO_RESUME_STATE_FILE"
+  rm -f "$GATEKEEPER_HEARTBEAT_FILE" "$GATEKEEPER_LIVENESS_LOG" "$AUTO_RESUME_STATE_FILE" "$GATEKEEPER_LIVENESS_HANDOFF_FILE"
 }
 trap cleanup EXIT
 
@@ -215,6 +224,58 @@ else
 fi
 kill "$LIVENESS_PID" >/dev/null 2>&1
 LIVENESS_PID=""
+
+echo "== regression (Ahmad fold-in, PR#17 rework finding 6): an EMPTY heartbeat file (mid-write race) does NOT produce a false death alert =="
+# The confirmed live incident: gatekeeper.sh's non-atomic `date +%s >
+# "$HEARTBEAT"` truncates the file before writing, and a reader that
+# lands in that window sees an EMPTY string with a SUCCESSFUL `cat` --
+# the old `|| echo 0` fallback only fires on a `cat` FAILURE, so it never
+# caught this, and bash arithmetic silently treats "" as 0, making
+# age ~= now (~1.78 billion seconds) -- always past any real
+# STALE_AFTER. This reproduces the empty-file case directly (no need to
+# actually race gatekeeper.sh's writer) and confirms it's now a no-op
+# tick, not a false alert.
+: > "$GATEKEEPER_HEARTBEAT_FILE"  # empty, not missing -- the exact race condition
+: > "$GATEKEEPER_LIVENESS_LOG"
+tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
+GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
+  GATEKEEPER_LIVENESS_TARGET="$TEST_SESSION:0.0" \
+  bash "$LIVENESS" >/dev/null 2>&1 &
+LIVENESS_PID=$!
+disown
+sleep 4
+CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
+kill "$LIVENESS_PID" >/dev/null 2>&1
+LIVENESS_PID=""
+if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
+  fail "SECURITY/RELIABILITY REGRESSION (finding 6): an empty heartbeat file produced a false death alert: $CAPTURE"
+else
+  pass "an empty heartbeat file produces NO false alert (skips the tick instead of treating '' as epoch 0)"
+fi
+if grep -q "heartbeat file empty/non-numeric this tick" "$GATEKEEPER_LIVENESS_LOG" 2>/dev/null; then
+  pass "the skipped tick was logged for diagnosability (not a silent no-op)"
+else
+  fail "expected a debug log line explaining the skipped tick"
+fi
+
+echo "== regression (finding 6): a genuinely-old but VALID numeric heartbeat still alerts (the fix doesn't over-correct) =="
+echo "1" > "$GATEKEEPER_HEARTBEAT_FILE"  # ancient (epoch=1) -- a real, valid, stale heartbeat
+: > "$GATEKEEPER_LIVENESS_LOG"
+tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
+GATEKEEPER_LIVENESS_INTERVAL=1 GATEKEEPER_LIVENESS_STALE_AFTER=3 \
+  GATEKEEPER_LIVENESS_TARGET="$TEST_SESSION:0.0" \
+  bash "$LIVENESS" >/dev/null 2>&1 &
+LIVENESS_PID=$!
+disown
+sleep 4
+CAPTURE="$(tmux capture-pane -p -t "$TEST_SESSION:0.0" 2>&1)"
+kill "$LIVENESS_PID" >/dev/null 2>&1
+LIVENESS_PID=""
+if echo "$CAPTURE" | grep -q "gatekeeper watchdog: no heartbeat"; then
+  pass "a genuinely stale, validly-numeric heartbeat still triggers a real alert"
+else
+  fail "the empty-heartbeat fix over-corrected -- a real stale heartbeat should still alert, got: $CAPTURE"
+fi
 
 echo "== liveness: does NOT warn while the heartbeat stays fresh =="
 tmux send-keys -t "$TEST_SESSION:0.0" "clear" Enter 2>&1
@@ -406,6 +467,49 @@ if grep -Eq '"harness:0\.' "$GATEKEEPER"; then
 else
   pass "gatekeeper.sh contains no hardcoded 'harness:0.N' pane target"
 fi
+
+echo "== issue #19 follow-up: gatekeeper-liveness.sh / gatekeeper.sh DEFAULTS (no override) derive from THIS project's orchestrator.yaml, not 'harness' =="
+# Unlike every other block in this file (which pins GATEKEEPER_LIVENESS_TARGET
+# / GATEKEEPER_NOTIFY_SESSION / GATEKEEPER_CANON_DIR to a throwaway session so
+# a real 80%+ crossing during a test run can't reach the real "harness"
+# session), THIS block specifically tests what the DEFAULT resolves to when
+# none of those are set -- the exact gap the bug #19 follow-up flagged.
+# Two different projects (own orchestrator.yaml, own cwd) must resolve to
+# two DIFFERENT session defaults, same two-session-isolation shape as
+# dispatch.test.sh's own issue #19 regression case.
+PROJECT_C="$(mktemp -d)"
+PROJECT_D="$(mktemp -d)"
+echo "project: project-c" > "$PROJECT_C/orchestrator.yaml"
+echo "project: project-d" > "$PROJECT_D/orchestrator.yaml"
+
+LIVENESS_TARGET_C="$(cd "$PROJECT_C" && env -u GATEKEEPER_LIVENESS_TARGET -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$LIVENESS'; echo \"\$TARGET\"" 2>&1)"
+LIVENESS_TARGET_D="$(cd "$PROJECT_D" && env -u GATEKEEPER_LIVENESS_TARGET -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$LIVENESS'; echo \"\$TARGET\"" 2>&1)"
+
+if [ "$LIVENESS_TARGET_C" = "project-c:0.0" ]; then
+  pass "gatekeeper-liveness.sh's default TARGET derives from project-c's own orchestrator.yaml"
+else
+  fail "expected project-c:0.0, got $LIVENESS_TARGET_C"
+fi
+if [ -n "$LIVENESS_TARGET_C" ] && [ "$LIVENESS_TARGET_C" != "$LIVENESS_TARGET_D" ]; then
+  pass "gatekeeper-liveness.sh's default TARGET differs between two projects (never collides on 'harness:0.0')"
+else
+  fail "CORRECTNESS REGRESSION (issue #19 follow-up): two projects resolved to the same liveness TARGET ($LIVENESS_TARGET_C / $LIVENESS_TARGET_D)"
+fi
+
+NOTIFY_SESSION_C="$(cd "$PROJECT_C" && env -u GATEKEEPER_NOTIFY_SESSION -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$GATEKEEPER'; echo \"\$NOTIFY_SESSION\"" 2>&1)"
+NOTIFY_SESSION_D="$(cd "$PROJECT_D" && env -u GATEKEEPER_NOTIFY_SESSION -u GATEKEEPER_CANON_DIR -u DISPATCH_CANON_DIR -u DISPATCH_SESSION -u ORC_PROJECT_ROOT bash -c "source '$GATEKEEPER'; echo \"\$NOTIFY_SESSION\"" 2>&1)"
+
+if [ "$NOTIFY_SESSION_C" = "project-c" ]; then
+  pass "gatekeeper.sh's default NOTIFY_SESSION derives from project-c's own orchestrator.yaml"
+else
+  fail "expected project-c, got $NOTIFY_SESSION_C"
+fi
+if [ -n "$NOTIFY_SESSION_C" ] && [ "$NOTIFY_SESSION_C" != "$NOTIFY_SESSION_D" ]; then
+  pass "gatekeeper.sh's default NOTIFY_SESSION differs between two projects (never collides on 'harness')"
+else
+  fail "CORRECTNESS REGRESSION (issue #19 follow-up): two projects resolved to the same NOTIFY_SESSION ($NOTIFY_SESSION_C / $NOTIFY_SESSION_D)"
+fi
+rm -rf "$PROJECT_C" "$PROJECT_D"
 
 echo "== T26 VERIFY: zero traffic reached the real harness session across this entire run =="
 # A before/after COUNT of leak-marker lines, not a byte-exact snapshot diff

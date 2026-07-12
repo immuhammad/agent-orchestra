@@ -52,6 +52,21 @@ echo "== mw_extract_issue_from_branch: T30 (#56) fallback when title/body have n
 [ "$(mw_extract_issue_from_branch 'feature/issue-55')" = "55" ] && pass "feature/issue-N branch" || fail "feature/issue-N branch"
 [ -z "$(mw_extract_issue_from_branch 'main')" ] && pass "non-matching branch returns empty" || fail "non-matching branch should return empty"
 
+echo "== issue #18 item 5 (C1): a SEEDED state file locks the seam -- mw_already_processed is true, no replay =="
+: > "$MERGE_WATCH_STATE"
+mw_mark_processed "555"
+if mw_already_processed "555"; then
+  pass "a pre-seeded PR number reads as already-processed (no replay on a fresh room)"
+else
+  fail "a seeded PR number should read as already-processed"
+fi
+if ! mw_already_processed "556"; then
+  pass "an UNSEEDED PR number still replays (current/expected behavior, not a regression)"
+else
+  fail "an unseeded PR number should NOT read as already-processed"
+fi
+: > "$MERGE_WATCH_STATE"
+
 # mw_teardown_branch is mocked to a harmless default (success, no-op) for
 # every merge-watch case below unless a specific test overrides it -- it
 # has its own dedicated coverage further down, and orc-worktree.sh's actual

@@ -262,6 +262,11 @@ if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9010.msg >/dev/null 2>&1; then
 else
   fail "expected the .msg in the copilot inbox dir (scribe's alias target)"
 fi
+if ! grep -q "career-ops-harness" "$CLAUDE_CALLS"; then
+  pass "issue #18 B3: the scribe prompt no longer hardcodes 'career-ops-harness' (project-agnostic)"
+else
+  fail "scribe prompt should not hardcode career-ops-harness: $(cat "$CLAUDE_CALLS")"
+fi
 
 echo "== issue #89: 'copilot' alias resolves to the SAME inbox/spawn behavior as 'scribe' =="
 : > "$CLAUDE_CALLS"
@@ -306,6 +311,36 @@ if [ "$STATUS" -eq 1 ] && echo "$OUT" | grep -q "unknown verb"; then
 else
   fail "unknown verb should be rejected (status=$STATUS): $OUT"
 fi
+
+echo "== issue #19: DISPATCH_SESSION derives from THIS project's own orchestrator.yaml -- two projects never share a session =="
+# This test file exports DISPATCH_CANON_DIR globally (line ~22) so the rest
+# of the suite never touches a real project's discovery -- explicitly unset
+# it (and DISPATCH_SESSION) here so real per-project orchestrator.yaml
+# discovery is exercised, the actual mechanism issue #19's live repro hit.
+PROJECT_A="$(mktemp -d)"
+PROJECT_B="$(mktemp -d)"
+echo "project: project-a" > "$PROJECT_A/orchestrator.yaml"
+echo "project: project-b" > "$PROJECT_B/orchestrator.yaml"
+
+PANE_A="$(cd "$PROJECT_A" && env -u DISPATCH_CANON_DIR -u DISPATCH_SESSION bash -c "source '$DISPATCH'; pane_for_agent orchestra")"
+PANE_B="$(cd "$PROJECT_B" && env -u DISPATCH_CANON_DIR -u DISPATCH_SESSION bash -c "source '$DISPATCH'; pane_for_agent orchestra")"
+
+if [ "$PANE_A" = "project-a:0.0" ]; then
+  pass "project A's dispatch resolves to ITS OWN session (project-a:0.0)"
+else
+  fail "expected project-a:0.0, got $PANE_A"
+fi
+if [ "$PANE_B" = "project-b:0.0" ]; then
+  pass "project B's dispatch resolves to ITS OWN session (project-b:0.0)"
+else
+  fail "expected project-b:0.0, got $PANE_B"
+fi
+if [ -n "$PANE_A" ] && [ "$PANE_A" != "$PANE_B" ]; then
+  pass "project A and project B never resolve to the same session (cross-project nudge collision, issue #19)"
+else
+  fail "CORRECTNESS REGRESSION (issue #19): two different projects resolved to the SAME session ($PANE_A / $PANE_B) -- a nudge from one project would hit the other's pane"
+fi
+rm -rf "$PROJECT_A" "$PROJECT_B"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

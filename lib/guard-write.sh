@@ -5,9 +5,10 @@
 # under --dangerously-skip-permissions a Write/Edit tool call could still
 # land in a protected path unguarded (G4) — this hook covers that gap.
 #
-# T21: protected paths come from orchestrator.yaml (protected_paths) via
-# orc-config.sh, falling back to the hardcoded career-ops/ default if the
-# config is missing/malformed (fail closed — see orc-config.sh's contract).
+# T21: protected paths come ONLY from orchestrator.yaml (protected_paths)
+# via orc-config.sh -- EMPTY if the config is missing/malformed (issue #18
+# B-i: no hardcoded project-specific default; the harness core itself is
+# separately protected by G-series guard rules, not this list).
 set -euo pipefail
 
 GUARD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
