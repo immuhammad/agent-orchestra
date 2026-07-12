@@ -14,15 +14,27 @@ In your project:
    ```
    cp path/to/agent-orchestra/templates/orchestrator.yaml .
    cp path/to/agent-orchestra/templates/AGENTS.md .
+   cp path/to/agent-orchestra/templates/CLAUDE.md .
+   cp path/to/agent-orchestra/templates/GEMINI.md .
    cp path/to/agent-orchestra/templates/handoff.md .harness/handoff.md
    cp path/to/agent-orchestra/templates/review-protocol.md .
    ```
    Edit `orchestrator.yaml` and `AGENTS.md` for your project (roles,
-   models, protected paths, integration branch). `orchestrator.yaml` at
-   your project root is the marker `lib/harness-root.sh` walks up from
-   cwd to find — every `orc`/`dispatch`/`gatekeeper` invocation needs it
-   somewhere above wherever it's run from (or set `ORC_PROJECT_ROOT`
-   explicitly).
+   models, protected paths, integration branch); fill in `CLAUDE.md` and
+   `GEMINI.md`'s tool-specific notes. `AGENTS.md` stays the single source
+   of truth — the other two only add tool-specific lanes, never
+   contradict it. `orchestrator.yaml` at your project root is the marker
+   `lib/harness-root.sh` walks up from cwd to find — every
+   `orc`/`dispatch`/`gatekeeper` invocation needs it somewhere above
+   wherever it's run from (or set `ORC_PROJECT_ROOT` explicitly).
+
+   `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and `review-protocol.md` are
+   **per-project root files** — each project customizes its own copy, so
+   add all four to your project's own `.gitignore` (they're not tracked in
+   `agent-orchestra` itself either — this repo only tracks the `templates/`
+   source). Automated generation of these root files (`orc init`) is
+   tracked separately (issue #5); for now, copy and edit them by hand as
+   above.
 
 2. Install the skill pack:
    ```
