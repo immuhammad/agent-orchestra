@@ -154,7 +154,7 @@ roles:
 protected_paths:
   - career-ops/
 EOF
-  ORC_SESSION="$SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 \
+  ORC_SESSION="$SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$TMP/build.err"
 )
 
@@ -189,6 +189,51 @@ ENV_OVERRIDE_OUT="$(
 )"
 assert_eq "ORC_SESSION env override still wins over orchestrator.yaml" "explicit-override" "$ENV_OVERRIDE_OUT"
 rm -f "$TMP/orchestrator.yaml"
+
+echo "== orc.sh: orc_build_session seeds merge-watch-state on a fresh room (issue #18 item 5 / C1) =="
+SEED_SESSION="orctest-seed-$$"
+SEED_TMP="$(mktemp -d)"
+FAKE_GH_BIN="$SEED_TMP/bin"
+mkdir -p "$FAKE_GH_BIN"
+cat > "$FAKE_GH_BIN/gh" <<'FAKEGH'
+#!/bin/bash
+# Emulates `gh pr list ... --jq '.[] | ...'` against an empty result set --
+# real gh+jq prints nothing for an empty array, not a literal "[]".
+true
+FAKEGH
+chmod +x "$FAKE_GH_BIN/gh"
+(
+  cd "$SEED_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: seed-test-project
+EOF
+  PATH="$FAKE_GH_BIN:$PATH" ORC_SESSION="$SEED_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SEED_TMP/build.err"
+)
+if [ -f "$SEED_TMP/.harness/merge-watch-state" ]; then
+  pass "orc_build_session seeded merge-watch-state on a fresh room (state file now exists)"
+else
+  fail "expected .harness/merge-watch-state to exist after orc_build_session: $(cat "$SEED_TMP/build.err" 2>/dev/null)"
+fi
+tmux kill-session -t "$SEED_SESSION" 2>/dev/null || true
+
+SEED_TMP2="$(mktemp -d)"
+(
+  cd "$SEED_TMP2"
+  cat > orchestrator.yaml <<'EOF'
+project: seed-skip-test-project
+EOF
+  mkdir -p .harness
+  ORC_SESSION="orctest-seedskip-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SEED_TMP2/build.err"
+)
+if [ ! -f "$SEED_TMP2/.harness/merge-watch-state" ]; then
+  pass "ORC_SKIP_MERGE_WATCH_SEED=1 skips seeding entirely"
+else
+  fail "ORC_SKIP_MERGE_WATCH_SEED=1 should have skipped seeding"
+fi
+tmux kill-session -t "orctest-seedskip-$$" 2>/dev/null || true
+rm -rf "$SEED_TMP" "$SEED_TMP2"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

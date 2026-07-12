@@ -65,14 +65,21 @@ script (`orc-exec.sh`) to route commands through. This clone's own
    section for what each hook does.
 
 6. `bin/orc up` builds the tmux control room from `orchestrator.yaml`,
-   targeting `project/<name>/` as the working tree.
+   targeting `project/<name>/` as the working tree. On a fresh room (no
+   `.harness/merge-watch-state` yet) this also seeds that file with every
+   currently-merged PR number (`lib/orc-seed-merge-watch.sh`), so
+   `watch.sh`'s merge-watch doesn't replay comment+close on old PRs and
+   fire a stale "PICK next" nudge the first time it runs. Idempotent
+   (only seeds once, safe to call `orc up` again) and non-fatal (a `gh`
+   hiccup never blocks `orc up`); set `ORC_SKIP_MERGE_WATCH_SEED=1` to
+   skip it outright.
 
 ## Layout
 
 - `bin/orc` — `orc up`, builds the tmux control room.
 - `bin/orc-install-skills [target_dir]` — dual-installs the skill pack.
 - `lib/` — everything else: dispatch, watch, gatekeeper, guards,
-  worktree lifecycle, root-resolution.
+  worktree lifecycle, root-resolution, merge-watch seeding.
 - `hooks/` — Claude Code hook scripts (session-start, check-handoff,
   pre-compact-checkpoint, rate-limit-handoff).
 - `templates/` — copy these into this clone's own root (step 3 above).

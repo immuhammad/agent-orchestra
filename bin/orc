@@ -77,6 +77,16 @@ orc_build_session() {
     disown
   fi
 
+  # issue #18 item 5 (C1): seed merge-watch-state on a fresh room so
+  # watch.sh's merge-watch doesn't replay comment+close on every already-
+  # merged PR and fire a stale "PICK next" nudge. Idempotent (the helper
+  # itself no-ops once the state file exists) and non-fatal (never aborts
+  # `orc up` on a gh hiccup) -- safe to call unconditionally here, not just
+  # on a literal first invocation.
+  if [ "${ORC_SKIP_MERGE_WATCH_SEED:-0}" != "1" ]; then
+    bash "$ORC_LIB_DIR/orc-seed-merge-watch.sh" || true
+  fi
+
   tmux select-pane -t "$session:0.0"
 
   echo "orc up: project=$project integration_branch=$integration_branch" \

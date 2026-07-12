@@ -62,12 +62,16 @@ we_log_event() {
 
 # -- merge-watch ----------------------------------------------------------
 
-# mw_fetch_merged_prs -- prints "<number><TAB><title-single-line><TAB>
+# mw_fetch_merged_prs [limit] -- prints "<number><TAB><title-single-line><TAB>
 # <body-single-line><TAB><head-branch>" for recently-merged PRs, one per
 # line. Split out from merge_watch_check so tests can override this
 # function with canned output instead of hitting the real GitHub API.
+# limit defaults to 20 (merge_watch_check's own polling need); issue #18
+# item 5's seed helper passes a much larger limit to capture this
+# project's FULL merged-PR history on a fresh room, not just the last 20.
 mw_fetch_merged_prs() {
-  gh pr list --state merged --limit 20 --json number,title,body,headRefName \
+  local limit="${1:-20}"
+  gh pr list --state merged --limit "$limit" --json number,title,body,headRefName \
     --jq '.[] | [.number, (.title // "" | gsub("\n";" ")), (.body // "" | gsub("\n";" ")), .headRefName] | @tsv' 2>/dev/null
 }
 
