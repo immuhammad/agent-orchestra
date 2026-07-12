@@ -100,6 +100,17 @@ orc_build_session() {
     bash "$ORC_LIB_DIR/orc-seed-merge-watch.sh" || true
   fi
 
+  # issue #10/#31: .claude/settings.json is a gitignored per-room artifact
+  # -- a hand-assembled or drifted copy can silently omit a hook and
+  # nothing catches it (exactly how the quota-stop-gate went un-wired for
+  # this room's whole life). Non-fatal (a config problem `orc up` can't fix
+  # itself shouldn't block the room from starting) but LOUD: the check
+  # itself writes an explicit WARNING to stderr on any omission, so this
+  # can't rot unseen the way #10 did.
+  if [ "${ORC_SKIP_HOOK_WIRING_CHECK:-0}" != "1" ]; then
+    bash "$ORC_LIB_DIR/check-hook-wiring.sh" ./.claude/settings.json || true
+  fi
+
   tmux select-pane -t "$session:0.0"
 
   echo "orc up: project=$project integration_branch=$integration_branch" \

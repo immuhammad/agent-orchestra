@@ -185,6 +185,35 @@ else
   pass "fresh room has no legacy inbox/copilot dir"
 fi
 
+echo "== issue #10/#31: orc_build_session runs the hook-wiring doctor check, LOUD but non-fatal =="
+# The room built above had NO .claude/settings.json at all -- the check
+# should have WARNED in build.err (loud) without orc_build_session itself
+# failing (non-fatal, already proven by the pane/inbox assertions above
+# succeeding despite this).
+if grep -qi "quota-stop-gate" "$TMP/build.err" 2>/dev/null; then
+  pass "orc_build_session's hook-wiring check warned loudly about the missing gate (no .claude/settings.json in this fresh room)"
+else
+  fail "expected orc_build_session to have run the hook-wiring check and warned about the missing gate: $(cat "$TMP/build.err" 2>/dev/null)"
+fi
+
+HOOKWIRE_SESSION="orctest-hookwire-$$"
+HOOKWIRE_TMP="$(mktemp -d)"
+mkdir -p "$HOOKWIRE_TMP/.claude"
+cp "$DIR/../templates/settings.json" "$HOOKWIRE_TMP/.claude/settings.json"
+(
+  cd "$HOOKWIRE_TMP"
+  echo "project: hookwire-test" > orchestrator.yaml
+  ORC_SESSION="$HOOKWIRE_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$HOOKWIRE_TMP/build.err"
+)
+if grep -qi "quota-stop-gate" "$HOOKWIRE_TMP/build.err" 2>/dev/null; then
+  fail "a correctly-wired .claude/settings.json should NOT trigger the hook-wiring warning: $(cat "$HOOKWIRE_TMP/build.err")"
+else
+  pass "a correctly-wired .claude/settings.json (copied from templates/settings.json) triggers no warning"
+fi
+tmux kill-session -t "$HOOKWIRE_SESSION" 2>/dev/null || true
+rm -rf "$HOOKWIRE_TMP"
+
 echo "== orc.sh: ORC_SESSION defaults to THIS project's own session, not a shared 'harness' (issue #18 item 7 / #19) =="
 DEFAULT_SESSION_OUT="$(
   cd "$TMP"
