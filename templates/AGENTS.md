@@ -35,6 +35,7 @@ someone remembers to ask. `agent-orchestra`'s capped skill pack (see
 | Builder   | BUILD/TEST                            | test-driven-development, systematic-debugging, verification-before-completion, using-git-worktrees |
 | Builder   | before dispatching to reviewer        | requesting-code-review |
 | Builder   | after reviewer's verdict (fix-loop)   | receiving-code-review |
+| Reviewer  | REVIEW                                | code-review (applies `review-protocol.md`) |
 | Orchestra | PICK/PLAN                             | brainstorming, writing-plans |
 
 Add project-specific skills here as your project adopts them — keep the
