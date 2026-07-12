@@ -49,6 +49,26 @@ else
   fail "additionalContext should name Reviewer's auto-use skill(s)"
 fi
 
+echo "== issue #23: ORC_ONESHOT=1 emits NO room-state additionalContext (minimal-context spawn) =="
+# A scribe spawn was observed booting, reading THIS additionalContext's
+# "read handoff.md" + quota-rule briefing, concluding (from a STALE
+# handoff.md) that the room was quota-parked, and self-aborting instead of
+# doing its dispatched task. A one-shot has no standing pane and no
+# handoff.md duty (its own Stop hook already exempts it via ORC_ONESHOT,
+# see check-handoff.sh) -- it should never see this pane-agent briefing.
+: > "$SANDBOX/.harness/.session-start"
+ONESHOT_OUT="$(cd "$SANDBOX" && ORC_ONESHOT=1 bash "$HOOK" 2>/dev/null)"
+if echo "$ONESHOT_OUT" | grep -qi "HARNESS ACTIVE\|handoff.md\|decisions.log\|quota"; then
+  fail "ORC_ONESHOT=1 should suppress the room-state briefing entirely, got: $ONESHOT_OUT"
+else
+  pass "ORC_ONESHOT=1 emits no room-state additionalContext"
+fi
+if echo "$ONESHOT_OUT" | python3 -m json.tool >/dev/null 2>&1; then
+  pass "ORC_ONESHOT=1 output still parses as valid JSON"
+else
+  fail "expected valid JSON even for the minimal-context case, got: $ONESHOT_OUT"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

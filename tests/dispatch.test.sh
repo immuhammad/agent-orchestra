@@ -289,6 +289,57 @@ else
   fail "issue #23: expected --allowedTools to scope Write to $ACK_9010: $(cat "$CLAUDE_CALLS")"
 fi
 
+echo "== agy PROBE 1 (PR #30 REQUEST-CHANGES): scribe gets a scoped scratch-dir Write grant to create gh --body-file tmpfiles =="
+# gh issue comment/pr comment need --body-file <tmpfile> (the guard
+# false-positives on inline --body); creating that tmpfile is a Write to a
+# path that is NOT $ack_file. Without a scoped scratch dir, the scribe
+# deadlocks on an unanswerable permission prompt the moment it tries to
+# post a real comment (agy's live-confirmed PROBE 1).
+SCRATCH_GRANT="$(grep -oE 'Write\([^)]*state/scribe-[^)]*\*\*?\)' "$CLAUDE_CALLS" | head -1)"
+if [ -n "$SCRATCH_GRANT" ]; then
+  pass "agy PROBE 1: --allowedTools grants a scoped scratch-dir Write (found: $SCRATCH_GRANT)"
+else
+  fail "agy PROBE 1: expected a scoped scratch-dir Write grant (e.g. Write(.../state/scribe-<id>/**)) in: $(cat "$CLAUDE_CALLS")"
+fi
+SCRATCH_DIR_PATH="$(echo "$SCRATCH_GRANT" | sed -E 's/^Write\((.*)\/\*\*?\)$/\1/')"
+if [ -n "$SCRATCH_DIR_PATH" ] && [ -d "$SCRATCH_DIR_PATH" ]; then
+  pass "agy PROBE 1: the granted scratch dir actually exists before the spawn (not just claimed in the grant)"
+else
+  fail "agy PROBE 1: expected the scratch dir ($SCRATCH_DIR_PATH) to exist on disk"
+fi
+if grep -q "state/scribe-" "$CLAUDE_CALLS" && grep -qi "body-file\|scratch" "$CLAUDE_CALLS"; then
+  pass "agy PROBE 1: the prompt tells the scribe to use the scratch dir for gh --body-file tmpfiles"
+else
+  fail "agy PROBE 1: expected the prompt to instruct the scribe to write body-files under its scratch dir"
+fi
+
+echo "== agy PROBE 2 (PR #30 REQUEST-CHANGES): every Bash(...) allowedTools entry uses valid, precisely-scoped syntax =="
+# agy: 'Bash(gh pr *)' (space form) does not parse the way this harness
+# intends -- standardize on the colon prefix form, AND keep each entry
+# scoped to a specific subcommand (comment/close/view), not a bare 'gh pr'/
+# 'gh issue' prefix -- a bare prefix is a raw STRING prefix match, and 'gh
+# pr' is also a literal string-prefix of any hypothetical 'gh pr<anything>'
+# subcommand, which is broader than intended for a headless one-shot.
+BASH_ENTRIES="$(grep -oE 'Bash\([^)]*\)' "$CLAUDE_CALLS")"
+BAD_ENTRY=""
+while IFS= read -r entry; do
+  [ -z "$entry" ] && continue
+  case "$entry" in
+    Bash\(gh\ issue\ comment:\*\)|Bash\(gh\ issue\ close:\*\)|Bash\(gh\ issue\ view:\*\)|Bash\(gh\ pr\ comment:\*\)|Bash\(gh\ pr\ view:\*\)|Bash\(bash\ lib/log-decision.sh:\*\)) ;;
+    *) BAD_ENTRY="$entry" ;;
+  esac
+done <<< "$BASH_ENTRIES"
+if [ -z "$BAD_ENTRY" ] && [ -n "$BASH_ENTRIES" ]; then
+  pass "agy PROBE 2: every Bash(...) entry is a precisely-scoped, colon-suffixed subcommand grant"
+else
+  fail "agy PROBE 2: found an unexpected/imprecise Bash(...) entry: '$BAD_ENTRY' -- full list: $BASH_ENTRIES"
+fi
+if grep -qF "Bash(gh pr *)" "$CLAUDE_CALLS"; then
+  fail "agy PROBE 2 REGRESSION: the invalid/imprecise space-wildcard 'Bash(gh pr *)' entry is still present"
+else
+  pass "agy PROBE 2: the old imprecise 'Bash(gh pr *)' entry is gone"
+fi
+
 echo "== issue #22: legacy 'copilot' verb resolves INTO 'scribe's physical inbox dir (inverted alias) =="
 : > "$CLAUDE_CALLS"
 OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign copilot 9011 "another judgment task" 2>&1)"

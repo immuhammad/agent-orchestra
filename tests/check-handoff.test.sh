@@ -90,6 +90,21 @@ else
   fail "expected the normal block to still apply without ORC_ONESHOT (got status=$STATUS): $OUT"
 fi
 
+echo "== SECURITY (agy's probe-3 on PR #30): the ORC_ONESHOT exemption is safe only because guard-write.sh blocks the spoof it depends on =="
+# The exemption above trusts that no agent can rewrite .claude/settings.json's
+# Stop hook entry to inject ORC_ONESHOT=1. That guarantee lives in
+# guard-write.sh (issue #31), not in this hook -- verify it end-to-end here
+# so the two files' safety claims can't drift apart silently.
+GUARD_WRITE="$DIR/../lib/guard-write.sh"
+SPOOF_PAYLOAD="$(jq -n --arg fp ".claude/settings.json" '{tool_input: {file_path: $fp}}')"
+SPOOF_OUT="$(echo "$SPOOF_PAYLOAD" | bash "$GUARD_WRITE" 2>&1)"
+SPOOF_STATUS=$?
+if [ "$SPOOF_STATUS" -eq 2 ]; then
+  pass "guard-write.sh blocks the exact injection vector (editing .claude/settings.json's Stop hook to add ORC_ONESHOT=1)"
+else
+  fail "SECURITY REGRESSION: guard-write.sh should block writes to .claude/settings.json (the ORC_ONESHOT spoof vector), got status=$SPOOF_STATUS: $SPOOF_OUT"
+fi
+
 echo "== handoff.md at/under 100 lines: no warning =="
 touch "$SANDBOX/.harness/.session-start"
 sleep 1
