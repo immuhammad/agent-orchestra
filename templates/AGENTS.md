@@ -132,8 +132,10 @@ agent-orchestra's own #107 decision log for the reasoning).
   to you.
 
 ## Handoff Protocol (MANDATORY)
-- Before starting ANY work: read `.harness/handoff.md` and your
-  project's epic/task tracker.
+- Before starting ANY work: read `.harness/handoff.md` (current task
+  state), `.harness/decisions.log` (durable cross-session context — past
+  decisions and why), your project's memory, and your project's
+  epic/task tracker.
 - Before ending ANY stage or session: update `.harness/handoff.md` with:
   current task/issue #, branch, what's done, what's next, gotchas.
 - **Replace, don't append — history lives in git**: `handoff.md` is a
@@ -142,6 +144,12 @@ agent-orchestra's own #107 decision log for the reasoning).
   with the current picture. `git log -p .harness/handoff.md` IS the
   archive. `check-handoff.sh` (Stop hook) additionally WARNS (does not
   block) when the file exceeds ~100 lines, as a drift signal.
+- **`handoff.md` is ephemeral, `decisions.log` is durable**: `handoff.md`
+  only ever describes the CURRENT session's state and gets replaced
+  wholesale next session — it is not where you look for why a past
+  decision was made. `decisions.log` (append-only, every agent may add to
+  it) plus your project's memory are the durable record; point future
+  readers there, not at `handoff.md`.
 - Hooks enforce this. Do not fight the hooks.
 - **Single-writer rule for shared state**: only the agent that OWNS the
   current stage writes `handoff.md` in the shared repo checkout — that's
