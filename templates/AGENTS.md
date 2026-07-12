@@ -103,14 +103,14 @@ agent-orchestra's own #107 decision log for the reasoning).
   single-writer rule inline (below) — a reviewer's own hook config is a
   best-effort deny-list, not a substitute for the instruction actually
   reaching it. Minimum wording: "Review PR #<n> for issue #<n>. Run your
-  /code-review skill (applies `templates/review-protocol.md`). Post your
+  /code-review skill (applies `review-protocol.md`). Post your
   verdict as a PR review comment (APPROVE/REQUEST-CHANGES) and ack this
   message. Do NOT edit handoff.md or run git write ops
   (restore/checkout/commit/reset) in this checkout — see the
   single-writer rule below." If the diff touches auth, a `guard*.sh`
-  script, or any push/merge path, also explicitly ask for the dedicated
-  security pass `templates/review-protocol.md` describes for that diff
-  class, not just the general rubric.
+  script, or any push/merge path, it's a **risky diff** — also explicitly
+  ask for the dedicated security pass `review-protocol.md` describes for
+  that diff class, not just the general rubric.
 - Merge-watch: the watch pane runs `lib/watch.sh`, not a bare `watch`
   command. Each loop iteration it also: (1) polls for newly-merged PRs
   and comment+closes the linked issue directly (mechanical, no agent

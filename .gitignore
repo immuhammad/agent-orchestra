@@ -17,3 +17,12 @@ watch-flagged-dead
 # installed copies, never tracked
 .claude/skills/
 .agents/skills/
+
+# per-project root files (issue #18 item 4) -- each project that adopts
+# this harness copies these from templates/ and customizes its own copy;
+# never tracked here (or in a consumer project). templates/*.md are the
+# tracked reference/seed.
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/review-protocol.md
