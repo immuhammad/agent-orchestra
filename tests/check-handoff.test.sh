@@ -66,6 +66,30 @@ else
   fail "expected exit 0 + a >100-line WARNING, got status=$STATUS: $OUT"
 fi
 
+echo "== issue #23: ORC_ONESHOT=1 exempts a one-shot/headless session from the handoff Stop hook =="
+# A one-shot scribe's OWN .session-start marker is, by construction, always
+# newer than any handoff.md written before it spawned -- the exact stale
+# state the block above exists to catch for a stage-owning PANE agent. A
+# one-shot session is not one (and per AGENTS.md's single-writer rule must
+# NEVER write handoff.md anyway), so it must not hit this block at all.
+touch -d '+1 hour' "$SANDBOX/.harness/.session-start" 2>/dev/null || touch -t 203001010000 "$SANDBOX/.harness/.session-start"
+OUT="$(cd "$SANDBOX" && echo '{}' | ORC_ONESHOT=1 bash .harness/check-handoff.sh 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ -z "$OUT" ]; then
+  pass "ORC_ONESHOT=1 exits 0 with no output even when handoff.md is stale relative to the marker"
+else
+  fail "ORC_ONESHOT=1 should skip the check entirely (got status=$STATUS output: $OUT)"
+fi
+
+echo "== issue #23: without ORC_ONESHOT, the same stale state still blocks (no accidental widening) =="
+OUT="$(run_hook)"
+STATUS=$?
+if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q "not updated this session"; then
+  pass "pane-agent sessions (no ORC_ONESHOT) are still blocked by stale handoff.md"
+else
+  fail "expected the normal block to still apply without ORC_ONESHOT (got status=$STATUS): $OUT"
+fi
+
 echo "== handoff.md at/under 100 lines: no warning =="
 touch "$SANDBOX/.harness/.session-start"
 sleep 1

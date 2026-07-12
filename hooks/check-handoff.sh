@@ -5,6 +5,15 @@ INPUT=$(cat)
 if [ "$(echo "$INPUT" | jq -r '.stop_hook_active // "false"')" = "true" ]; then
   exit 0
 fi
+# issue #23: a one-shot/headless session (e.g. the spawned scribe) sets its
+# OWN .session-start marker on boot, which is by construction always newer
+# than any handoff.md written before it spawned -- the exact stale state
+# this hook exists to catch for a stage-owning PANE agent. A one-shot
+# session is not one, and per AGENTS.md's single-writer rule must NEVER
+# write handoff.md anyway, so the hook must not order it to. The handoff
+# rule is for stage-owning pane agents only.
+[ "${ORC_ONESHOT:-0}" = "1" ] && exit 0
+
 HANDOFF=".harness/handoff.md"
 MARKER=".harness/.session-start"
 # If no session marker exists, don't block (first run / manual session)

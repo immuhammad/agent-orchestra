@@ -205,7 +205,7 @@ nudge_agent() {
 # existing poll loop below already waits for the .ack to appear no matter
 # who writes it.
 scribe_spawn_headless() {
-  local msg_file="$1" ack_file="$2" msg_body prompt project_name
+  local msg_file="$1" ack_file="$2" msg_body prompt project_name allowed_tools log_file
   msg_body="$(cat "$msg_file" 2>/dev/null)"
   # issue #18 B3: this used to hardcode "career-ops-harness" (this
   # harness's original single-consumer project) -- project-agnostic now,
@@ -225,7 +225,38 @@ $msg_body
 
 Do the judgment task described above. When finished, write exactly one line -- what you did, or SKIPPED: <reason> if it does not apply -- to this file: $ack_file
 Do nothing else outside the scope of this message."
-  ( claude -p --model haiku "$prompt" >/dev/null 2>&1 & )
+
+  # issue #23, 3 fixes in one spawn:
+  #  (a) ORC_ONESHOT=1 tells check-handoff.sh's Stop hook to exempt this
+  #      session -- a one-shot's own .session-start marker is always newer
+  #      than any handoff.md written before it spawned, and per AGENTS.md's
+  #      single-writer rule the scribe must never write that file anyway.
+  #  (b) --allowedTools grants EXACTLY what the scribe's job needs (the gh
+  #      calls AGENTS.md scopes Reviewer/Scribe output to, plus its own
+  #      .ack write) so it never blocks on a permission prompt a headless
+  #      `-p` run cannot answer. This narrows what Claude attempts without
+  #      asking -- the PreToolUse guards (guard.sh/guard-write.sh) still run
+  #      underneath it, so this is not a --dangerously-skip-permissions
+  #      substitute.
+  #  (c) stdout+stderr go to a real log file, not /dev/null -- and if the
+  #      process exits without ever writing $ack_file, we write a
+  #      SPAWN-FAILED ack ourselves so a dead/blocked/crashed run is never
+  #      silent again (previously indistinguishable from a never-started
+  #      one).
+  allowed_tools="Read,Grep,Glob,Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh issue view:*),Bash(gh pr *),Bash(bash lib/log-decision.sh:*),Write($ack_file)"
+  mkdir -p "$CANON_DIR/state"
+  # $$ (this shell's PID), not just a timestamp: date has no portable
+  # sub-second resolution (GNU %N isn't available on macOS/BSD date), and
+  # two scribe spawns landing in the same second would otherwise clobber
+  # each other's log file.
+  log_file="$CANON_DIR/state/scribe-$(date '+%Y%m%d%H%M%S')-$$.log"
+
+  (
+    ORC_ONESHOT=1 claude -p --model haiku --allowedTools "$allowed_tools" "$prompt" >"$log_file" 2>&1
+    if [ ! -s "$ack_file" ]; then
+      echo "SPAWN-FAILED: headless scribe exited without writing an ack -- see $log_file" > "$ack_file"
+    fi
+  ) &
 }
 
 # retry_deferred_nudges (T24) -- drains DEFERRED_FILE, re-attempting a nudge

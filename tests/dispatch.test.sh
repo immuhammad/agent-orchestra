@@ -237,7 +237,7 @@ FAKE_BIN="$SCRIBE_SCRATCH/bin"
 mkdir -p "$FAKE_BIN"
 cat > "$FAKE_BIN/claude" <<'FAKECLAUDE'
 #!/bin/bash
-echo "$*" >> "$CLAUDE_CALLS_FILE"
+echo "ORC_ONESHOT=${ORC_ONESHOT:-unset} ARGS: $*" >> "$CLAUDE_CALLS_FILE"
 # Find the .ack path the prompt asked us to write to and write a receipt,
 # simulating the real headless run completing its judgment task.
 ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
@@ -267,6 +267,27 @@ if ! grep -q "career-ops-harness" "$CLAUDE_CALLS"; then
 else
   fail "scribe prompt should not hardcode career-ops-harness: $(cat "$CLAUDE_CALLS")"
 fi
+if grep -q "ORC_ONESHOT=1" "$CLAUDE_CALLS"; then
+  pass "issue #23: headless scribe runs with ORC_ONESHOT=1 exported (exempts it from the handoff Stop hook)"
+else
+  fail "issue #23: expected ORC_ONESHOT=1 in the spawned claude's environment: $(cat "$CLAUDE_CALLS")"
+fi
+if grep -q -- "--allowedTools" "$CLAUDE_CALLS"; then
+  pass "issue #23: headless scribe is spawned with explicit --allowedTools (never blocks on an unanswerable prompt)"
+else
+  fail "issue #23: expected --allowedTools in the spawned claude call: $(cat "$CLAUDE_CALLS")"
+fi
+if grep -q -- "--dangerously-skip-permissions" "$CLAUDE_CALLS"; then
+  fail "issue #23: must NOT widen the blast radius with --dangerously-skip-permissions -- scope with --allowedTools instead"
+else
+  pass "issue #23: headless scribe does not bypass permissions wholesale"
+fi
+ACK_9010="$(ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9010.ack 2>/dev/null | head -1)"
+if [ -n "$ACK_9010" ] && grep -qF "Write($ACK_9010)" "$CLAUDE_CALLS"; then
+  pass "issue #23: --allowedTools scopes the Write grant to exactly this dispatch's own .ack path"
+else
+  fail "issue #23: expected --allowedTools to scope Write to $ACK_9010: $(cat "$CLAUDE_CALLS")"
+fi
 
 echo "== issue #22: legacy 'copilot' verb resolves INTO 'scribe's physical inbox dir (inverted alias) =="
 : > "$CLAUDE_CALLS"
@@ -291,6 +312,29 @@ if [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q "received"; then
   pass "handoff scribe received the headless run's own .ack before timing out"
 else
   fail "handoff scribe should receive the spawned run's .ack (status=$STATUS): $OUT"
+fi
+echo "== issue #23: a headless run that exits WITHOUT writing an ack gets a SPAWN-FAILED ack, and output is logged, not swallowed =="
+CRASH_BIN="$SCRIBE_SCRATCH/crash-bin"
+mkdir -p "$CRASH_BIN"
+cat > "$CRASH_BIN/claude" <<'CRASHCLAUDE'
+#!/bin/bash
+echo "simulated crash: no human to answer the permission prompt" >&2
+exit 1
+CRASHCLAUDE
+chmod +x "$CRASH_BIN/claude"
+OUT="$(PATH="$CRASH_BIN:$PATH" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign scribe 9013 "this run will crash" 2>&1)"
+sleep 1
+ACK_9013="$(ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9013.ack 2>/dev/null | head -1)"
+if [ -n "$ACK_9013" ] && grep -q "^SPAWN-FAILED" "$ACK_9013"; then
+  pass "issue #23: a crashed/no-ack headless run leaves a diagnosable SPAWN-FAILED ack, not silence"
+else
+  fail "issue #23: expected a SPAWN-FAILED ack after the headless run exited without one (found: ${ACK_9013:-none})"
+fi
+LOG_FILE="$(ls "$SCRIBE_SCRATCH"/state/scribe-*.log 2>/dev/null | tail -1)"
+if [ -n "$LOG_FILE" ] && grep -q "simulated crash" "$LOG_FILE"; then
+  pass "issue #23: the headless run's stderr is captured in a log file, not sent to /dev/null"
+else
+  fail "issue #23: expected the crash's stderr in a .harness/state/scribe-*.log file (found: ${LOG_FILE:-none})"
 fi
 rm -rf "$SCRIBE_SCRATCH"
 
