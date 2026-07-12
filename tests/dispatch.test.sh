@@ -225,9 +225,9 @@ rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
 echo "== issue #89: assign/handoff scribe spawns a one-shot headless run, not a pane nudge =="
 # Its own scratch CANON_DIR (via DISPATCH_CANON_DIR) so this never touches
-# the real copilot inbox's actual history.
+# a real project's inbox history.
 SCRIBE_SCRATCH="$(mktemp -d)"
-mkdir -p "$SCRIBE_SCRATCH/inbox/copilot"
+mkdir -p "$SCRIBE_SCRATCH/inbox/scribe"
 CLAUDE_CALLS="$SCRIBE_SCRATCH/claude-calls.log"
 : > "$CLAUDE_CALLS"
 # Fake `claude` on PATH (dispatch_main runs as a subprocess via `bash
@@ -257,10 +257,10 @@ if grep -q -- "--model haiku" "$CLAUDE_CALLS"; then
 else
   fail "expected the spawned claude call to use --model haiku: $(cat "$CLAUDE_CALLS")"
 fi
-if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9010.msg >/dev/null 2>&1; then
-  pass "the .msg still landed in the durable inbox (copilot dir -- scribe's real physical inbox)"
+if ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9010.msg >/dev/null 2>&1; then
+  pass "the .msg landed in the durable inbox (scribe dir -- scribe's real physical inbox, issue #22)"
 else
-  fail "expected the .msg in the copilot inbox dir (scribe's alias target)"
+  fail "expected the .msg in the scribe inbox dir"
 fi
 if ! grep -q "career-ops-harness" "$CLAUDE_CALLS"; then
   pass "issue #18 B3: the scribe prompt no longer hardcodes 'career-ops-harness' (project-agnostic)"
@@ -268,11 +268,11 @@ else
   fail "scribe prompt should not hardcode career-ops-harness: $(cat "$CLAUDE_CALLS")"
 fi
 
-echo "== issue #89: 'copilot' alias resolves to the SAME inbox/spawn behavior as 'scribe' =="
+echo "== issue #22: legacy 'copilot' verb resolves INTO 'scribe's physical inbox dir (inverted alias) =="
 : > "$CLAUDE_CALLS"
 OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign copilot 9011 "another judgment task" 2>&1)"
 sleep 1
-if ls "$SCRIBE_SCRATCH"/inbox/copilot/*-9011.msg >/dev/null 2>&1; then
+if ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9011.msg >/dev/null 2>&1; then
   pass "'copilot' still lands in the same physical inbox dir as 'scribe'"
 else
   fail "'copilot' alias should resolve to the same inbox dir as 'scribe'"
@@ -293,6 +293,34 @@ else
   fail "handoff scribe should receive the spawned run's .ack (status=$STATUS): $OUT"
 fi
 rm -rf "$SCRIBE_SCRATCH"
+
+echo "== issue #22: assign scribe succeeds in a FRESH room seeded only with inbox/scribe/ (no legacy copilot/) =="
+FRESH_ROOM="$(mktemp -d)"
+mkdir -p "$FRESH_ROOM/inbox/scribe"
+CLAUDE_CALLS2="$FRESH_ROOM/claude-calls.log"
+: > "$CLAUDE_CALLS2"
+OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS2" DISPATCH_CANON_DIR="$FRESH_ROOM" bash "$DISPATCH" assign scribe 9020 "fresh room task" 2>&1)"
+sleep 1
+if ls "$FRESH_ROOM"/inbox/scribe/*-9020.msg >/dev/null 2>&1; then
+  pass "issue #22: assign scribe writes .msg into inbox/scribe/ in a fresh room with no copilot/ dir"
+else
+  fail "issue #22: assign scribe should resolve to inbox/scribe/ in a fresh clone-per-project room (got: $OUT)"
+fi
+rm -rf "$FRESH_ROOM"
+
+echo "== issue #22: legacy 'copilot' dispatch verb still lands somewhere valid (aliases TO scribe/, not the reverse) =="
+LEGACY_ROOM="$(mktemp -d)"
+mkdir -p "$LEGACY_ROOM/inbox/scribe"
+CLAUDE_CALLS3="$LEGACY_ROOM/claude-calls.log"
+: > "$CLAUDE_CALLS3"
+OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS3" DISPATCH_CANON_DIR="$LEGACY_ROOM" bash "$DISPATCH" assign copilot 9021 "legacy verb task" 2>&1)"
+sleep 1
+if ls "$LEGACY_ROOM"/inbox/scribe/*-9021.msg >/dev/null 2>&1; then
+  pass "issue #22: legacy 'copilot' verb resolves into inbox/scribe/ (inverted alias)"
+else
+  fail "issue #22: legacy 'copilot' verb should resolve into inbox/scribe/, not require a copilot/ dir (got: $OUT)"
+fi
+rm -rf "$LEGACY_ROOM"
 
 echo "== unmapped agent name: never nudges (pane_for_agent has no entry) =="
 OUT="$(bash "$DISPATCH" assign testagent 9005 "hello" 2>&1)"

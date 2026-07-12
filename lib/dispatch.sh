@@ -87,15 +87,18 @@ pane_for_agent() {
 }
 
 # inbox_dir_name <agent> -- resolves the on-disk inbox directory for an
-# agent name. `scribe` is the current display name (issue #89), but its
-# real inbox history (including the suspect-ack cleanup from #89's own
-# scope) lives under the original `copilot` directory -- renaming the
-# directory would fragment that history, so both names deliberately
-# resolve to the SAME physical inbox instead.
+# agent name. `scribe` is the current display name (issue #89) AND the
+# current physical directory -- a fresh clone-per-project room is seeded
+# with inbox/scribe/, not inbox/copilot/ (issue #22: aliasing scribe TO
+# copilot made dispatch hard-fail in every fresh room, since no clone has a
+# copilot/ dir or history to preserve). `copilot` is kept as a legacy verb
+# that aliases INTO scribe/, so a caller still using the old name lands
+# somewhere valid instead of failing outright; it is not itself a live
+# inbox directory in any room this repo creates.
 inbox_dir_name() {
   case "$1" in
-    scribe) echo "copilot" ;;
-    *)      echo "$1" ;;
+    copilot) echo "scribe" ;;
+    *)       echo "$1" ;;
   esac
 }
 

@@ -171,6 +171,20 @@ grep -q 'protected_paths=career-ops/' "$TMP/build.err" && pass "build log report
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
+echo "== issue #22: orc_build_session seeds the inbox dirs dispatch.sh actually uses, not a hand-made layout =="
+for agent in orchestra builder agy scribe; do
+  if [ -d "$TMP/.harness/inbox/$agent" ]; then
+    pass "orc_build_session seeded inbox/$agent"
+  else
+    fail "orc_build_session should have seeded inbox/$agent (fresh room must not rely on a hand-made layout)"
+  fi
+done
+if [ -d "$TMP/.harness/inbox/copilot" ]; then
+  fail "orc_build_session should NOT seed a legacy inbox/copilot dir in a fresh room (issue #22: scribe/ is the live physical dir now)"
+else
+  pass "fresh room has no legacy inbox/copilot dir"
+fi
+
 echo "== orc.sh: ORC_SESSION defaults to THIS project's own session, not a shared 'harness' (issue #18 item 7 / #19) =="
 DEFAULT_SESSION_OUT="$(
   cd "$TMP"
