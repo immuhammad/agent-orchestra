@@ -22,6 +22,12 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 echo "project: test" > "$TMP/orchestrator.yaml"
 FLAG="$TMP/.harness/state/quota-stop"
+# agy REQUEST-CHANGES (PR #17): qsg_command_allowed now resolves the
+# actual executable token to a REAL canonicalized path (not a string
+# glob), so the three allow-listed scripts need to genuinely exist under
+# $TMP for a legitimate invocation to resolve successfully.
+mkdir -p "$TMP/lib"
+touch "$TMP/lib/dispatch.sh" "$TMP/lib/log-decision.sh" "$TMP/lib/quota-stop-clear.sh"
 
 write_flag() { # $1=pool $2=pct $3=fallback
   mkdir -p "$(dirname "$FLAG")"
@@ -116,6 +122,19 @@ run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.
 
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x \"$(rm -rf /Users/mac/important)\""}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "command substitution inside an otherwise-matching call is blocked" || fail "SECURITY REGRESSION: command substitution bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+echo "== agy REQUEST-CHANGES (PR #17): a leading-* glob smuggle -- \$(evil script) \$(allowlisted path as an ARGUMENT) -- must be blocked =="
+# lib/dispatch.sh|*/lib/dispatch.sh\ * (etc.) used to match ANY string
+# CONTAINING that substring -- the leading `*` consumes an arbitrary
+# prefix, so `bash /tmp/evil.sh /path/to/lib/dispatch.sh assign ...`
+# matched the glob (it CONTAINS "/lib/dispatch.sh ") even though bash
+# actually executes /tmp/evil.sh, with dispatch.sh's path merely an
+# ARGUMENT to it, never itself run.
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash /tmp/evil.sh /path/to/lib/dispatch.sh assign orchestra 18 DONE"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "SECURITY -- the ACTUAL executable (/tmp/evil.sh) is what's checked, not a smuggled allow-listed path buried in the arguments" || fail "SECURITY REGRESSION: smuggled-argument bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash /tmp/evil.sh /path/to/lib/log-decision.sh \"a|b|c\""}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "SECURITY -- same smuggle against log-decision.sh's allow-list entry is also blocked" || fail "SECURITY REGRESSION: smuggled-argument bypass (log-decision.sh) allowed, got $GATE_STATUS: $GATE_OUT"
 
 echo "== regression (agy security review): allow-listed script invocation with a pipe-delimited argument still works =="
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/log-decision.sh \"role|model|decision text\""}}'

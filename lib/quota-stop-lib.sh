@@ -194,11 +194,12 @@ qsg_split_top_level() {
   echo "$cur"
 }
 
-# qsg_command_allowed <command string> -- the ONLY Bash invocations let
-# through: decisions.log append, inbox dispatch (report-back), and the
-# explicit manual quota-stop clear (lib/quota-stop-clear.sh -- the "Ahmad's
-# a/b/c answer was recorded" signal, see that file's own header for why
-# this is a deliberate human action, not an inferred heuristic).
+# qsg_command_allowed <command string> <canon_dir> -- the ONLY Bash
+# invocations let through: decisions.log append, inbox dispatch
+# (report-back), and the explicit manual quota-stop clear
+# (lib/quota-stop-clear.sh -- the "Ahmad's a/b/c answer was recorded"
+# signal, see that file's own header for why this is a deliberate human
+# action, not an inferred heuristic).
 #
 # Requires the ENTIRE command to be (optionally through an interpreter)
 # exactly one of those three invocations -- NOT merely contain the script
@@ -216,9 +217,22 @@ qsg_split_top_level() {
 # qsg_split_top_level's sentinel (finding 1, agy's dedicated security
 # review). Every remaining UNQUOTED top-level segment must independently
 # match the allow-list, anchored at the segment's start.
+#
+# agy REQUEST-CHANGES on PR #17: the per-segment check USED to be a glob
+# like `*/lib/dispatch.sh\ *` -- the leading `*` matches ANY prefix, so
+# `bash /tmp/evil.sh /path/to/lib/dispatch.sh assign orchestra x DONE`
+# satisfied it (the string CONTAINS "/lib/dispatch.sh ") even though bash
+# actually executes /tmp/evil.sh, with dispatch.sh's path merely an
+# ARGUMENT never itself run. Fixed by checking WHAT'S ACTUALLY EXECUTED --
+# the segment's FIRST token after stripping an optional bash/sh prefix --
+# resolved to its REAL canonicalized path (same `cd` + `pwd -P` approach
+# guard.sh's G13 check uses) and required to be EXACTLY one of the three
+# allowed scripts under this project's own root (dirname of canon_dir),
+# not a substring/glob any leading path can satisfy.
 qsg_command_allowed() {
-  local cmd="$1" seg trimmed rest split
+  local cmd="$1" canon_dir="$2" seg trimmed rest exe_token resolved_exe project_root allowed split candidate
   [ -z "$cmd" ] && return 1
+  project_root="$(cd "$canon_dir/.." 2>/dev/null && pwd -P)" || return 1
   case "$cmd" in
     *'$('*|*'`'*|*'&'*) return 1 ;;
   esac
@@ -234,12 +248,23 @@ qsg_command_allowed() {
       bash\ *) rest="${rest#bash }" ;;
       sh\ *) rest="${rest#sh }" ;;
     esac
-    case "$rest" in
-      lib/dispatch.sh|lib/dispatch.sh\ *|*/lib/dispatch.sh|*/lib/dispatch.sh\ *) ;;
-      lib/log-decision.sh|lib/log-decision.sh\ *|*/lib/log-decision.sh|*/lib/log-decision.sh\ *) ;;
-      lib/quota-stop-clear.sh|lib/quota-stop-clear.sh\ *|*/lib/quota-stop-clear.sh|*/lib/quota-stop-clear.sh\ *) ;;
-      *) return 1 ;;
+    exe_token="${rest%% *}"
+    [ -z "$exe_token" ] && exe_token="$rest"
+    # `|| true`: a failing cd (exe_token's directory doesn't exist) must
+    # fall through to the empty-resolved_exe reject below, not abort under
+    # `set -e` (this file is sourced into callers that have it set).
+    resolved_exe="$(cd "$project_root" 2>/dev/null && cd "$(dirname "$exe_token")" 2>/dev/null && echo "$(pwd -P)/$(basename "$exe_token")")" || true
+    case "$resolved_exe" in
+      "") return 1 ;;
     esac
+    allowed=0
+    for candidate in lib/dispatch.sh lib/log-decision.sh lib/quota-stop-clear.sh; do
+      if [ "$resolved_exe" = "$project_root/$candidate" ]; then
+        allowed=1
+        break
+      fi
+    done
+    [ "$allowed" -eq 1 ] || return 1
   done <<< "$split"
   return 0
 }

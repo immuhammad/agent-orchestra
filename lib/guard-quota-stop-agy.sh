@@ -31,7 +31,7 @@ if [ ! -f "$FLAG_PATH" ]; then
 fi
 
 COMMAND=$(echo "$INPUT" | jq -r '.toolCall.args.CommandLine // .toolCall.args.commandLine // empty')
-if [ -n "$COMMAND" ] && qsg_command_allowed "$COMMAND"; then
+if [ -n "$COMMAND" ] && qsg_command_allowed "$COMMAND" "$CANON_DIR"; then
   echo '{"decision":"allow"}'
   exit 0
 fi

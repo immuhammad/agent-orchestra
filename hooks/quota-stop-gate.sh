@@ -48,7 +48,7 @@ case "$TOOL_NAME" in
     fi
     ;;
   Bash)
-    if [ -n "$COMMAND" ] && qsg_command_allowed "$COMMAND"; then
+    if [ -n "$COMMAND" ] && qsg_command_allowed "$COMMAND" "$CANON_DIR"; then
       exit 0
     fi
     ;;
