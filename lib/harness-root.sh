@@ -2,12 +2,14 @@
 # lib/harness-root.sh — resolves the CANONICAL .harness directory for
 # inbox/state/log writes.
 #
-# Generalized for epic #91a (issue #116): these scripts now live in the
-# agent-orchestra repo's own lib/, separate from any consumer project, so
-# resolving off the SCRIPT's own directory (the old `dirname
-# ${BASH_SOURCE[0]}` / "$script_dir" pattern) would anchor state to this
-# shared installation instead of whichever project invoked it. Resolution
-# is now caller-cwd-based instead:
+# Generalized for epic #91a (issue #116): every project runs its own clone
+# of agent-orchestra (clone-per-project, issue #18 item 8) with these
+# scripts in its own lib/, so resolving off the SCRIPT's own directory (the
+# old `dirname ${BASH_SOURCE[0]}` / "$script_dir" pattern) would anchor
+# state to whichever clone happens to be invoked instead of the project it
+# was invoked FOR (relevant even within a single clone-per-project setup
+# when one clone nests another as a dev target, e.g. this repo's own
+# project/agent-orchestra/). Resolution is now caller-cwd-based instead:
 #
 #   1. ORC_PROJECT_ROOT env var, if set, wins outright (explicit override
 #      for hooks/CI/tests that can't rely on cwd).

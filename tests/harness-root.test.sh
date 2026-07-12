@@ -84,6 +84,20 @@ else
   fail "worktree_canonical_dir must never return the worktree's own .harness"
 fi
 
+echo "== issue #18 (item 8): a NESTED clone-per-project dev target (its own orchestrator.yaml, inside an OUTER project's tree) resolves to its own .harness, not the outer one =="
+OUTER="$SCRATCH/outer-harness"
+mkdir -p "$OUTER"
+echo "project: outer" > "$OUTER/orchestrator.yaml"
+NESTED_PROJECT="$OUTER/project/agent-orchestra"
+mkdir -p "$NESTED_PROJECT"
+echo "project: agent-orchestra" > "$NESTED_PROJECT/orchestrator.yaml"
+GOT_NESTED_PROJECT="$(harness_canonical_dir "$NESTED_PROJECT")"
+if [ "$GOT_NESTED_PROJECT" = "$NESTED_PROJECT/.harness" ]; then
+  pass "nested dev-target clone resolves to ITS OWN .harness, not walking past it to the outer project's"
+else
+  fail "expected $NESTED_PROJECT/.harness, got $GOT_NESTED_PROJECT"
+fi
+
 echo "== harness_canonical_dir: ORC_PROJECT_ROOT overrides discovery outright =="
 NOGIT="$SCRATCH/not-a-repo"
 mkdir -p "$NOGIT"
