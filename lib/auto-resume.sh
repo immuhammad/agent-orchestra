@@ -71,25 +71,58 @@ ar_today() { date -u +%Y-%m-%d; }
 # racing the real clock against fixed resets_at fixtures.
 ar_now_epoch() { echo "${AUTO_RESUME_NOW_EPOCH:-$(date -u +%s)}"; }
 
-# ar_epoch_from_iso8601 <ISO-8601 timestamp, e.g. 2026-07-11T18:00:00Z> --
-# cross-platform epoch-seconds parse. Tries GNU `date -d` first (Linux/CI;
-# also harmless to try on BSD since -d isn't a recognized BSD date flag and
-# just fails over to the next branch), then BSD `date -j -f` (darwin dev
-# machines). Echoes the epoch on success; returns 1 with nothing on stdout
-# if neither can parse it (caller must treat empty output as "unknown",
-# never guess).
+# ar_epoch_from_iso8601 <ISO-8601 timestamp> -- cross-platform epoch-seconds
+# parse. Handles both the plain shape our own fixtures use
+# (2026-07-11T18:00:00Z) and the REAL Claude usage-API shape, which carries
+# fractional seconds AND a numeric offset (2026-07-12T20:39:59.719039+00:00)
+# -- BSD `date -j -f` cannot be handed either of those (its format string
+# would need to match exactly, and a literal "Z" doesn't match "+00:00"),
+# and GNU `date -d` isn't available on darwin at all. #32: this one function
+# is the ONLY resets_at parser in this codebase (both ar_write_quota_stop_flag
+# and ar_poll_pane's resume comparison call it) -- there is no second,
+# "working" parse path to collapse into it.
+#
+# Approach: regex out the date/time separately from any fractional seconds
+# and offset, parse the bare "YYYY-MM-DDTHH:MM:SS" as UTC (both GNU and BSD
+# date handle that shape fine once fraction/offset are stripped), then
+# apply the offset as plain arithmetic. Echoes the epoch on success; returns
+# 1 with nothing on stdout if the input doesn't match (caller must treat
+# empty output as "unknown", never guess).
 ar_epoch_from_iso8601() {
-  local ts="$1" epoch
+  local ts="$1" base offset epoch off_sign off_h off_m off_sec
   [ -z "$ts" ] && return 1
-  if epoch="$(date -u -d "$ts" +%s 2>/dev/null)"; then
-    echo "$epoch"
-    return 0
+
+  if [[ "$ts" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?$ ]]; then
+    base="${BASH_REMATCH[1]}"
+    offset="${BASH_REMATCH[3]:-Z}"
+  else
+    return 1
   fi
-  if epoch="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null)"; then
-    echo "$epoch"
-    return 0
+
+  if epoch="$(date -u -d "${base}Z" +%s 2>/dev/null)"; then
+    :
+  elif epoch="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "${base}Z" +%s 2>/dev/null)"; then
+    :
+  else
+    return 1
   fi
-  return 1
+
+  if [ "$offset" != "Z" ]; then
+    off_sign="${offset:0:1}"
+    off_h="${offset:1:2}"
+    off_m="${offset: -2}"
+    off_h=$((10#$off_h))
+    off_m=$((10#$off_m))
+    off_sec=$((off_h * 3600 + off_m * 60))
+    if [ "$off_sign" = "+" ]; then
+      epoch=$((epoch - off_sec))
+    else
+      epoch=$((epoch + off_sec))
+    fi
+  fi
+
+  echo "$epoch"
+  return 0
 }
 
 # ar_meaningful_tail -- thin alias for send-lib.sh's send_meaningful_tail
