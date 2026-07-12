@@ -38,8 +38,18 @@ send_meaningful_tail() {
 # while clear (C-u) -> retype -> beat -> one fresh Enter submitted first
 # try. So the retry clears and retypes instead of sending another bare
 # Enter.
+#
+# issue #33/#38: C-u ALSO fires before the FIRST type attempt, not only on
+# a stuck-input retry. The retry branch above only catches send_submit's
+# OWN text getting stuck; it does nothing about content already sitting on
+# the input line before send_submit was ever called (ghost/hint-adjacent
+# leftovers, a half-typed prior message) -- that stray content silently
+# merges with the first attempt's typed text, corrupting whatever gets
+# submitted. Live-hit three times. C-u on an already-empty line is a no-op,
+# so this is safe on the common case too.
 send_submit() {
   local target="$1" text="$2" tail
+  tmux send-keys -t "$target" C-u 2>/dev/null
   tmux send-keys -t "$target" -l -- "$text" 2>/dev/null
   sleep 1
   tmux send-keys -t "$target" Enter 2>/dev/null
