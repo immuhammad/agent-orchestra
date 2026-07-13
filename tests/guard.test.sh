@@ -620,27 +620,41 @@ expect_blocked "SECURITY -- issue #72 round 4: 'find -exec' inside a live substi
 expect_blocked "SECURITY -- issue #72 round 4: the reachable >(...) write-target misread agy asked about, closed for the find vector specifically -- find inside a process substitution is now blocked" \
   'echo hello > >(find . -exec tee .claude/settings.json \;)'
 
-echo "== issue #72 round 5 (Ahmad's parity directive): the inner substitution scanner and the top-level guard must reject the SAME executor/interpreter set, off ONE shared list =="
-# Ahmad's decision on the round-4 escalation: stop enumerating verbs one
-# at a time (bash -> python -> find -> process-sub was the same
-# whack-a-mole every round). The fix is STRUCTURAL parity -- one shared
-# opaque-executor definition (orc_is_opaque_executor in
-# cmd-inspect-lib.sh) consumed by BOTH guard.sh's top-level leading_verb
-# check and _orc_verb_is_write_suggestive, so the two can never drift the
-# way #52/#57 already taught this codebase two "matching" lists always
-# eventually do.
-echo "-- these must now BLOCK, both at the top level and one level deep inside a live substitution --"
-expect_blocked "SECURITY -- issue #72 round 5: 'bash -c \"tee ...\"' at the TOP LEVEL (no substitution at all) is a script interpreter running arbitrary inline code -- must fail closed" \
+echo "== issue #72 round 5-8 (Ahmad's parity directive, then the #84 split): the inner substitution scanner and the top-level guard must reject the SAME set, off ONE shared list -- but that shared list does NOT include plain script interpreters =="
+# Ahmad's round-5 decision: stop enumerating verbs one at a time (bash ->
+# python -> find -> process-sub was the same whack-a-mole every round).
+# The fix is STRUCTURAL parity -- one shared opaque-executor definition
+# (orc_is_opaque_executor in cmd-inspect-lib.sh) consumed by BOTH
+# guard.sh's top-level leading_verb check and _orc_verb_is_write_
+# suggestive, so the two can never drift the way #52/#57 already taught
+# this codebase two "matching" lists always eventually do.
+#
+# Rounds 5-6 put bash/sh/zsh/python/etc ON that shared list, unconditionally
+# blocked, closing the bash -c / python -c / bash -l -c bypasses below --
+# real, agy-confirmed exploits. But a live probe before Gate-2 sign-off
+# found this ALSO blocked the room's OWN load-bearing calls that run an
+# interpreter against a real SCRIPT FILE with no inline-code flag
+# (`python <scriptfile>`, and by construction any interpreter this list
+# would cover) -- the exact "blanket block breaks legitimate use" failure
+# mode Builder's own round-4 escalation had already warned about for this
+# exact class. Ahmad's decision (round 8): SPLIT. Distinguishing a
+# trusted script PATH from a dangerous inline-code STRING needs a real
+# allowlist design -- that's #84, not #78. Under #78, both of the exploits
+# below are a KNOWN, EXPLICITLY ACCEPTED gap matching main's pre-#72
+# behavior (not silently reopened -- tracked as #84), and the two
+# regression tests immediately after this block are what actually caught
+# the room-breaking version, so they stay as the load-bearing check now.
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -c \"tee ...\"' at the TOP LEVEL: KNOWN gap, deferred to #84's allowlist design, matches main's pre-#72 behavior" \
   'bash -c "tee .claude/settings.json"'
-expect_blocked "SECURITY -- issue #72 round 5: 'bash -c \"tee ...\"' INSIDE a live substitution -- must fail closed" \
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -c \"tee ...\"' INSIDE a live substitution: same deferral" \
   'echo $(bash -c "tee .claude/settings.json")'
-expect_blocked "SECURITY -- issue #72 round 5: 'python -c \"...\"' at the TOP LEVEL -- must fail closed" \
+expect_allowed "issue #72 round 8 (#84 split) -- 'python -c \"...\"' at the TOP LEVEL: same deferral" \
   'python -c "import os; os.system(\"tee .claude/settings.json\")"'
-expect_blocked "SECURITY -- issue #72 round 5: 'python -c \"...\"' INSIDE a live substitution -- must fail closed" \
+expect_allowed "issue #72 round 8 (#84 split) -- 'python -c \"...\"' INSIDE a live substitution: same deferral" \
   'echo $(python -c "import os; os.system(\"tee .claude/settings.json\")")'
-expect_blocked "SECURITY -- issue #72 round 5: agy's exact reachable >(...) exploit -- process substitution running bash -c is now blocked by the shared list, not just the find vector" \
+expect_allowed "issue #72 round 8 (#84 split) -- process substitution running bash -c: same deferral, #84's job to close" \
   'echo hello > >(bash -c "tee .claude/settings.json")'
-echo "-- these must stay ALLOWED (the whole reason parity is nuanced, not a blanket ban) --"
+echo "-- these must stay ALLOWED -- the room-breaking regression a live probe caught before Gate-2 --"
 run_guard_at_repo_root "bash lib/orc-worktree.sh finish 116"
 if [ "$GUARD_STATUS" -eq 0 ]; then
   echo "PASS: issue #72 round 5 regression -- THE ROOM'S OWN TEST-EXECUTION MECHANISM: 'bash script.sh' (a trusted script PATH, no inline-code flag) must stay allowed at the top level -- this is not a synthetic case, tests/*.test.sh in THIS repo run exactly this way"; PASS=$((PASS + 1))
@@ -699,10 +713,10 @@ expect_blocked "SECURITY -- issue #72 round 6: '\\\\tee .claude/settings.json' a
   '\tee .claude/settings.json'
 expect_blocked "SECURITY -- issue #72 round 6 regression -- '\\\\tee' was ALREADY correctly blocked inside a live substitution (agy confirmed this); must stay blocked after the top-level fix" \
   'echo $(\tee .claude/settings.json)'
-echo "-- bash with a flag BEFORE -c (top-level gap: the -c detection only checked the single immediate next word, so any other flag first hid it) --"
-expect_blocked "SECURITY -- issue #72 round 6: 'bash -l -c \"tee ...\"' at the TOP LEVEL -- a flag before -c must not hide the inline-code flag from detection" \
+echo "-- issue #72 round 8 (#84 split): 'bash -l -c' (any inline-code flag, with or without a preceding flag) is the SAME deferred class as bare 'bash -c' above, not a separate gap -- distinguishing this from a trusted 'bash script.sh' is #84's allowlist design job --"
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -l -c \"tee ...\"' at the TOP LEVEL: deferred to #84, same as bare bash -c" \
   'bash -l -c "tee .claude/settings.json"'
-expect_blocked "SECURITY -- issue #72 round 6 regression -- 'bash -l -c' was ALREADY correctly blocked inside a live substitution (agy confirmed this); must stay blocked" \
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -l -c' INSIDE a live substitution: same deferral" \
   'echo $(bash -l -c "tee .claude/settings.json")'
 echo "-- regressions: trusted script-path execution (source/dot AND bash/sh/zsh with flags) must stay allowed at the top level --"
 run_guard_at_repo_root "source lib/orc-config.sh"
@@ -716,6 +730,12 @@ if [ "$GUARD_STATUS" -eq 0 ]; then
   echo "PASS: issue #72 round 6 regression -- 'bash -v script.sh' (a non-c flag before a real trusted script path) is not newly blocked by the multi-flag -c scan"; PASS=$((PASS + 1))
 else
   echo "FAIL: 'bash -v script.sh' should not be newly blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+run_guard_at_repo_root "python lib/orc-config.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 8 (Ahmad's explicit ask, the #84-split load-bearing regression) -- 'python <scriptfile>' with NO inline-code flag stays allowed -- this is the exact call class the pre-fix version broke, and no test asserted it before this"; PASS=$((PASS + 1))
+else
+  echo "FAIL: 'python <scriptfile>' with no inline-code flag should stay allowed (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
 fi
 
 echo "== issue #72 round 7 (agy): unspaced subshell parens fuse into the leading word instead of being recognized as their own token =="

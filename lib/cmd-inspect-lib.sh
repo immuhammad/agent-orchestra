@@ -224,34 +224,34 @@ orc_tokenize_words() {
 # message, a git commit -m body, etc.) -- that's the other half of #39,
 # the false-positive an unanchored whole-string grep was causing.
 # orc_is_opaque_executor <word> -- (#72 round 5, Ahmad's parity
-# directive) true if <word> is a grouping token or an executor/
-# interpreter whose real behavior can't be determined by word-matching
-# alone: it either wraps a WHOLE OTHER command line as its own argument
-# (eval/sudo/time/env/...) or is an interpreter that can run arbitrary
-# code handed to it as a STRING (bash -c, python -c, ...) rather than
-# only ever reading a script FILE. THE ONE SHARED SOURCE for both
+# directive) true if <word> is a grouping token or an executor whose
+# real behavior can't be determined by word-matching alone -- it wraps a
+# WHOLE OTHER command line as its own argument (eval/sudo/time/env/find
+# -exec/coproc/trap/timeout/...) that this codebase cannot safely
+# unwrap and re-parse from scratch. THE ONE SHARED SOURCE for both
 # guard.sh's top-level leading_verb check and _orc_verb_is_write_
 # suggestive's inner-substitution check below -- #52 (the agy-dialect
 # deadlock) and #57 (the shared cmd-inspect-lib.sh itself) already taught
 # this codebase that two lists meant to match WILL drift, and the drift
-# is exactly where a hole opens: #72's own review history is bash ->
-# python -> find -> process-substitution, one round of whack-a-mole at a
-# time, because the inner scanner had its OWN copy of this list. One
-# function, called from both places, makes that drift structurally
-# impossible.
+# is exactly where a hole opens. One function, called from both places,
+# makes that drift structurally impossible.
 #
-# Unconditional block regardless of arguments, same posture #39 round 2
-# already gave eval -- there is no way to tell "bash -c '<harmless>'"
-# apart from "bash -c '<writes a protected file>'" by word-matching, so
-# both are blocked. This does NOT cover bash/sh/zsh running a TRUSTED
-# SCRIPT PATH (`bash script.sh`, the exact way every test in this suite
-# runs) -- orc_segment_leading_verb below only ever resolves bash/sh/zsh
-# to THIS word (instead of skipping through to the word after it) when
-# that next word is specifically an inline-code flag; a script-path
-# invocation resolves to the script path itself, which is a completely
-# separate question this function is never even asked about.
+# Deliberately excludes plain script interpreters (bash/sh/zsh/python/
+# perl/ruby/php/node/lua/make/awk) -- issue #72 rounds 5-7 unconditionally
+# blocked these too (closing real, agy-confirmed bypasses: bash -c,
+# python -c, bash -l -c hiding a write verb behind an inline-code flag),
+# but a live probe before Gate-2 sign-off found this ALSO broke the
+# room's own load-bearing calls that run an interpreter against a real
+# SCRIPT FILE with no inline-code flag at all (`python <scriptfile>`, and
+# by construction any interpreter this list would cover). Ahmad's
+# decision: split "distinguish `bash script.sh` (legitimate) from `bash
+# -c '<code>'` (opaque)" into its own ticket (#84) with a proper allowlist
+# design, rather than a blanket block here that can't tell them apart.
+# Under #78, `bash -c '...'` / `python -c '...'` (top level or inside a
+# substitution) ALLOW -- matching main's pre-#72 behavior, a known and
+# explicitly accepted gap, not silently reopened.
 #
-# Deliberately excludes sed, unlike agy's round-4 suggestion: sed is
+# Also deliberately excludes sed, unlike agy's round-4 suggestion: sed is
 # ALREADY conditionally handled (a write target only when -i is present,
 # see orc_segment_write_targets/_orc_verb_is_write_suggestive's own
 # tee|cp|mv|...|sed match) -- an UNCONDITIONAL block here would break the
@@ -261,31 +261,22 @@ orc_tokenize_words() {
 # command/flag inside a sed SCRIPT) is a real but much narrower and
 # different concern than "sed is an opaque wrapper" -- flagged as a
 # follow-up rather than folded in here at the cost of a regression.
-# issue #72 round 6 (agy's dedicated security pass on PR #78): source/.
-# added here too. guard.sh's top level has a SEPARATE, location-based
-# trust check for these (the script-exec-trust regex a few checks below
-# -- trusts a script path under this installation, blocks anything
-# else), so they were never a top-level gap. But the INNER substitution
-# scanner has no equivalent path-resolution machinery at all, so
-# `$(. /tmp/untrusted.sh)` sailed through it completely -- confirmed live
-# by agy. orc_segment_leading_verb below gives source/. the SAME
-# unconditional skip-through-to-the-script-path treatment as bash/sh/zsh
-# (they have no inline-code-string mode to guard against, unlike -c, so
-# no flag detection is needed), which means adding them here is
-# effectively INERT for the top-level path (it never actually resolves
-# to "source"/"." there) and exists purely to close the inner-scanner gap.
-# issue #72 round 7 (agy's dedicated security pass on PR #78): the
-# trailing !/do/then/else/elif/coproc/trap/timeout entries below were
-# each confirmed against real bash semantics before adding, not just
-# matched against agy's list blindly. coproc runs a command as a
-# coprocess. timeout (GNU) runs a command under a time limit. trap
-# defers execution to when its named signal fires -- for a standalone
-# Bash-tool invocation with an EXIT trap, that's immediately after the
-# command finishes, since the hosting shell then exits. These three are
-# genuine WRAPPER commands (like eval/sudo) that take the real command
-# as their own argument, so unconditional blocking is correct.
 #
-# '!'/do/then/else/elif are deliberately NOT here, despite also being
+# source/. ARE included, despite superficially looking like the same
+# "interpreter running a script file" shape as bash/python: guard.sh's
+# top level has a SEPARATE, location-based trust check for them (trusts
+# a script path under this installation, blocks anything else), so they
+# were never a top-level gap and this entry is inert there --
+# orc_segment_leading_verb below still unconditionally skips through to
+# the script path for source/., same as always. But the INNER
+# substitution scanner has no equivalent path-resolution machinery at
+# all, so `$(. /tmp/untrusted.sh)` sailed through it completely --
+# confirmed live by agy (round 6) -- and there is no legitimate-vs-
+# opaque distinction to preserve one level deep inside a substitution the
+# way there is for bash/python at the top level, so blocking it there
+# unconditionally is safe.
+#
+# '!'/do/then/else/elif are deliberately NOT here either, despite being
 # able to hide a real verb (`if true; then tee <path>; fi` splits on the
 # `;` into a segment literally starting with "then") -- unlike coproc/
 # trap/timeout, these are PURE SYNTAX with no independent existence: "!"
@@ -296,15 +287,15 @@ orc_tokenize_words() {
 # legitimate pattern (#59's own brace-free inbox-check idiom: `for m in
 # *.msg; do echo "$m"; cat "$m"; done` splits into a segment starting
 # with "do" too, and it must stay allowed). They get SKIP-THROUGH
-# treatment instead, in orc_segment_leading_verb and _orc_verb_is_write_
-# suggestive below, so the REAL command that follows is what actually
-# gets checked -- correctly allowing `do echo ...` while still blocking
-# `then tee <protected>` once "tee" itself is what's being evaluated.
+# treatment instead (round 7), in orc_segment_leading_verb and
+# _orc_verb_is_write_suggestive below, so the REAL command that follows
+# is what actually gets checked -- correctly allowing `do echo ...` while
+# still blocking `then tee <protected>` once "tee" itself is being
+# evaluated.
 orc_is_opaque_executor() {
   case "$1" in
     '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin|find|\
     source|.|\
-    bash|sh|zsh|python|python3|perl|ruby|php|node|lua|make|awk|\
     coproc|trap|timeout)
       return 0
       ;;
@@ -357,30 +348,19 @@ orc_segment_leading_verb() {
   esac
   case "$verb" in
     bash|sh|zsh)
-      # issue #72 round 6 (agy's dedicated security pass on PR #78): the
-      # round-5 version of this only checked the SINGLE immediate next
-      # word for -c, so a flag before it (`bash -l -c "..."`) hid the
-      # inline-code flag entirely (leading_verb resolved to "-l", which
-      # matches nothing). Now scans forward past any number of leading
-      # flag words, looking for either -c (opaque -- report the
-      # interpreter itself, same as before) or the first non-flag word
-      # (the script path -- skip through to it, preserving the
-      # legitimate `bash script.sh` trust path this room's own test
-      # suite runs on).
-      local j=$((idx + 1))
-      while [ "$j" -lt "$n" ]; do
-        case "${words[$j]}" in
-          -c)
-            ORC_LEADING_VERB_INDEX="$j"
-            echo "$verb"
-            return 0
-            ;;
-          -*) j=$((j + 1)) ;;
-          *) break ;;
-        esac
-      done
-      [ "$j" -ge "$n" ] && return 0
-      idx="$j"
+      # issue #72 round 8 (Ahmad's #84 split, after a live probe before
+      # Gate-2 sign-off found rounds 5-6's -c/multi-flag detection here
+      # was blocking the room's own load-bearing `bash <scriptfile>` /
+      # `python <scriptfile>` calls): distinguishing a trusted script
+      # PATH from a dangerous inline-code STRING (bash -c '<code>') is
+      # #84's job, with a real allowlist design -- not this function's.
+      # Plain, unconditional skip-through to whatever word follows,
+      # regardless of what it is (a script path, a flag, anything) --
+      # bash/sh/zsh are no longer opaque-executor entries at all (see
+      # orc_is_opaque_executor's header), so what this resolves TO is
+      # simply checked like any other ordinary leading word.
+      idx=$((idx + 1))
+      [ "$idx" -ge "$n" ] && return 0
       verb="${words[$idx]}"
       ;;
     source|.)
