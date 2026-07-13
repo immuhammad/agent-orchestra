@@ -12,6 +12,8 @@ set -uo pipefail
 _QSG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./harness-root.sh
 source "$_QSG_LIB_DIR/harness-root.sh"
+# shellcheck source=./cmd-inspect-lib.sh
+source "$_QSG_LIB_DIR/cmd-inspect-lib.sh"
 
 # qsg_resolve_canon_dir -- fail-CLOSED project-root resolution (finding 3,
 # agy's dedicated security review of PR #17's rework request). The
@@ -47,37 +49,14 @@ qsg_resolve_canon_dir() {
   return 1
 }
 
-# qsg_lexical_normalize <path> -- resolves "." and ".." path components
-# PURELY LEXICALLY (no filesystem access, so it works for a target that
-# doesn't exist yet -- exactly what's needed for a Write about to CREATE
-# an inbox .msg). Echoes the normalized absolute path and returns 0, or
-# returns 1 (nothing echoed) if ".." would climb above the root -- that
-# can never resolve to anything inside canon_dir, so it's an unconditional
-# reject. Bash 3.2 safe (plain indexed array, no associative arrays).
+# qsg_lexical_normalize <path> -- thin alias for lib/cmd-inspect-lib.sh's
+# orc_lexical_normalize (#39: moved there so guard.sh's resolved
+# write-target check can reuse the exact same traversal-safe
+# normalization instead of a second copy). Kept under its original name
+# since qsg_path_allowed/qsg_read_allowed/_qsg_normalize_target below
+# already call it by this name.
 qsg_lexical_normalize() {
-  local path="$1" part
-  local -a stack
-  stack=()
-  local IFS='/'
-  for part in $path; do
-    case "$part" in
-      ''|'.') continue ;;
-      '..')
-        if [ "${#stack[@]}" -eq 0 ]; then
-          return 1
-        fi
-        unset 'stack[${#stack[@]}-1]'
-        ;;
-      *) stack+=("$part") ;;
-    esac
-  done
-  local result="" p
-  for p in "${stack[@]}"; do
-    result="${result}/${p}"
-  done
-  [ -z "$result" ] && result="/"
-  echo "$result"
-  return 0
+  orc_lexical_normalize "$@"
 }
 
 # _qsg_normalize_target <file_path> -- resolves file_path to an absolute
@@ -151,80 +130,45 @@ qsg_read_allowed() {
 QSG_REJECT_SENTINEL="__QSG_REJECT__"
 
 # qsg_split_top_level <command string> -- echoes one shell "segment" per
-# line, splitting on UNQUOTED ; && || |. Quote-aware: a separator
-# character inside a single- or double-quoted argument is passed through
-# as literal text, not treated as a split point. This matters concretely
-# here -- lib/log-decision.sh's own documented argument shape is a single
-# pipe-delimited string ("role|model|decision"), and a naive
-# separator-split (this function's first version, a straight `sed -E
-# 's/(;|&&|\|\||\|)/\n/g'`, the same idiom guard.sh itself uses for its
-# blocklist) broke that exact legitimate call by splitting inside the
-# quotes. guard.sh can afford that imprecision (it's a blocklist -- a
-# false split there only makes it MORE likely to block, still safe); an
-# allow-list splitting the same naive way fails the opposite direction
-# (a call that should be allowed gets rejected), which is safe but wrong,
-# not a security hole -- still worth being precise about since it broke a
-# real, expected caller.
+# line, splitting on UNQUOTED ; && || |, via lib/cmd-inspect-lib.sh's
+# shared orc_split_top_level_segments (#39: this used to be its own
+# hand-rolled character scan; guard.sh needed the SAME quote-aware
+# splitting for its resolved-write-target check, and a second copy here is
+# exactly the kind of drift #39's root cause warns about -- one scanner,
+# two callers). This matters concretely here -- lib/log-decision.sh's own
+# documented argument shape is a single pipe-delimited string
+# ("role|model|decision"), and a naive separator-split (guard.sh's own
+# blocklist idiom, `sed -E 's/(;|&&|\|\||\|)/\n/g'`) would break that exact
+# legitimate call by splitting inside the quotes -- guard.sh can afford
+# that imprecision (a blocklist false-split only makes it MORE likely to
+# block, still safe); an allow-list splitting the same naive way fails the
+# opposite direction (a call that should be allowed gets rejected), which
+# is safe but wrong, not a security hole -- still worth being precise
+# about since it broke a real, expected caller.
 #
-# ALSO hard-rejects (echoes ONLY $QSG_REJECT_SENTINEL and stops) on an
-# UNQUOTED `<` or `>` anywhere -- a redirection target is not part of an
-# allow-listed command's own arguments; letting `bash lib/dispatch.sh ...
-# > /etc/passwd` pass the allow-list as "one matching segment" was a real
-# bypass (finding 1, agy's dedicated security review of PR #17's rework
-# request) -- the segment split alone doesn't stop the shell from still
-# honoring the redirection. Quote-aware for the SAME reason the separator
-# split is: a report-back message legitimately containing a literal "<"
-# or ">" inside quotes (e.g. "usage < 50%") must not be blocked, only an
-# actual unquoted redirection operator.
-#
-# Bash 3.2 safe (character-by-character scan, no regex extensions).
+# ALSO hard-rejects (echoes ONLY $QSG_REJECT_SENTINEL and stops) if ANY
+# segment has an UNQUOTED `<` or `>` anywhere -- a redirection target is
+# not part of an allow-listed command's own arguments; letting `bash
+# lib/dispatch.sh ... > /etc/passwd` pass the allow-list as "one matching
+# segment" was a real bypass (finding 1, agy's dedicated security review
+# of PR #17's rework request) -- the segment split alone doesn't stop the
+# shell from still honoring the redirection. Quote-aware for the SAME
+# reason the separator split is: a report-back message legitimately
+# containing a literal "<" or ">" inside quotes (e.g. "usage < 50%") must
+# not be blocked, only an actual unquoted redirection operator. Quotes
+# never span a segment boundary (the shared scanner never splits ON an
+# unquoted separator while still inside a quote), so re-checking each
+# already-split segment independently, with a fresh quote state, is
+# equivalent to the original single combined scan.
 qsg_split_top_level() {
-  local s="$1" i c quote="" cur="" len
-  len=${#s}
-  i=0
-  while [ "$i" -lt "$len" ]; do
-    c="${s:$i:1}"
-    if [ -n "$quote" ]; then
-      cur="${cur}${c}"
-      [ "$c" = "$quote" ] && quote=""
-      i=$((i + 1))
-      continue
+  local cmd="$1" seg
+  while IFS= read -r seg; do
+    if orc_segment_has_unquoted_redirect "$seg"; then
+      echo "$QSG_REJECT_SENTINEL"
+      return 0
     fi
-    case "$c" in
-      "'"|'"')
-        quote="$c"
-        cur="${cur}${c}"
-        ;;
-      '<'|'>')
-        echo "$QSG_REJECT_SENTINEL"
-        return 0
-        ;;
-      ';')
-        echo "$cur"; cur=""
-        ;;
-      '&')
-        if [ "${s:$((i + 1)):1}" = "&" ]; then
-          echo "$cur"; cur=""
-          i=$((i + 1))
-        else
-          cur="${cur}${c}"
-        fi
-        ;;
-      '|')
-        if [ "${s:$((i + 1)):1}" = "|" ]; then
-          echo "$cur"; cur=""
-          i=$((i + 1))
-        else
-          echo "$cur"; cur=""
-        fi
-        ;;
-      *)
-        cur="${cur}${c}"
-        ;;
-    esac
-    i=$((i + 1))
-  done
-  echo "$cur"
+  done <<< "$(orc_split_top_level_segments "$cmd")"
+  orc_split_top_level_segments "$cmd"
 }
 
 # qsg_command_allowed <command string> <canon_dir> -- the ONLY Bash
