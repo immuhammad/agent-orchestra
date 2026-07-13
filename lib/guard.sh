@@ -442,7 +442,15 @@ while IFS= read -r seg; do
   # CLOSED outright rather than pretend to understand them.
   leading_verb="$(orc_segment_leading_verb "$trimmed")"
   case "$leading_verb" in
-    '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin)
+    # issue #72 round 4 (agy's dedicated security pass on PR #78): find
+    # -exec is the same class of construct as eval/sudo/time -- an
+    # executor opaque to word-based verb matching, since the ACTUAL
+    # command it runs is buried in its own argument list, not its own
+    # leading word. `find . -exec tee .claude/settings.json \;` sailed
+    # through this check (leading_verb was "find", matching nothing)
+    # exactly like `eval "tee ..."` used to before #39 round 2 added
+    # this case at all.
+    '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin|find)
       echo "guard.sh: blocked -- '$leading_verb' wraps or groups another command that can't be safely inspected for a hidden write, failing closed: $COMMAND" >&2
       exit 2
       ;;

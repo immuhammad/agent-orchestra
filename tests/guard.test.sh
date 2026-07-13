@@ -607,6 +607,19 @@ expect_allowed "issue #72 round 3 regression -- an ordinary, non-write process s
 expect_allowed "issue #72 round 3 regression -- '>(' / '<(' are literal text once double-quoted (real bash does not recognize process substitution inside quotes at all) and must not be over-blocked" \
   'echo "not a process sub: >(tee) <(tee)"'
 
+echo "== issue #72 round 4 (agy): 'find -exec' is an executor _orc_verb_is_write_suggestive missed, which also kept the >(...) write-target misread reachable via other unblocked interpreters =="
+# agy's dedicated security pass on PR #78 round 4: find -exec is the
+# SAME class of construct as eval/sudo/time (an executor opaque to
+# word-based verb matching), but neither this function's blocklist nor
+# guard.sh's own top-level leading_verb check had it. Verified live by
+# agy: $(find . -exec tee .claude/settings.json \;) resolved its leading
+# verb to "find", which matched neither the write-verb list nor the
+# grouping/executor list, so it read as safe.
+expect_blocked "SECURITY -- issue #72 round 4: 'find -exec' inside a live substitution is still an unblocked executor -- must fail closed" \
+  'echo $(find . -exec tee .claude/settings.json \;)'
+expect_blocked "SECURITY -- issue #72 round 4: the reachable >(...) write-target misread agy asked about, closed for the find vector specifically -- find inside a process substitution is now blocked" \
+  'echo hello > >(find . -exec tee .claude/settings.json \;)'
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"
@@ -620,6 +633,8 @@ expect_blocked "SECURITY -- 'env tee .claude/settings.json' is blocked" \
   "env tee .claude/settings.json"
 expect_blocked "SECURITY -- 'sudo tee .claude/settings.json' is blocked" \
   "sudo tee .claude/settings.json"
+expect_blocked "SECURITY -- issue #72 round 4 (agy): 'find . -exec tee ... \\;' is an executor (find -exec) opaque to word-based inspection, same class as eval/sudo -- must be blocked the same unconditional way regardless of arguments" \
+  'find . -exec tee .claude/settings.json \;'
 expect_allowed "an ordinary command is NOT mistaken for a grouping/executor wrapper" \
   "echo hello"
 

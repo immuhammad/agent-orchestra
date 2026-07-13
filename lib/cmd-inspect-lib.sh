@@ -445,7 +445,13 @@ _orc_verb_is_write_suggestive() {
     base="${word##*/}"
     case "$base" in
       tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
-      '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin) return 0 ;;
+      # issue #72 round 4 (agy's dedicated security pass on PR #78): find
+      # -exec is the same class of opaque executor as eval/sudo/time --
+      # added here in lockstep with guard.sh's own leading_verb list
+      # above, same reasoning: find . -exec tee <protected-path> \; runs
+      # tee via an argument find itself parses, invisible to word-based
+      # matching against the write-verb list alone.
+      '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin|find) return 0 ;;
       *) return 1 ;;
     esac
   done
