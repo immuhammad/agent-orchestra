@@ -1,0 +1,297 @@
+#!/bin/bash
+# lib/cmd-inspect-lib.sh — shared quote-aware Bash command-string parsing.
+# Used by BOTH lib/quota-stop-lib.sh (gated-Bash allow-list, unmodified
+# behavior) and lib/guard.sh (#39: resolved write-target protected-path
+# check, replacing a whole-string substring grep that was both bypassable
+# — a variable or `cd` made the literal path text vanish while the shell
+# still wrote exactly there — and a false-positive generator — it blocked
+# any command whose TEXT merely mentioned a protected path, including
+# read-only commands and unrelated write DATA that happened to describe
+# the bug). ONE quote-aware scanner so the two guards can never drift on
+# how they see quoting/escaping; #39's root cause was inspecting raw TEXT
+# instead of what a real shell would actually execute, and a second
+# hand-rolled parser here would just reopen that same class of hole
+# somewhere else.
+set -uo pipefail
+
+# orc_lexical_normalize <path> -- resolves "." and ".." path components
+# PURELY LEXICALLY (no filesystem access, so it works for a target that
+# doesn't exist yet -- e.g. a Write about to CREATE a new inbox .msg, or a
+# guard.sh write-target that hasn't been created yet either). Echoes the
+# normalized absolute path and returns 0, or returns 1 (nothing echoed) if
+# ".." would climb above the root -- that can never resolve to anything
+# inside a bounded prefix, so it's an unconditional reject. Originally
+# lib/quota-stop-lib.sh's qsg_lexical_normalize (moved here, #39, so
+# guard.sh's resolved write-target check can reuse the exact same
+# traversal-safe normalization instead of a second copy — quota-stop-lib.sh
+# now keeps qsg_lexical_normalize as a thin alias). Bash 3.2 safe (plain
+# indexed array, no associative arrays).
+orc_lexical_normalize() {
+  local path="$1" part
+  local -a stack
+  stack=()
+  local IFS='/'
+  for part in $path; do
+    case "$part" in
+      ''|'.') continue ;;
+      '..')
+        if [ "${#stack[@]}" -eq 0 ]; then
+          return 1
+        fi
+        unset 'stack[${#stack[@]}-1]'
+        ;;
+      *) stack+=("$part") ;;
+    esac
+  done
+  local result="" p
+  for p in "${stack[@]}"; do
+    result="${result}/${p}"
+  done
+  [ -z "$result" ] && result="/"
+  echo "$result"
+  return 0
+}
+
+# orc_split_top_level_segments <command string> -- echoes one shell
+# "segment" per line, splitting on UNQUOTED ; && || |. Quote-aware: a
+# separator character inside a single- or double-quoted argument is passed
+# through as literal text, not treated as a split point. Unlike
+# lib/quota-stop-lib.sh's qsg_split_top_level (built on top of this), this
+# does NOT reject on redirection -- it only splits; callers decide what to
+# do with an embedded `<`/`>`/`&`. Bash 3.2 safe (character-by-character
+# scan, no regex extensions).
+orc_split_top_level_segments() {
+  local s="$1" i c quote="" cur="" len
+  len=${#s}
+  i=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ -n "$quote" ]; then
+      cur="${cur}${c}"
+      [ "$c" = "$quote" ] && quote=""
+      i=$((i + 1))
+      continue
+    fi
+    case "$c" in
+      "'"|'"')
+        quote="$c"
+        cur="${cur}${c}"
+        ;;
+      ';')
+        echo "$cur"; cur=""
+        ;;
+      '&')
+        if [ "${s:$((i + 1)):1}" = "&" ]; then
+          echo "$cur"; cur=""
+          i=$((i + 1))
+        else
+          cur="${cur}${c}"
+        fi
+        ;;
+      '|')
+        if [ "${s:$((i + 1)):1}" = "|" ]; then
+          echo "$cur"; cur=""
+          i=$((i + 1))
+        else
+          echo "$cur"; cur=""
+        fi
+        ;;
+      *)
+        cur="${cur}${c}"
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  echo "$cur"
+}
+
+# orc_segment_has_unquoted_redirect <segment> -- true if an unquoted `<` or
+# `>` appears anywhere (fd-prefixed or not; the fd digit/`&` itself isn't a
+# redirect char so this only needs to watch for the `<`/`>` proper).
+# Quote-aware for the same reason the split above is. Used by
+# lib/quota-stop-lib.sh's qsg_split_top_level to reproduce its original
+# "any unquoted redirect anywhere -> hard reject" behavior on top of the
+# shared segmenter.
+orc_segment_has_unquoted_redirect() {
+  local s="$1" i c quote="" len
+  len=${#s}
+  i=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ -n "$quote" ]; then
+      [ "$c" = "$quote" ] && quote=""
+      i=$((i + 1))
+      continue
+    fi
+    case "$c" in
+      "'"|'"') quote="$c" ;;
+      '<'|'>') return 0 ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# orc_tokenize_words <segment> -- echoes one shell "word" per line,
+# splitting on UNQUOTED whitespace, quote-aware (the quote characters
+# themselves are stripped from the emitted word, matching how a real shell
+# hands the argument to a program). Output-redirect operators (`>`, `>>`,
+# fd-prefixed `N>`/`N>>` via the bare-digit word immediately before a `>`,
+# `&>`, `&>>`) are emitted as their OWN word even with no surrounding
+# whitespace (`>file` tokenizes as ">", "file") so callers can walk the
+# word stream looking for an operator followed by its target word. `<` is
+# left embedded in whatever word it's part of -- guard.sh only cares about
+# OUTPUT redirects (writes), not input.
+orc_tokenize_words() {
+  local s="$1" i c quote="" cur="" len
+  len=${#s}
+  i=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ -n "$quote" ]; then
+      if [ "$c" = "$quote" ]; then
+        quote=""
+      else
+        cur="${cur}${c}"
+      fi
+      i=$((i + 1))
+      continue
+    fi
+    case "$c" in
+      "'"|'"')
+        quote="$c"
+        ;;
+      ' '|$'\t')
+        [ -n "$cur" ] && { echo "$cur"; cur=""; }
+        ;;
+      '>')
+        [ -n "$cur" ] && { echo "$cur"; cur=""; }
+        if [ "${s:$((i + 1)):1}" = ">" ]; then
+          echo ">>"
+          i=$((i + 1))
+        else
+          echo ">"
+        fi
+        ;;
+      '&')
+        if [ "${s:$((i + 1)):1}" = ">" ]; then
+          [ -n "$cur" ] && { echo "$cur"; cur=""; }
+          if [ "${s:$((i + 2)):1}" = ">" ]; then
+            echo "&>>"
+            i=$((i + 2))
+          else
+            echo "&>"
+            i=$((i + 1))
+          fi
+        else
+          cur="${cur}${c}"
+        fi
+        ;;
+      *)
+        cur="${cur}${c}"
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  [ -n "$cur" ] && echo "$cur"
+  return 0
+}
+
+# orc_segment_write_targets <segment> -- echoes one candidate write-target
+# WORD per line (unresolved -- no cwd/variable substitution here, that's
+# the caller's job since it needs state tracked ACROSS segments). Finds:
+#   - the word immediately after an unquoted output-redirect operator
+#     (`>`, `>>`, `&>`, `&>>`, or a bare-digit word immediately before `>`
+#     or `>>`, e.g. `2>`/`2>>`)
+#   - the destination argument(s) of a fixed set of write verbs (tee, cp,
+#     mv, touch, mkdir, rm: all non-flag args; sed with -i: last non-flag
+#     arg; dd: the value of an `of=` arg) when that verb is the segment's
+#     own leading command, after skipping an optional simple VAR=value
+#     env-prefix or a bash/sh interpreter word.
+# These are exactly the shapes #39 and agy's dedicated security pass were
+# asked to probe (variables, quoting, fd-prefixed redirects, tee, dd of=,
+# cp/mv). Deliberately does NOT look at any other argument (a quoted
+# message, a git commit -m body, etc.) -- that's the other half of #39,
+# the false-positive an unanchored whole-string grep was causing.
+orc_segment_write_targets() {
+  local segment="$1"
+  local -a words=()
+  local w
+  while IFS= read -r w; do
+    words+=("$w")
+  done < <(orc_tokenize_words "$segment")
+
+  local n="${#words[@]}" idx nxt
+
+  idx=0
+  while [ "$idx" -lt "$n" ]; do
+    case "${words[$idx]}" in
+      '>'|'>>'|'&>'|'&>>')
+        nxt=$((idx + 1))
+        [ "$nxt" -lt "$n" ] && echo "${words[$nxt]}"
+        ;;
+    esac
+    idx=$((idx + 1))
+  done
+
+  idx=0
+  while [ "$idx" -lt "$n" ] && [[ "${words[$idx]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+    idx=$((idx + 1))
+  done
+  [ "$idx" -ge "$n" ] && return 0
+  local verb="${words[$idx]}"
+  case "$verb" in
+    bash|sh|zsh)
+      idx=$((idx + 1))
+      [ "$idx" -ge "$n" ] && return 0
+      verb="${words[$idx]}"
+      ;;
+  esac
+
+  local -a nonflag=()
+  local j t has_inplace_flag=0
+  j=$((idx + 1))
+  while [ "$j" -lt "$n" ]; do
+    t="${words[$j]}"
+    case "$t" in
+      -i|-i.*) has_inplace_flag=1 ;;
+    esac
+    case "$t" in
+      -*|'>'|'>>'|'&>'|'&>>') : ;;
+      *) nonflag+=("$t") ;;
+    esac
+    j=$((j + 1))
+  done
+
+  case "$verb" in
+    tee|touch|mkdir|rm)
+      for t in "${nonflag[@]:-}"; do
+        [ -n "$t" ] && echo "$t"
+      done
+      ;;
+    cp|mv)
+      local cnt="${#nonflag[@]}"
+      [ "$cnt" -ge 1 ] && echo "${nonflag[$((cnt - 1))]}"
+      ;;
+    sed)
+      # Only sed -i (or -i.bak style, GNU/BSD) actually writes to the
+      # file argument -- a plain `sed 's/x/y/' file` reads and prints to
+      # stdout, it does not write "file". Checked against the TOKENIZED
+      # flag word, not a raw substring of the segment text (a raw
+      # substring match on "-i" would false-positive on e.g. `sed
+      # 's/find-item/x/' file`, whose script argument merely CONTAINS the
+      # two characters "-i").
+      if [ "$has_inplace_flag" -eq 1 ]; then
+        local cnt="${#nonflag[@]}"
+        [ "$cnt" -ge 1 ] && echo "${nonflag[$((cnt - 1))]}"
+      fi
+      ;;
+    dd)
+      for t in "${nonflag[@]:-}"; do
+        case "$t" in
+          of=*) echo "${t#of=}" ;;
+        esac
+      done
+      ;;
+  esac
+}

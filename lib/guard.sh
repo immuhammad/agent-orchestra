@@ -6,6 +6,8 @@ set -euo pipefail
 GUARD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./orc-config.sh
 source "$GUARD_SCRIPT_DIR/orc-config.sh"
+# shellcheck source=./cmd-inspect-lib.sh
+source "$GUARD_SCRIPT_DIR/cmd-inspect-lib.sh"
 # issue #116 follow-up (agy REQUEST-CHANGES on PR #3): this guard.sh
 # itself always lives in an orc installation's own lib/ -- ORC_INSTALL_ROOT
 # is that installation's root, used below to trust script-exec calls into
@@ -41,8 +43,10 @@ DANGEROUS_RE='^(rm -rf|git push --force|push -f|git reset --hard|reset --hard|gi
 # execution order) so the branch-resolution fallback below asks git at the
 # directory the guarded command will actually be running in by that point,
 # not the hook's fixed CWD. Starts at the hook's real $PWD, same as before,
-# for commands with no leading cd.
-guard_cwd="$PWD"
+# for commands with no leading cd. #39: this is ALSO the anchor every
+# resolved write-target below is relative to.
+GUARD_ROOT="$PWD"
+guard_cwd="$GUARD_ROOT"
 # issue #116 follow-up (agy REQUEST-CHANGES on PR #3): protected branches
 # must include the CONFIGURED integration_branch, not just the hardcoded
 # main/uat pair -- orc-worktree.sh already respects a custom
@@ -53,6 +57,228 @@ guard_cwd="$PWD"
 # uat as well as main -- configuring one custom branch shouldn't silently
 # un-protect the other common name.
 CONFIGURED_INTEGRATION_BRANCH="$(orc_get_scalar integration_branch)"
+
+# #39: variable tracking for the resolved write-target check below. Bash
+# 3.2 has no associative arrays, so this is two parallel indexed arrays
+# (name, value); a lookup scans from the END so the MOST RECENT assignment
+# wins (correct shadowing across segments: `V=a; V=b; ... $V` sees "b").
+# GUARD_VAR_UNRESOLVED marks a variable whose value we saw change to
+# something we can't safely reason about (a nested expansion, command
+# substitution, glob) -- once a variable hits that state, any LATER use of
+# it must fail closed rather than silently falling back to a stale trusted
+# value from an earlier assignment.
+GUARD_VAR_NAMES=()
+GUARD_VAR_VALS=()
+GUARD_VAR_UNRESOLVED="__GUARD_VAR_UNRESOLVED__"
+
+guard_var_track() { # $1=name $2=value (or $GUARD_VAR_UNRESOLVED)
+  GUARD_VAR_NAMES+=("$1")
+  GUARD_VAR_VALS+=("$2")
+}
+
+guard_var_lookup() { # $1=name -> echoes value, or fails (incl. untracked/unresolved)
+  local name="$1" idx
+  for ((idx = ${#GUARD_VAR_NAMES[@]} - 1; idx >= 0; idx--)); do
+    if [ "${GUARD_VAR_NAMES[$idx]}" = "$name" ]; then
+      [ "${GUARD_VAR_VALS[$idx]}" = "$GUARD_VAR_UNRESOLVED" ] && return 1
+      echo "${GUARD_VAR_VALS[$idx]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# guard_track_assignments_if_any <trimmed segment, already tokenized words>
+# -- a segment is a real, PERSISTENT shell assignment statement (`V=.claude`,
+# or `A=1 B=2`, with no command after it) only if EVERY word in it looks
+# like NAME=value; a SCOPED env-prefix before a real command (`V=x cmd
+# args`) does NOT persist in a real shell and must not be tracked as if it
+# did. A value containing anything outside a safe literal-path character
+# set (letters/digits/./_/-) is tracked as UNRESOLVED rather than skipped
+# outright -- skipping would let a later use of the SAME name silently
+# fall back to an OLDER, now-stale tracked value.
+guard_track_assignments_if_any() {
+  local -a words=("$@")
+  local n="${#words[@]}" w
+  [ "$n" -eq 0 ] && return 0
+  for w in "${words[@]}"; do
+    if [[ ! "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+      return 0
+    fi
+  done
+  local vname vval
+  for w in "${words[@]}"; do
+    vname="${w%%=*}"
+    vval="${w#*=}"
+    if [[ "$vval" =~ ^[A-Za-z0-9_./-]*$ ]]; then
+      guard_var_track "$vname" "$vval"
+    else
+      guard_var_track "$vname" "$GUARD_VAR_UNRESOLVED"
+    fi
+  done
+}
+
+# _guard_resolve_word <word> -- echoes the word with at most ONE leading
+# $VAR/${VAR} reference substituted from the tracked table, or fails
+# (nothing echoed, return 1) if the word can't be confidently resolved:
+# command substitution ($(...) or backticks) anywhere, an unrecognized/
+# untracked variable, or a SECOND expansion left in the remainder after
+# substitution. A word with no "$" at all is already fully literal and
+# passes through unchanged. Failing closed here (rather than guessing) is
+# the same posture qsg_resolve_canon_dir already holds elsewhere in this
+# codebase: an enforcement check that can't verify a target must not
+# silently allow it.
+_guard_resolve_word() {
+  local word="$1" varname rest val
+  case "$word" in
+    *'$('*|*'`'*) return 1 ;;
+  esac
+  case "$word" in
+    *'$'*) : ;;
+    *) echo "$word"; return 0 ;;
+  esac
+  if [[ "$word" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)\}(.*)$ ]]; then
+    varname="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+  elif [[ "$word" =~ ^\$([A-Za-z_][A-Za-z0-9_]*)(.*)$ ]]; then
+    varname="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+  else
+    return 1
+  fi
+  case "$rest" in
+    *'$'*) return 1 ;;
+  esac
+  val="$(guard_var_lookup "$varname")" || return 1
+  echo "${val}${rest}"
+  return 0
+}
+
+# #39: protected-dir registration, done ONCE up front. Each protected
+# entry (the two hardcoded-by-default harness config dirs, PLUS whatever
+# orchestrator.yaml's protected_paths configures) gets resolved to an
+# absolute path two ways: LEXICALLY (pure string `.`/`..` collapse,
+# qsg_lexical_normalize's sibling in lib/cmd-inspect-lib.sh -- always
+# succeeds, works even for a path that doesn't exist on disk yet) and, if
+# the directory actually exists, PHYSICALLY (`cd` + `pwd -P`, which also
+# resolves symlinks). A write target is checked against BOTH forms below;
+# either matching is enough to block -- the physical form is what catches
+# a symlink planted to make a protected dir look like it's somewhere else.
+DEFAULT_LEX=(); DEFAULT_PHYS=(); DEFAULT_LABEL=()
+CUSTOM_LEX=();  CUSTOM_PHYS=();  CUSTOM_LABEL=()
+
+_guard_resolve_protected() { # $1=relative-or-absolute path -> echoes "lex\tphys" (phys may be empty)
+  local rel="$1" abs lex phys
+  case "$rel" in
+    /*) abs="$rel" ;;
+    *) abs="$GUARD_ROOT/$rel" ;;
+  esac
+  lex="$(orc_lexical_normalize "$abs")" || return 1
+  lex="${lex%/}"
+  phys="$(cd "$lex" 2>/dev/null && pwd -P)" || phys=""
+  printf '%s\t%s\n' "$lex" "$phys"
+}
+
+while IFS= read -r d; do
+  [ -z "$d" ] && continue
+  resolved="$(_guard_resolve_protected "$d")" || continue
+  DEFAULT_LEX+=("${resolved%%$'\t'*}")
+  DEFAULT_PHYS+=("${resolved#*$'\t'}")
+  DEFAULT_LABEL+=("$d")
+done <<< "$(orc_harness_config_dirs)"
+
+while IFS= read -r p; do
+  [ -z "$p" ] && continue
+  resolved="$(_guard_resolve_protected "$p")" || continue
+  CUSTOM_LEX+=("${resolved%%$'\t'*}")
+  CUSTOM_PHYS+=("${resolved#*$'\t'}")
+  CUSTOM_LABEL+=("$p")
+done <<< "$(orc_protected_paths)"
+
+# _guard_matched_label <target_lex> <target_phys> -- echoes
+# "default\t<label>" or "custom\t<label>" if the target falls under (or
+# equals) any registered protected dir, or nothing at all if it doesn't.
+# ALWAYS returns 0 -- under this file's `set -e`, a plain `var="$(fn)"`
+# assignment treats ANY non-zero exit from fn as a script-aborting failure
+# (a well-known bash gotcha, not conditional on the assignment being
+# checked), so signaling "match vs no match vs which kind" via exit code
+# would silently kill the guard mid-check instead of blocking or passing
+# as intended. Encoding the result in stdout instead sidesteps that
+# entirely. Checked default-dirs-first so the blocked-tool message can say
+# WHICH kind of protection fired, matching this file's pre-#39 message
+# split (default .claude/.agents/ vs orchestrator.yaml protected_paths).
+_guard_matched_label() {
+  local target_lex="$1" target_phys="$2" idx
+  target_lex="${target_lex%/}"
+  for ((idx = 0; idx < ${#DEFAULT_LEX[@]}; idx++)); do
+    case "$target_lex" in
+      "${DEFAULT_LEX[$idx]}"|"${DEFAULT_LEX[$idx]}"/*)
+        printf 'default\t%s\n' "${DEFAULT_LABEL[$idx]}"; return 0 ;;
+    esac
+    if [ -n "${DEFAULT_PHYS[$idx]}" ] && [ -n "$target_phys" ]; then
+      case "$target_phys" in
+        "${DEFAULT_PHYS[$idx]}"|"${DEFAULT_PHYS[$idx]}"/*)
+          printf 'default\t%s\n' "${DEFAULT_LABEL[$idx]}"; return 0 ;;
+      esac
+    fi
+  done
+  for ((idx = 0; idx < ${#CUSTOM_LEX[@]}; idx++)); do
+    case "$target_lex" in
+      "${CUSTOM_LEX[$idx]}"|"${CUSTOM_LEX[$idx]}"/*)
+        printf 'custom\t%s\n' "${CUSTOM_LABEL[$idx]}"; return 0 ;;
+    esac
+    if [ -n "${CUSTOM_PHYS[$idx]}" ] && [ -n "$target_phys" ]; then
+      case "$target_phys" in
+        "${CUSTOM_PHYS[$idx]}"|"${CUSTOM_PHYS[$idx]}"/*)
+          printf 'custom\t%s\n' "${CUSTOM_LABEL[$idx]}"; return 0 ;;
+      esac
+    fi
+  done
+  return 0
+}
+
+# guard_check_write_targets <trimmed segment> -- (#39) the write-target
+# check replacing the old whole-command substring grep. Inspects the
+# RESOLVED, lexically-normalized write target(s) of THIS segment (redirect
+# targets + write-verb file arguments, see
+# lib/cmd-inspect-lib.sh:orc_segment_write_targets) against the protected
+# dirs registered above, using the virtual guard_cwd/variable table tracked
+# across the command's own segments -- a `cd`, a variable, or quote-split
+# text can no longer hide a write's real destination from this check the
+# way it could hide it from a raw-string grep. A target that can't be
+# confidently resolved (untracked variable, command substitution) fails
+# CLOSED rather than being silently let through, same posture as every
+# other "can't verify" case in this codebase.
+guard_check_write_targets() {
+  local trimmed="$1" target resolved_word abs_path lex_norm target_phys matched match_kind match_label
+  while IFS= read -r target; do
+    [ -z "$target" ] && continue
+    resolved_word="$(_guard_resolve_word "$target")" || {
+      echo "guard.sh: blocked -- write target could not be verified (unresolved variable or command substitution in '$target'), failing closed: $COMMAND" >&2
+      exit 2
+    }
+    [ -z "$resolved_word" ] && continue
+    case "$resolved_word" in
+      /*) abs_path="$resolved_word" ;;
+      *) abs_path="$guard_cwd/$resolved_word" ;;
+    esac
+    lex_norm="$(orc_lexical_normalize "$abs_path")" || {
+      echo "guard.sh: blocked -- write target path could not be normalized ('$target'), failing closed: $COMMAND" >&2
+      exit 2
+    }
+    lex_norm="${lex_norm%/}"
+    target_phys="$(cd "$(dirname "$lex_norm")" 2>/dev/null && echo "$(pwd -P)/$(basename "$lex_norm")")" || target_phys=""
+    matched="$(_guard_matched_label "$lex_norm" "$target_phys")"
+    if [ -n "$matched" ]; then
+      match_kind="${matched%%$'\t'*}"
+      match_label="${matched#*$'\t'}"
+      if [ "$match_kind" = "default" ]; then
+        echo "guard.sh: blocked write into '$match_label' -- .claude/ and .agents/ are protected by default (they wire guard.sh/guard-write.sh/quota-stop-gate.sh/the Stop hook). To change hook wiring: edit templates/settings.json or templates/agents-hooks.json (the tracked source of truth) and re-sync into this room: $COMMAND" >&2
+      else
+        echo "guard.sh: blocked write inside protected path '$match_label' (resolved target: $lex_norm; see AGENTS.md / orchestrator.yaml): $COMMAND" >&2
+      fi
+      exit 2
+    fi
+  done < <(orc_segment_write_targets "$trimmed")
+}
 
 while IFS= read -r seg; do
   trimmed="$(echo "$seg" | sed -E 's/^[[:space:]]*//')"
@@ -204,46 +430,16 @@ while IFS= read -r seg; do
         ;;
     esac
   fi
-done <<< "$(echo "$COMMAND" | sed -E 's/(;|\&\&|\|\||\|)/\n/g')"
 
-# This check stays whole-string (not position-anchored like the dangerous-
-# command check above): a redirect like `echo hi > vendor/x` legitimately
-# has its `>` mid-command, so anchoring to segment-start would miss real
-# writes. It shares the same accepted FP class as a result -- e.g. prose
-# mentioning both a protected path and a write verb (a commit message
-# describing this very rule triggered it during T3, against career-ops/,
-# this repo's protected path at the time) -- accepted per T3 policy rather
-# than loosening the destructive-write rule.
-# T21: protected paths come ONLY from orchestrator.yaml (project,
-# protected_paths) via orc-config.sh -- EMPTY if the config is
-# missing/malformed (issue #18 B-i: no hardcoded project-specific default).
-# This does NOT unprotect the harness core: script-exec/git-ops are
-# separately covered by this script's own G-series rules above, and hook
-# CONFIG (.claude/, .agents/) is separately covered by the
-# orc_is_harness_config_path check just below -- neither depends on this
-# project-configurable list.
-if echo "$COMMAND" | grep -Eq '>|>>|tee |cp |mv |touch |mkdir |sed -i|rm '; then
-  # issue #31 (agy's probe-3 on PR #30): a Bash redirect (`echo ... >
-  # .claude/settings.json`) bypasses the Write/Edit tool entirely, so
-  # guard-write.sh's own default protection of .claude/.agents/ never sees
-  # it -- this script's command-string inspection is the only thing that
-  # can catch it. Checked BY DEFAULT, same as guard-write.sh, independent of
-  # orchestrator.yaml's protected_paths.
-  while IFS= read -r default_path; do
-    if echo "$COMMAND" | grep -Eq "$(echo "$default_path" | sed -E 's/[][(){}.*+?^$|\\]/\\&/g')"; then
-      echo "guard.sh: blocked write into '$default_path' -- .claude/ and .agents/ are protected by default (they wire guard.sh/guard-write.sh/quota-stop-gate.sh/the Stop hook). To change hook wiring: edit templates/settings.json or templates/agents-hooks.json (the tracked source of truth) and re-sync into this room: $COMMAND" >&2
-      exit 2
-    fi
-  done <<< "$(orc_harness_config_dirs)"
-
-  while IFS= read -r protected; do
-    [ -z "$protected" ] && continue
-    protected_re="$(echo "$protected" | sed -E 's/[][(){}.*+?^$|\\]/\\&/g')"
-    if echo "$COMMAND" | grep -Eq "$protected_re"; then
-      echo "guard.sh: blocked write inside protected path '$protected' (see AGENTS.md / orchestrator.yaml): $COMMAND" >&2
-      exit 2
-    fi
-  done <<< "$(orc_protected_paths)"
-fi
+  # #39: variable-assignment tracking, then the resolved write-target
+  # check -- both need this segment's own tokenized words, and both must
+  # see guard_cwd/the variable table as they stand AFTER any earlier
+  # segments (a leading `cd`/`VAR=val` segment) but BEFORE this segment's
+  # own write, matching real left-to-right shell execution order.
+  seg_words=()
+  while IFS= read -r w; do seg_words+=("$w"); done < <(orc_tokenize_words "$trimmed")
+  guard_track_assignments_if_any "${seg_words[@]}"
+  guard_check_write_targets "$trimmed"
+done <<< "$(orc_split_top_level_segments "$COMMAND")"
 
 exit 0

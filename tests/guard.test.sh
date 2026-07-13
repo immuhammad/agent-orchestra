@@ -272,6 +272,7 @@ echo "== issue #18 B1 (item 8) + agy REQUEST-CHANGES (PR #17): script-exec trust
 # here to resolve against.
 GUARD_SRC="$GUARD"
 ORC_CONFIG_SRC="$DIR/../lib/orc-config.sh"
+CMD_INSPECT_SRC="$DIR/../lib/cmd-inspect-lib.sh"
 
 run_guard_in_sandbox() { # $1 = command
   local command="$1"
@@ -282,6 +283,7 @@ run_guard_in_sandbox() { # $1 = command
     "$sandbox/project/agent-orchestra/.worktrees/issue-11-10/tests"
   cp "$GUARD_SRC" "$sandbox/lib/guard.sh"
   cp "$ORC_CONFIG_SRC" "$sandbox/lib/orc-config.sh"
+  cp "$CMD_INSPECT_SRC" "$sandbox/lib/cmd-inspect-lib.sh"
   touch "$sandbox/project/agent-orchestra/tests/real.sh"
   touch "$sandbox/project/agent-orchestra/.worktrees/issue-11-10/tests/real.sh"
   local payload
@@ -306,7 +308,6 @@ if [ "$SANDBOX_STATUS" -eq 0 ]; then
 else
   echo "FAIL: a script under a project/ worktree should be trusted (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
 fi
-
 echo "== agy REQUEST-CHANGES (PR #17): project/ trust must resolve the REAL canonicalized directory, not glob-match the raw string (path traversal + symlink-out) =="
 # The project/*|./project/*|*/project/* glob used to match the RAW $SCRIPT
 # string with no resolution at all -- `bash project/../../../tmp/evil.sh`
@@ -330,6 +331,7 @@ run_guard_in_sandbox2() { # $1 = command, builds a sandbox with a symlink + a si
   mkdir -p "$sandbox/lib" "$sandbox/project"
   cp "$GUARD_SRC" "$sandbox/lib/guard.sh"
   cp "$ORC_CONFIG_SRC" "$sandbox/lib/orc-config.sh"
+  cp "$CMD_INSPECT_SRC" "$sandbox/lib/cmd-inspect-lib.sh"
   echo "evil" > "$outside/evil.sh"
   ln -s "$outside" "$sandbox/project/escape"
   ln -s "$outside" "$sandbox/project-evil"
@@ -355,6 +357,122 @@ if [ "$SANDBOX_STATUS" -eq 2 ]; then
 else
   echo "FAIL: project-evil/ (prefix collision, resolves outside the install root) should still be blocked (status=$SANDBOX_STATUS): $SANDBOX_OUT"; FAIL=$((FAIL + 1))
 fi
+
+echo "== issue #39: the protected-path check inspects the RESOLVED write target, not the raw command TEXT =="
+# The #31 protection (above) substring-grepped the WHOLE command string for
+# a literal protected-path string. Two failure directions, both live before
+# this fix: (a) a variable or a leading `cd` makes the literal text vanish
+# while the shell still writes exactly there (a real trust-boundary bypass
+# -- an agent could rewrite its own hook wiring); (b) it blocks ANY command
+# whose TEXT merely MENTIONS a protected path, including read-only commands
+# and unrelated write DATA that happens to describe the path -- it was
+# actively corrupting decisions.log by forcing a reworded historical record
+# to get a legitimate append past it. Fixed by resolving the ACTUAL write
+# target (redirect target / write-verb file argument), tracking `cd` and
+# simple `VAR=value` assignments across the command's own segments, and
+# comparing the resolved, lexically-normalized target against the
+# protected paths -- reusing lib/cmd-inspect-lib.sh's quote-aware scanner,
+# the same machinery lib/quota-stop-lib.sh's qsg_command_allowed already
+# proved through two rounds of agy security review, not a third
+# hand-rolled parser.
+
+# run_guard_protected_dir <command> -- like run_guard, but the tmp repo
+# has a REAL .claude/ directory on disk so a `cd .claude && ...` in the
+# command under test has somewhere real to land (guard.sh's own existing
+# cd-tracking silently no-ops a `cd` into a directory that doesn't exist,
+# same as a real shell would fail to cd there).
+run_guard_protected_dir() {
+  local command="$1"
+  local tmp
+  tmp="$(mktemp -d)"
+  git init -q "$tmp"
+  git -C "$tmp" config user.email "test@test.local"
+  git -C "$tmp" config user.name "test"
+  git -C "$tmp" commit -q --allow-empty -m init
+  git -C "$tmp" checkout -q -b feature/issue-99
+  mkdir -p "$tmp/.claude"
+  local payload out status
+  payload="$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')"
+  out="$(cd "$tmp" && echo "$payload" | bash "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$tmp"
+  GUARD_OUT="$out"
+  GUARD_STATUS=$status
+}
+
+echo "-- required case 1: a variable hides the literal path text from the raw string, but the shell still writes there --"
+run_guard_protected_dir 'V=.claude; echo x > $V/settings.json'
+if [ "$GUARD_STATUS" -eq 2 ]; then
+  echo "PASS: SECURITY -- 'V=.claude; echo x > \$V/settings.json' is blocked (resolved target, not raw text)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: SECURITY REGRESSION (#39 bypass 1) -- a variable-hidden write into .claude/ should be blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+echo "-- required case 2: a leading cd hides the literal path text, but the shell still writes there --"
+run_guard_protected_dir 'cd .claude && echo x > settings.json'
+if [ "$GUARD_STATUS" -eq 2 ]; then
+  echo "PASS: SECURITY -- 'cd .claude && echo x > settings.json' is blocked (resolved via tracked cwd)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: SECURITY REGRESSION (#39 bypass 2) -- a cd-hidden write into .claude/ should be blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+echo "-- required case 3: a read-only command merely NAMING a protected path must pass --"
+expect_allowed "read-only grep naming a protected path is allowed (no write at all)" \
+  "grep -n 'pane-state' .claude/settings.json"
+expect_allowed "read-only cat naming a protected path is allowed" \
+  "cat .claude/settings.json"
+
+echo "-- required case 4: a write to an UNPROTECTED path whose DATA merely mentions a protected path must pass -- this is the bug that was corrupting decisions.log --"
+expect_allowed "appending decision text that DESCRIBES a protected path, to an unprotected file, is allowed" \
+  'echo "found a bug: writes into .claude/settings.json were bypassable" >> notes.log'
+expect_allowed "log-decision.sh-shaped call whose TEXT mentions .claude/ is allowed (the exact corruption case from the ticket)" \
+  'bash .harness/log-decision.sh "builder|sonnet|fixed the .claude/settings.json bypass"'
+
+echo "-- traversal: a .. that returns to an UNPROTECTED area must still pass (no over-blocking) --"
+expect_allowed "a .. that lexically resolves OUT of .claude/ back to an unprotected path is allowed" \
+  "echo x > .claude/sub/../../notprotected/file"
+
+echo "-- traversal: a .. that resolves INTO a protected dir from an innocent-looking prefix must still block --"
+expect_blocked "a .. that lexically resolves INTO .claude/ is blocked even though it starts under an unprotected dir" \
+  "echo x > safe/../.claude/settings.json"
+
+echo "-- quoting trick: splitting the literal path across an empty quoted section defeats a raw substring grep but not a real tokenizer --"
+run_guard_protected_dir "echo x > .cla''ude/settings.json"
+if [ "$GUARD_STATUS" -eq 2 ]; then
+  echo "PASS: SECURITY -- a quote-split '.cla''ude/settings.json' still resolves to .claude/settings.json and is blocked"; PASS=$((PASS + 1))
+else
+  echo "FAIL: SECURITY REGRESSION (#39 quoting bypass) -- quote-split protected path should still resolve and block (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+echo "-- agy's probe list: fd-prefixed redirects, tee, dd of=, cp/mv into the dir --"
+expect_blocked "stderr redirect (2>) into a protected path is blocked" \
+  "some-command 2> .claude/settings.json"
+expect_blocked "&> redirect into a protected path is blocked" \
+  "some-command &> .claude/settings.json"
+expect_blocked "tee into a protected path is blocked" \
+  "echo x | tee .claude/settings.json"
+expect_blocked "dd of= into a protected path is blocked" \
+  "dd if=/dev/zero of=.claude/settings.json"
+expect_blocked "cp INTO a protected dir is blocked" \
+  "cp notes.log .claude/settings.json"
+expect_blocked "mv INTO a protected dir is blocked" \
+  "mv notes.log .claude/settings.json"
+expect_allowed "cp FROM a protected dir to an unprotected dest is allowed (only the destination is the write target)" \
+  "cp .claude/settings.json /tmp/backup.json"
+
+echo "-- unresolvable target fails CLOSED, same posture as the rest of this codebase --"
+expect_blocked "a write target built from an UNTRACKED variable cannot be verified and fails closed" \
+  'echo x > $UNTRACKED_VAR/settings.json'
+expect_blocked "a write target built from command substitution cannot be verified and fails closed" \
+  'echo x > "$(echo .claude)/settings.json"'
+
+echo "-- sed without -i is read-only (prints to stdout); a bare '-i' substring inside the SCRIPT text must not be mistaken for the flag --"
+expect_allowed "sed with no -i flag naming a protected path is allowed (read-only, prints to stdout)" \
+  "sed 's/x/y/' .claude/settings.json"
+expect_allowed "sed whose SCRIPT ARGUMENT merely contains the two characters '-i' is not mistaken for an in-place edit" \
+  "sed 's/find-item/replace/' .claude/settings.json"
+expect_blocked "sed -i (real in-place edit) into a protected path is still blocked" \
+  "sed -i 's/x/y/' .claude/settings.json"
 
 echo ""
 echo "$PASS passed, $FAIL failed"
