@@ -516,6 +516,8 @@ expect_blocked "SECURITY -- escape-awareness must NOT weaken real detection: an 
   'echo $(tee)'
 expect_blocked "SECURITY -- a write-verb \$() inside DOUBLE quotes is STILL live (double quotes do not suppress command substitution in real bash) and must stay blocked" \
   'echo "$(tee)"'
+expect_blocked "SECURITY -- agy's PR #70 finding: a LITERAL single-quote INSIDE double quotes must not re-enter single-quote mode -- real bash treats it as a plain character, so the \$() right after it is still LIVE and must stay blocked" \
+  'echo "'"'"'$(tee .claude/settings.json)'"'"'"'
 
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
