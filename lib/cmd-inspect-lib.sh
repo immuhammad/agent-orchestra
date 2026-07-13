@@ -223,6 +223,56 @@ orc_tokenize_words() {
 # cp/mv). Deliberately does NOT look at any other argument (a quoted
 # message, a git commit -m body, etc.) -- that's the other half of #39,
 # the false-positive an unanchored whole-string grep was causing.
+# orc_is_opaque_executor <word> -- (#72 round 5, Ahmad's parity
+# directive) true if <word> is a grouping token or an executor/
+# interpreter whose real behavior can't be determined by word-matching
+# alone: it either wraps a WHOLE OTHER command line as its own argument
+# (eval/sudo/time/env/...) or is an interpreter that can run arbitrary
+# code handed to it as a STRING (bash -c, python -c, ...) rather than
+# only ever reading a script FILE. THE ONE SHARED SOURCE for both
+# guard.sh's top-level leading_verb check and _orc_verb_is_write_
+# suggestive's inner-substitution check below -- #52 (the agy-dialect
+# deadlock) and #57 (the shared cmd-inspect-lib.sh itself) already taught
+# this codebase that two lists meant to match WILL drift, and the drift
+# is exactly where a hole opens: #72's own review history is bash ->
+# python -> find -> process-substitution, one round of whack-a-mole at a
+# time, because the inner scanner had its OWN copy of this list. One
+# function, called from both places, makes that drift structurally
+# impossible.
+#
+# Unconditional block regardless of arguments, same posture #39 round 2
+# already gave eval -- there is no way to tell "bash -c '<harmless>'"
+# apart from "bash -c '<writes a protected file>'" by word-matching, so
+# both are blocked. This does NOT cover bash/sh/zsh running a TRUSTED
+# SCRIPT PATH (`bash script.sh`, the exact way every test in this suite
+# runs) -- orc_segment_leading_verb below only ever resolves bash/sh/zsh
+# to THIS word (instead of skipping through to the word after it) when
+# that next word is specifically an inline-code flag; a script-path
+# invocation resolves to the script path itself, which is a completely
+# separate question this function is never even asked about.
+#
+# Deliberately excludes sed, unlike agy's round-4 suggestion: sed is
+# ALREADY conditionally handled (a write target only when -i is present,
+# see orc_segment_write_targets/_orc_verb_is_write_suggestive's own
+# tee|cp|mv|...|sed match) -- an UNCONDITIONAL block here would break the
+# existing, deliberately-tested distinction between a read-only `sed
+# 's/x/y/' file` (must stay allowed) and `sed -i` (already blocked as a
+# write verb). sed's own arbitrary-execution surface (the GNU 'e'
+# command/flag inside a sed SCRIPT) is a real but much narrower and
+# different concern than "sed is an opaque wrapper" -- flagged as a
+# follow-up rather than folded in here at the cost of a regression.
+orc_is_opaque_executor() {
+  case "$1" in
+    '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin|find|\
+    bash|sh|zsh|python|python3|perl|ruby|php|node|lua|make|awk)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # orc_segment_leading_verb <segment> -- echoes the segment's own leading
 # command word after skipping any VAR=value env-prefix and an optional
 # bash/sh/zsh interpreter word, or nothing if the segment is a pure
@@ -245,8 +295,18 @@ orc_segment_leading_verb() {
   local verb="${words[$idx]}"
   case "$verb" in
     bash|sh|zsh)
+      # issue #72 round 5 (Ahmad's parity directive): see
+      # orc_is_opaque_executor's header above for the full reasoning --
+      # skip through to the real script/command word (preserving the
+      # legitimate `bash script.sh` trust path), UNLESS the next word is
+      # an inline-code flag, in which case report the INTERPRETER ITSELF
+      # so it hits the opaque-executor check instead of silently
+      # resolving to "-c".
       idx=$((idx + 1))
       [ "$idx" -ge "$n" ] && return 0
+      case "${words[$idx]}" in
+        -c) echo "$verb"; return 0 ;;
+      esac
       verb="${words[$idx]}"
       ;;
   esac
@@ -437,23 +497,19 @@ _orc_verb_is_write_suggestive() {
     # ordinary segment -- grouping ('{'/'(') and command executors that
     # wrap/hide a real verb from word-based inspection the same way
     # inside a live substitution as they do at the top level ($({ tee
-    # .claude/settings.json; }), $(eval "tee ...")). This check MUST stay
-    # in lockstep with guard.sh's list -- the whole reason #39 round 2
-    # added it there in the first place is that these constructs are
-    # opaque to word matching, and that opacity is exactly as real one
-    # level down inside a substitution.
+    # .claude/settings.json; }), $(eval "tee ...")). issue #72 round 5
+    # (Ahmad's parity directive): this now calls the SAME
+    # orc_is_opaque_executor guard.sh's top-level leading_verb check
+    # calls -- not a second copy of the list -- so the two can never
+    # drift the way #72's own review history (bash -> python -> find ->
+    # process-substitution, one round at a time) showed a copied list
+    # eventually will.
     base="${word##*/}"
     case "$base" in
       tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
-      # issue #72 round 4 (agy's dedicated security pass on PR #78): find
-      # -exec is the same class of opaque executor as eval/sudo/time --
-      # added here in lockstep with guard.sh's own leading_verb list
-      # above, same reasoning: find . -exec tee <protected-path> \; runs
-      # tee via an argument find itself parses, invisible to word-based
-      # matching against the write-verb list alone.
-      '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin|find) return 0 ;;
-      *) return 1 ;;
     esac
+    orc_is_opaque_executor "$base" && return 0
+    return 1
   done
 }
 
@@ -712,7 +768,26 @@ orc_segment_write_targets() {
     case "${words[$idx]}" in
       '>'|'>>'|'&>'|'&>>')
         nxt=$((idx + 1))
-        [ "$nxt" -lt "$n" ] && echo "${words[$nxt]}"
+        if [ "$nxt" -lt "$n" ]; then
+          case "${words[$nxt]}" in
+            # issue #72 round 5 (Ahmad's parity directive, agy's PR #78
+            # round 4 finding): '>(' is PROCESS SUBSTITUTION, not a file
+            # path -- `echo x > >(bash -c "tee <protected>")` tokenizes
+            # the word right after '>' as the literal text "(bash", which
+            # this function used to emit as an ordinary write-TARGET
+            # candidate. Resolving "(bash" as a path obviously never
+            # matches a protected directory, so it silently passed, while
+            # bash went on to actually execute the process substitution's
+            # content. That content is a live command, not a target path
+            # -- it's the substitution scanner's job (orc_segment_has_
+            # suspicious_substitution, which now recognizes '>(' as a
+            # live-command trigger) to inspect it, not this function's.
+            # Emitting nothing here is correct: a real, protected-path
+            # redirect target is never itself parenthesized.
+            '('*) : ;;
+            *) echo "${words[$nxt]}" ;;
+          esac
+        fi
         ;;
     esac
     idx=$((idx + 1))

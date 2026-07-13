@@ -620,6 +620,74 @@ expect_blocked "SECURITY -- issue #72 round 4: 'find -exec' inside a live substi
 expect_blocked "SECURITY -- issue #72 round 4: the reachable >(...) write-target misread agy asked about, closed for the find vector specifically -- find inside a process substitution is now blocked" \
   'echo hello > >(find . -exec tee .claude/settings.json \;)'
 
+echo "== issue #72 round 5 (Ahmad's parity directive): the inner substitution scanner and the top-level guard must reject the SAME executor/interpreter set, off ONE shared list =="
+# Ahmad's decision on the round-4 escalation: stop enumerating verbs one
+# at a time (bash -> python -> find -> process-sub was the same
+# whack-a-mole every round). The fix is STRUCTURAL parity -- one shared
+# opaque-executor definition (orc_is_opaque_executor in
+# cmd-inspect-lib.sh) consumed by BOTH guard.sh's top-level leading_verb
+# check and _orc_verb_is_write_suggestive, so the two can never drift the
+# way #52/#57 already taught this codebase two "matching" lists always
+# eventually do.
+echo "-- these must now BLOCK, both at the top level and one level deep inside a live substitution --"
+expect_blocked "SECURITY -- issue #72 round 5: 'bash -c \"tee ...\"' at the TOP LEVEL (no substitution at all) is a script interpreter running arbitrary inline code -- must fail closed" \
+  'bash -c "tee .claude/settings.json"'
+expect_blocked "SECURITY -- issue #72 round 5: 'bash -c \"tee ...\"' INSIDE a live substitution -- must fail closed" \
+  'echo $(bash -c "tee .claude/settings.json")'
+expect_blocked "SECURITY -- issue #72 round 5: 'python -c \"...\"' at the TOP LEVEL -- must fail closed" \
+  'python -c "import os; os.system(\"tee .claude/settings.json\")"'
+expect_blocked "SECURITY -- issue #72 round 5: 'python -c \"...\"' INSIDE a live substitution -- must fail closed" \
+  'echo $(python -c "import os; os.system(\"tee .claude/settings.json\")")'
+expect_blocked "SECURITY -- issue #72 round 5: agy's exact reachable >(...) exploit -- process substitution running bash -c is now blocked by the shared list, not just the find vector" \
+  'echo hello > >(bash -c "tee .claude/settings.json")'
+echo "-- these must stay ALLOWED (the whole reason parity is nuanced, not a blanket ban) --"
+run_guard_at_repo_root "bash lib/orc-worktree.sh finish 116"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 5 regression -- THE ROOM'S OWN TEST-EXECUTION MECHANISM: 'bash script.sh' (a trusted script PATH, no inline-code flag) must stay allowed at the top level -- this is not a synthetic case, tests/*.test.sh in THIS repo run exactly this way"; PASS=$((PASS + 1))
+else
+  echo "FAIL: issue #72 round 5 regression -- trusted 'bash script.sh' execution must NOT be broken by the opaque-executor parity fix (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+run_guard_at_repo_root "bash tests/guard.test.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 5 regression -- running THIS repo's own test suite via 'bash tests/foo.test.sh' still trusted (the exact invocation every test in this suite depends on)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: issue #72 round 5 regression -- 'bash tests/guard.test.sh' must stay trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+expect_allowed "issue #72 round 5 regression -- an ordinary, non-write command substitution stays allowed" \
+  'echo "branch: $(git branch --show-current)"'
+
+echo "-- issue #72 round 5 (Ahmad's directive item 2): orc_segment_write_targets must not misread '>(' process-substitution content as an ordinary target path --"
+# Direct unit check (not through guard.sh) since this is about what a
+# SPECIFIC internal function emits, not just the overall block/allow
+# outcome -- agy's finding was that the OLD code emitted the literal text
+# "(bash" as a write-target CANDIDATE (tokenize_words fuses the '(' onto
+# the word right after '>' with no separating space), which any real
+# protected path never starts with, so it silently passed resolution.
+# The substitution scanner now independently blocks the exploit agy
+# demonstrated (bash/find inside '>(...)'), but Ahmad's directive is
+# explicit that this function itself must stop treating process-
+# substitution content as a target word at all, not just rely on a
+# different function catching the exploit downstream.
+CMDLIB="$DIR/../lib/cmd-inspect-lib.sh"
+PROCSUB_TARGETS="$(bash -c "source '$CMDLIB'; orc_segment_write_targets 'echo hello > >(bash -c \"tee .claude/settings.json\")'")"
+# Note: the FIRST '>' in "> >(...)" (a redirect token followed by the
+# SECOND '>' as its own separate token, since there's a space between
+# them) still emits the literal text ">" as a "target" -- a pre-existing
+# tokenizer quirk, unrelated to this fix, and harmless (no real protected
+# path is ever literally ">"). What this fix actually closes is the
+# parenthesized process-substitution CONTENT no longer appearing at all.
+if ! printf '%s\n' "$PROCSUB_TARGETS" | grep -q '^('; then
+  echo "PASS: orc_segment_write_targets emits no '(...'-shaped target for '> >(bash ...)' -- process-substitution content is no longer misread as a path"; PASS=$((PASS + 1))
+else
+  echo "FAIL: orc_segment_write_targets should not emit a '(...'-shaped target for process substitution, got: $PROCSUB_TARGETS"; FAIL=$((FAIL + 1))
+fi
+ORDINARY_TARGETS="$(bash -c "source '$CMDLIB'; orc_segment_write_targets 'echo hello > .claude/settings.json'")"
+if [ "$ORDINARY_TARGETS" = ".claude/settings.json" ]; then
+  echo "PASS: orc_segment_write_targets still correctly resolves an ORDINARY (non-process-substitution) redirect target"; PASS=$((PASS + 1))
+else
+  echo "FAIL: an ordinary redirect target regressed, got: $ORDINARY_TARGETS"; FAIL=$((FAIL + 1))
+fi
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"
