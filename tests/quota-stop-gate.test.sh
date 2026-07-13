@@ -77,6 +77,16 @@ if echo "$GATE_OUT" | grep -qF "Quota 5h at 85%. Options: (a) switch to agy (b) 
 else
   fail "expected the verbatim failsafe question in stderr, got: $GATE_OUT"
 fi
+if echo "$GATE_OUT" | grep -qF "quota-stop-clear.sh"; then
+  pass "#40: blocked message names lib/quota-stop-clear.sh instead of leaving 'resolve this' unstated"
+else
+  fail "#40: expected the blocked message to point at lib/quota-stop-clear.sh, got: $GATE_OUT"
+fi
+if echo "$GATE_OUT" | grep -qF "human-directed"; then
+  pass "#40: blocked message makes clear the flag clear is human-directed, not something the agent infers alone"
+else
+  fail "#40: expected the blocked message to say clearing is human-directed, got: $GATE_OUT"
+fi
 
 echo "== Claude Code dialect: allow-listed Write targets pass even while gated =="
 run_claude_gate '{"tool_name":"Write","tool_input":{"file_path":".harness/handoff.md"}}'
@@ -109,9 +119,41 @@ run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash .harness/orc-
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/quota-stop-clear.sh \"Ahmad: continue\""}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "quota-stop-clear.sh invocation allowed while gated" || fail "quota-stop-clear.sh should be allowed while gated, got $GATE_STATUS"
 
-echo "== Claude Code dialect: any other tool (e.g. Read) is blocked while gated =="
+echo "== Claude Code dialect: a NON-allow-listed Read is still blocked while gated =="
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":"README.md"}}'
-[ "$GATE_STATUS" -eq 2 ] && pass "Read tool blocked while gated (deny-by-default, allow only the fixed list)" || fail "Read should be blocked while gated, got $GATE_STATUS"
+[ "$GATE_STATUS" -eq 2 ] && pass "Read of an unrelated file blocked while gated (deny-by-default, allow only the fixed list)" || fail "unrelated Read should be blocked while gated, got $GATE_STATUS"
+
+echo "== #40: allow-listed Reads pass even while gated -- a gated agent must be able to see the state it's told to act on =="
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/handoff.md"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of handoff.md allowed while gated" || fail "#40: Read of handoff.md should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/decisions.log"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of decisions.log allowed while gated" || fail "#40: Read of decisions.log should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/inbox/orchestra/20260711-99.msg"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of an inbox .msg allowed while gated" || fail "#40: Read of inbox .msg should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/inbox/builder/20260711-99.ack"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of an inbox .ack allowed while gated" || fail "#40: Read of inbox .ack should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/state/quota-stop"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of the quota-stop flag itself allowed while gated (the agent can see what's blocking it)" || fail "#40: Read of the flag should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+echo "== #40: the Read allow-list is anchored to the project's canon dir, not any matching basename =="
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "Read of /etc/passwd is refused while gated" || fail "SECURITY: Read of /etc/passwd should be refused while gated, got $GATE_STATUS: $GATE_OUT"
+
+OUTSIDE_RO="$(mktemp -d)"
+run_claude_gate "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$OUTSIDE_RO/handoff.md\"}}"
+[ "$GATE_STATUS" -eq 2 ] && pass "Read of a handoff.md OUTSIDE this project's canon dir is still refused while gated" || fail "SECURITY REGRESSION: Read path allow-list not scoped to canon dir, got $GATE_STATUS: $GATE_OUT"
+rm -rf "$OUTSIDE_RO"
+
+echo "== #40: the Read allow-list survives a .. traversal attempt =="
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/inbox/builder/../../../../etc/passwd"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "Read with a .. traversal that string-glob-matches the inbox pattern is still refused" || fail "SECURITY REGRESSION: Read traversal bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/inbox/builder/./20260711-99.msg"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "a harmless ./ in an otherwise-legitimate inbox Read path is still allowed" || fail "over-strict: a harmless ./ segment in a Read got blocked, $GATE_STATUS: $GATE_OUT"
 
 echo "== regression (agy security review): a compound command cannot smuggle an unrelated command alongside an allow-listed one =="
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"rm -rf /Users/mac/important && bash lib/dispatch.sh assign orchestra x DONE"}}'
@@ -205,6 +247,11 @@ if echo "$REASON" | grep -qF "Quota weekly at 91%. Options: (a) switch to none (
 else
   fail "agy: expected the verbatim failsafe question in the deny reason, got: $REASON"
 fi
+if echo "$REASON" | grep -qF "quota-stop-clear.sh" && echo "$REASON" | grep -qF "human-directed"; then
+  pass "#40: agy deny reason also names lib/quota-stop-clear.sh and says clearing is human-directed"
+else
+  fail "#40: expected the agy deny reason to point at lib/quota-stop-clear.sh and say human-directed, got: $REASON"
+fi
 
 echo "== agy dialect: allow-listed command passes even while gated =="
 run_agy_gate '{"toolCall":{"args":{"CommandLine":"bash lib/dispatch.sh assign orchestra 11-10 DONE"}}}'
@@ -247,6 +294,50 @@ if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
 else
   fail "agy: TargetFile alone should resolve an allow-listed path, got: $GATE_OUT"
 fi
+
+echo "== #40 round 2 (agy REQUEST-CHANGES on PR #52): agy's OWN read-tool calls were still fully deadlocked -- .* PreToolUse matcher (templates/agents-hooks.json) covers agy's reads too, but the gate never extracted a read-tool path or called qsg_read_allowed =="
+# agy's dedicated security pass reported its real read-tool payload carries
+# the target path as .toolCall.args.AbsolutePath (or .toolCall.args.DirectoryPath
+# for a directory-shaped read) -- not independently trace-captured in this
+# codebase yet (see lib/guard-quota-stop-agy.sh's own header note), but
+# taken on agy's authority the same way TargetFile originally was before
+# its own live-trace confirmation.
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/handoff.md"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: a read-tool call (AbsolutePath) targeting handoff.md is allowed while gated"
+else
+  fail "#40 round 2: agy Read of handoff.md should be allowed while gated, got: $GATE_OUT"
+fi
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/state/quota-stop"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: a read-tool call targeting the flag itself is allowed while gated (the agent can see what's blocking it)"
+else
+  fail "#40 round 2: agy Read of the flag should be allowed while gated, got: $GATE_OUT"
+fi
+
+run_agy_gate '{"toolCall":{"name":"read_file","args":{"DirectoryPath":".harness/inbox/orchestra/20260711-99.msg"}}}'
+if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+  pass "agy: the DirectoryPath fallback key also resolves an allow-listed inbox .msg"
+else
+  fail "#40 round 2: agy Read via DirectoryPath should be allowed for an allow-listed path, got: $GATE_OUT"
+fi
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":"README.md"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a read-tool call for a NON-allow-listed file is still denied while gated" || fail "#40 round 2: agy Read of an unrelated file should be denied, got: $GATE_OUT"
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":"/etc/passwd"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a read-tool call for /etc/passwd is denied while gated" || fail "SECURITY: agy Read of /etc/passwd should be denied while gated, got: $GATE_OUT"
+
+run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/inbox/builder/../../../../etc/passwd"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a .. traversal in a read-tool call is still denied while gated" || fail "SECURITY REGRESSION: agy Read traversal bypass allowed, got: $GATE_OUT"
+
+run_agy_gate '{"toolCall":{"name":"write_to_file","args":{"AbsolutePath":".harness/state/quota-stop"}}}'
+DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: a WRITE-shaped tool name carrying a read-shaped key (AbsolutePath) is NOT granted the read allow-list's extra flag-path access" || fail "SECURITY REGRESSION: a write-named tool call bypassed into read-only territory via AbsolutePath, got: $GATE_OUT"
 
 echo "== lib/quota-stop-clear.sh: clears an active flag and logs it =="
 write_flag "5h" "88" "agy"

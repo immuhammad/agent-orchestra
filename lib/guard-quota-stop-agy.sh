@@ -61,7 +61,33 @@ if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
   exit 0
 fi
 
+# #40 round 2 (agy's own dedicated security pass on PR #52): the write-only
+# check above traps agy on READS too -- its PreToolUse matcher is ".*"
+# (templates/agents-hooks.json), so a gated agy session's read/view tool
+# calls were falling through to the deny at the bottom exactly like
+# Claude Code's Read tool did before qsg_read_allowed existed. Per agy's
+# report, the read-tool payload carries the target as
+# .toolCall.args.AbsolutePath (file read) or .toolCall.args.DirectoryPath
+# (directory-shaped read) -- NOT yet independently trace-captured in this
+# codebase the way TargetFile above was; upgrade this comment to CONFIRMED
+# once a live payload is captured. Gated on a read/view-shaped tool NAME
+# (not just key presence) so a wrongly-guessed key on some OTHER tool
+# can't accidentally reach into qsg_read_allowed's superset (it additionally
+# allows the flag path itself, which must never be write-reachable).
+TOOL_NAME=$(echo "$INPUT" | jq -r '.toolCall.name // empty')
+case "$TOOL_NAME" in
+  *[Rr]ead*|*[Vv]iew*)
+    READ_FILE_PATH=$(echo "$INPUT" | jq -r '
+      .toolCall.args.AbsolutePath // .toolCall.args.DirectoryPath // empty
+    ')
+    if [ -n "$READ_FILE_PATH" ] && qsg_read_allowed "$READ_FILE_PATH" "$CANON_DIR"; then
+      echo '{"decision":"allow"}'
+      exit 0
+    fi
+    ;;
+esac
+
 MSG="$(qsg_failsafe_message "$FLAG_PATH")"
-REASON="quota-stop-gate: tool blocked -- an active quota-stop flag means the AGENTS.md Quota Failsafe applies. Update handoff.md, then ask exactly: ${MSG}"
+REASON="quota-stop-gate: tool blocked -- an active quota-stop flag means the AGENTS.md Quota Failsafe applies. Update handoff.md, then ask exactly: ${MSG} (clearing this flag is human-directed, not something to infer or resolve on your own -- once Ahmad answers, ask Ahmad to run lib/quota-stop-clear.sh, or run it yourself ONLY once you actually have that answer)"
 echo "{\"decision\":\"deny\", \"reason\":$(jq -Rn --arg m "$REASON" '$m')}"
 exit 0

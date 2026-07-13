@@ -316,6 +316,57 @@ else
   fail "ar_epoch_from_iso8601 should return empty for unparseable input, not guess"
 fi
 
+echo "== #32: ar_epoch_from_iso8601 parses the REAL usage-API shape (fractional seconds + numeric offset) =="
+# The exact literal from the 4.5h dead-room outage (.harness/budget.log,
+# 2026-07-12 19:53:53): BSD `date` on macOS can take neither GNU-style
+# `date -d` NOR its own `-j -f "%Y-%m-%dT%H:%M:%SZ"` fallback here -- the
+# fixture format string demands a literal "Z" and no fraction, but the
+# real Claude usage API sends fractional seconds AND a numeric +00:00
+# offset. Both call sites (ar_write_quota_stop_flag and ar_poll_pane's
+# resume comparison) go through this ONE function -- there was never a
+# second, working parse path; the parking-path log line that looked like
+# a successful parse was just an unparsed echo of the raw string.
+REAL_TS="2026-07-12T20:39:59.719039+00:00"
+GOT_EPOCH="$(ar_epoch_from_iso8601 "$REAL_TS" 2>/dev/null)"
+WANT_EPOCH="$(ar_epoch_from_iso8601 "2026-07-12T20:39:59Z")" # same instant, fraction/offset-free oracle
+if [ -n "$GOT_EPOCH" ] && [ "$GOT_EPOCH" = "$WANT_EPOCH" ]; then
+  pass "ar_epoch_from_iso8601 parses fractional-seconds + numeric-offset timestamps (the real outage literal)"
+else
+  fail "expected ar_epoch_from_iso8601('$REAL_TS') = $WANT_EPOCH, got '$GOT_EPOCH'"
+fi
+NEG_OFFSET_EPOCH="$(ar_epoch_from_iso8601 "2026-07-12T15:39:59.740925-05:00" 2>/dev/null)"
+if [ -n "$NEG_OFFSET_EPOCH" ] && [ "$NEG_OFFSET_EPOCH" = "$WANT_EPOCH" ]; then
+  pass "ar_epoch_from_iso8601 also handles a negative numeric offset (same instant, different zone)"
+else
+  fail "expected the -05:00 fixture to resolve to the same instant $WANT_EPOCH, got '$NEG_OFFSET_EPOCH'"
+fi
+
+echo "== #32: a genuinely null/absent resets_at still fails CLOSED to manual-clear =="
+rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
+: > "$AUTO_RESUME_LOG"
+ar_write_quota_stop_flag "5h" "81" "agy" ""
+if [ "$(jq -r '.resets_at_epoch' "$AUTO_RESUME_QUOTA_STOP_FLAG" 2>/dev/null)" = "null" ]; then
+  pass "an absent resets_at still leaves resets_at_epoch null (correct fail-closed, manual clear required)"
+else
+  fail "an absent resets_at should leave resets_at_epoch null, got: $(cat "$AUTO_RESUME_QUOTA_STOP_FLAG")"
+fi
+rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
+
+echo "== #32: ar_write_quota_stop_flag no longer logs a parse failure for the real outage literal =="
+: > "$AUTO_RESUME_LOG"
+ar_write_quota_stop_flag "5h" "81" "agy" "$REAL_TS"
+if grep -q "could not parse resets_at" "$AUTO_RESUME_LOG"; then
+  fail "ar_write_quota_stop_flag logged a parse failure for a real, valid usage-API timestamp: $(cat "$AUTO_RESUME_LOG")"
+else
+  pass "ar_write_quota_stop_flag did not log a parse failure for the real outage literal"
+fi
+if [ "$(jq -r '.resets_at_epoch' "$AUTO_RESUME_QUOTA_STOP_FLAG" 2>/dev/null)" = "$WANT_EPOCH" ]; then
+  pass "flag's resets_at_epoch is correctly populated (non-null) from the real outage literal -- auto-clear is now live"
+else
+  fail "expected resets_at_epoch=$WANT_EPOCH in the flag, got: $(cat "$AUTO_RESUME_QUOTA_STOP_FLAG" 2>/dev/null || echo MISSING)"
+fi
+rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
+
 echo "== #10: quota-stop flag write/clear (the #11<->#10 seam) =="
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 ar_write_quota_stop_flag "5h" "85" "agy" "2026-07-11T14:00:00Z"
