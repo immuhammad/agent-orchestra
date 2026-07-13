@@ -519,6 +519,39 @@ expect_blocked "SECURITY -- a write-verb \$() inside DOUBLE quotes is STILL live
 expect_blocked "SECURITY -- agy's PR #70 finding: a LITERAL single-quote INSIDE double quotes must not re-enter single-quote mode -- real bash treats it as a plain character, so the \$() right after it is still LIVE and must stay blocked" \
   'echo "'"'"'$(tee .claude/settings.json)'"'"'"'
 
+echo "== issue #72: write-verb detection inside a LIVE substitution resolves the actually-executed token, not just an exact bare-word match =="
+# agy's dedicated security pass on PR #70 round 2 (and Orchestra's
+# independent live re-verification against merged main) found the
+# word-based verb check was blind to anything but a bare, unquoted,
+# unescaped verb as the immediate next word: an absolute path, a quoted
+# or backslash-escaped verb, and a verb reached through a NESTED
+# substitution all evaded it, on main, since #39 round 2 shipped -- not a
+# #59/#61 regression, confirmed by testing the identical payloads against
+# lib/cmd-inspect-lib.sh as it existed before any of those changes. Fix:
+# resolve the actually-executed leading token of each live substitution's
+# content (quote removal, backslash-unescaping, basename-of-path), fail
+# CLOSED if that resolution hits another live construct (a nested
+# substitution or an unresolvable variable) rather than guessing.
+expect_blocked "SECURITY -- issue #72: an ABSOLUTE PATH to a write verb inside a live substitution is still write-suggestive (basename resolves to a known verb)" \
+  'echo x | $(/usr/bin/tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72: the BACKTICK form of an absolute-path write verb is still write-suggestive" \
+  'echo x | `/usr/bin/tee .claude/settings.json`'
+expect_blocked "SECURITY -- issue #72: a BACKSLASH-ESCAPED verb character (\\tee, unescapes to the literal word 'tee') inside a live substitution is still write-suggestive" \
+  'echo x | $(\tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72: a NESTED substitution used AS the verb itself cannot be resolved without executing it -- fails CLOSED rather than guessing" \
+  'echo x | $( $(echo tee) .claude/settings.json )'
+SQ="'"
+expect_blocked "SECURITY -- issue #72: a SINGLE-QUOTED verb inside a live (unquoted) substitution still resolves to the literal verb" \
+  "echo x | \$(${SQ}tee${SQ} .claude/settings.json)"
+expect_blocked "SECURITY -- issue #72: a DOUBLE-QUOTED verb inside a live substitution still resolves to the literal verb" \
+  'echo x | $("tee" .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72: a leading NAME=value ENV-PREFIX before the real verb (FOO=bar tee ...) does not hide the verb -- real bash still runs tee" \
+  'echo x | $(FOO=bar tee .claude/settings.json)'
+expect_allowed "issue #72 regression -- a resolvable, non-write leading token (git) inside a live substitution stays allowed (the #39-round-2 / #61 goal, must not be collateral damage)" \
+  'echo "branch: $(git branch --show-current)"'
+expect_blocked "issue #72 -- a write verb appearing LATER inside substitution content (not just as the immediate leading word) is still caught by the recursive content scan" \
+  'echo $(git log; tee .claude/settings.json)'
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"

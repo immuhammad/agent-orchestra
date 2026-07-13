@@ -274,37 +274,11 @@ orc_segment_leading_verb() {
 # expands $()/`` inside "..."). False for one that real bash would NEVER
 # expand: inside SINGLE quotes (which suppress all expansion), or
 # immediately preceded by a backslash escaping the `$`/backtick itself.
-# This existed because the raw-substring check this replaced (`case
-# "$segment" in *'$('*|*'`'*)`) matched the TEXT "$(" or "`" anywhere,
-# with zero regard for quoting -- so a single-quoted, purely illustrative
-# example like '$(tee)' (exactly the shape a decisions.log entry or a
-# --title would use to CITE a bypass, not run one) read identically to a
-# live, unquoted $(tee) once further downstream logic tokenizes it, and
-# tripped the same fail-closed write-verb heuristic as a genuine bypass.
-# A plain character scan (not the tokenizer above) because quote state
-# must be tracked continuously across the WHOLE string, including
-# whitespace and separator characters the tokenizer/segmenter treat
-# specially -- this only needs to answer "is there a live $(/`` anywhere",
-# not produce a word stream. Bash 3.2 safe.
-#
-# agy's dedicated security pass on PR #70 found a real bypass in an
-# earlier version of this function: a single shared `case "$c"` handled
-# quote/escape/substitution detection regardless of what quote state we
-# were already in, so a LITERAL single-quote encountered while ALREADY
-# inside double quotes fell through to the same `"'") quote="'" ;;`
-# branch used for a real single-quote-open and unconditionally switched
-# state to single-quoted -- e.g. `echo "'$(tee .claude/settings.json)'"`
-# was read as "enters double quotes, then single quotes, so the $( that
-# follows is inert" and returned false (not live). Real bash disagrees: a
-# `'` has NO special meaning at all while already inside double quotes
-# (quote types don't nest), so the $( right after it is fully live and
-# WOULD have run tee against the protected file -- a genuine guard
-# bypass, verified live by agy. Fixed by giving each of the three states
-# (unquoted / single-quoted / double-quoted) its OWN dedicated handling
-# block instead of one shared case statement, so a quote character can
-# only ever change state out of the state it's actually a delimiter for
-# -- the same "one active quote at a time, no reinterpretation" posture
-# orc_split_top_level_segments above already uses correctly.
+# Kept as a small, independently-testable primitive for "is there ANY
+# live substitution at all" -- orc_segment_has_suspicious_substitution
+# below no longer calls this (it does its own equivalent tracking as part
+# of a single integrated pass, #72), but the quoting rules are identical
+# and reused by callers that only need the yes/no question.
 orc_string_has_live_command_substitution() {
   local s="$1" i c nc quote="" escape=0 len
   len=${#s}
@@ -372,57 +346,204 @@ orc_string_has_live_command_substitution() {
   return 1
 }
 
-# _orc_next_word_is_write_verb <string> <start-index> -- echoes nothing,
-# returns 0 if the run of letters starting at <start-index> (after
-# skipping leading spaces/tabs) exactly equals a known write verb
-# (tee/cp/mv/touch/mkdir/sed/dd/rm). Used to inspect what immediately
-# follows a LIVE `$(`/backtick directly off the character stream, at the
-# exact index the scanner found it live -- NOT via the word tokenizer,
-# which strips quote characters before this ever sees the word and would
-# let a stray literal quote character (agy's PR #70 finding) glue onto
-# the verb and defeat an exact match (e.g. the tokenized word for
-# "'$(tee ...)'" is "'tee" once quotes are stripped, which matches no
-# verb even though "tee" is what actually runs).
-_orc_next_word_is_write_verb() {
-  local s="$1" i="$2" c word="" len="${#s}"
-  while [ "$i" -lt "$len" ]; do
-    c="${s:$i:1}"
-    case "$c" in
-      ' '|$'\t') i=$((i + 1)); continue ;;
+# _orc_verb_is_write_suggestive <string> <start-index> -- (#72) resolves
+# the leading COMMAND WORD of a fresh command line starting at
+# <start-index> in <string> -- i.e. what real bash would actually treat
+# as argv[0] once quote-removal and backslash-unescaping happen -- and
+# returns 0 if that word (or its basename, for a path) is a known write
+# verb. Skips any number of leading NAME=value env-prefix words first
+# (`FOO=bar tee x` really runs tee), same reasoning
+# orc_segment_leading_verb below already applies at the top level.
+#
+# This replaced #70's word extraction (_orc_next_word_is_write_verb),
+# which only read a contiguous run of [A-Za-z] characters and so was
+# defeated by ANYTHING else appearing before the verb resolves to plain
+# text: an absolute path (`/usr/bin/tee` -- breaks at `/`), a quoted verb
+# (`'tee'`/`"tee"` -- breaks at the quote char), or a backslash-escaped
+# verb (`\tee` -- breaks at `\`) all evaded it even though real bash
+# executes tee in every one of those forms (confirmed live by agy's PR
+# #70 round-2 security pass and independently by Orchestra against
+# already-merged main). This function instead walks character-by-character
+# doing REAL quote-removal/unescaping to build the resolved word, so a
+# quote or backslash changes how the word is BUILT rather than ending the
+# scan.
+#
+# FAILS CLOSED (returns 0, i.e. "treat as write-suggestive") whenever the
+# word can't be confidently resolved to a plain literal: a live
+# construct ($/`) appearing IN the word itself -- most importantly, a
+# NESTED substitution used as the verb (`$( $(echo tee) file )`) -- can't
+# be known without executing it, and an unterminated quote can't be
+# trusted either. This is the same "can't verify -> block" posture guard.sh
+# already applies everywhere else (_guard_resolve_word, write-target
+# resolution); the alternative (silently allow) is exactly how the #72
+# evasions worked in the first place.
+_orc_verb_is_write_suggestive() {
+  local s="$1" i="$2" len="${#s}" c word quote escape base
+  while :; do
+    while [ "$i" -lt "$len" ]; do
+      c="${s:$i:1}"
+      case "$c" in
+        ' '|$'\t') i=$((i + 1)); continue ;;
+      esac
+      break
+    done
+    [ "$i" -ge "$len" ] && return 1
+
+    word=""
+    quote=""
+    escape=0
+    while [ "$i" -lt "$len" ]; do
+      c="${s:$i:1}"
+      if [ "$escape" -eq 1 ]; then
+        word="${word}${c}"
+        escape=0
+        i=$((i + 1))
+        continue
+      fi
+      if [ "$quote" = "'" ]; then
+        if [ "$c" = "'" ]; then quote=""; else word="${word}${c}"; fi
+        i=$((i + 1))
+        continue
+      fi
+      if [ "$quote" = '"' ]; then
+        case "$c" in
+          '\') escape=1 ;;
+          '"') quote="" ;;
+          '$'|'`') return 0 ;;
+          *) word="${word}${c}" ;;
+        esac
+        i=$((i + 1))
+        continue
+      fi
+      case "$c" in
+        ' '|$'\t') break ;;
+        '\') escape=1 ;;
+        "'") quote="'" ;;
+        '"') quote='"' ;;
+        '$'|'`') return 0 ;;
+        *) word="${word}${c}" ;;
+      esac
+      i=$((i + 1))
+    done
+    [ -n "$quote" ] && return 0
+
+    if [[ "$word" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+      continue
+    fi
+    base="${word##*/}"
+    case "$base" in
+      tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
+      *) return 1 ;;
     esac
-    break
   done
+}
+
+# _orc_skip_matching_paren <string> <start-index> -- <start-index> is the
+# character immediately after an already-consumed "$(". Echoes the index
+# of the matching closing ")" (tracking nesting depth: a NESTED "$(" or a
+# bare subshell "(" inside this substitution's own content opens another
+# level, quote-aware so an embedded "(" / ")" inside quotes doesn't count),
+# or <the string's length> if unterminated. Callers treat "ran off the
+# end" as "content is everything to the end of the string, and the outer
+# scan should stop there" -- an unterminated $(...) is a syntax error in
+# real bash (nothing would execute at all), so there is no live command to
+# miss either way.
+_orc_skip_matching_paren() {
+  local s="$1" i="$2" len="${#s}" c quote="" escape=0 depth=1
   while [ "$i" -lt "$len" ]; do
     c="${s:$i:1}"
+    if [ "$escape" -eq 1 ]; then
+      escape=0
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$quote" = "'" ]; then
+      [ "$c" = "'" ] && quote=""
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$quote" = '"' ]; then
+      case "$c" in
+        '\') escape=1 ;;
+        '"') quote="" ;;
+      esac
+      i=$((i + 1))
+      continue
+    fi
     case "$c" in
-      [A-Za-z]) word="${word}${c}" ;;
-      *) break ;;
+      '\') escape=1 ;;
+      "'") quote="'" ;;
+      '"') quote='"' ;;
+      '(') depth=$((depth + 1)) ;;
+      ')')
+        depth=$((depth - 1))
+        if [ "$depth" -eq 0 ]; then
+          echo "$i"
+          return 0
+        fi
+        ;;
     esac
     i=$((i + 1))
   done
-  case "$word" in
-    tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
-    *) return 1 ;;
-  esac
+  echo "$len"
+  return 1
 }
 
-# orc_segment_has_suspicious_substitution <segment> -- see the header
-# comment above orc_string_has_live_command_substitution for the quoting
-# rules this shares. Walks <segment> with the SAME quote/escape state
-# machine (its own pass, not a reuse of the tokenizer above) and returns
-# true the moment it finds either: a LIVE, unquoted `>` (a bare `>`
-# outside any quotes is ALWAYS a real shell redirect in bash, never plain
-# data -- this only ever runs once the caller already knows a live
-# substitution is present, so flagging any unquoted `>` here is exactly
-# as targeted as the old "redirect token in the tokenized word stream"
-# check it replaces), or a LIVE $(...)/`` whose content opens with a
-# known write verb.
-orc_segment_has_suspicious_substitution() {
-  local segment="$1"
-  orc_string_has_live_command_substitution "$segment" || return 1
-  local s="$segment" i c nc quote="" escape=0 len
+# _orc_skip_matching_backtick <string> <start-index> -- <start-index> is
+# the character immediately after an already-consumed opening backtick.
+# Echoes the index of the next unescaped backtick (real bash's own
+# backtick-matching rule -- no nesting without escaping the inner one),
+# or <the string's length> if unterminated.
+_orc_skip_matching_backtick() {
+  local s="$1" i="$2" len="${#s}" c escape=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ "$escape" -eq 1 ]; then
+      escape=0
+      i=$((i + 1))
+      continue
+    fi
+    case "$c" in
+      '\') escape=1 ;;
+      '`')
+        echo "$i"
+        return 0
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  echo "$len"
+  return 1
+}
+
+# _orc_scan_write_suggestive <string> <outer-quote> <depth> -- (#72) the
+# core of orc_segment_has_suspicious_substitution. Walks <string> under
+# outer quote context <outer-quote> ("" / "'" / '"') and returns 0 the
+# moment it finds a LIVE, write-suggestive construct:
+#   - an unquoted `>` (always a real shell redirect in bash, never plain
+#     data -- this only ever runs once a live substitution context is
+#     already open, so it's exactly as targeted as the "redirect token"
+#     check it replaces);
+#   - a LIVE $(...)/`` whose resolved leading verb is a write verb (or is
+#     unresolvable -- see _orc_verb_is_write_suggestive's fail-closed
+#     rule);
+#   - anything write-suggestive found by RECURSING into that
+#     substitution's own content, on a FRESH quote context -- real bash
+#     always starts $(...) as a brand new command line, independent of
+#     whatever quote it's textually sitting inside (#72's core insight:
+#     the OLD scanner tracked a single flat quote state across the whole
+#     string, so it could never model this). This also catches a write
+#     verb that isn't the immediate leading word at all, e.g.
+#     `$(git log; tee .claude/settings.json)`.
+# <depth> bounds recursion (cheap insurance against pathological input --
+# not the threat model here, but free to add) at 20 levels; hitting the
+# cap fails CLOSED rather than silently stopping the scan.
+_orc_scan_write_suggestive() {
+  local s="$1" quote="${2:-}" depth="${3:-0}" len i c nc escape close content
+  [ "$depth" -ge 20 ] && return 0
   len=${#s}
   i=0
+  escape=0
   while [ "$i" -lt "$len" ]; do
     c="${s:$i:1}"
     if [ "$escape" -eq 1 ]; then
@@ -439,17 +560,31 @@ orc_segment_has_suspicious_substitution() {
       case "$c" in
         '\')
           escape=1
+          i=$((i + 1))
+          continue
           ;;
         '"')
           quote=""
+          i=$((i + 1))
+          continue
           ;;
         '`')
-          _orc_next_word_is_write_verb "$s" $((i + 1)) && return 0
+          close="$(_orc_skip_matching_backtick "$s" $((i + 1)))"
+          content="${s:$((i + 1)):$((close - i - 1))}"
+          _orc_verb_is_write_suggestive "$content" 0 && return 0
+          _orc_scan_write_suggestive "$content" "" $((depth + 1)) && return 0
+          i=$((close + 1))
+          continue
           ;;
         '$')
           nc="${s:$((i + 1)):1}"
           if [ "$nc" = "(" ]; then
-            _orc_next_word_is_write_verb "$s" $((i + 2)) && return 0
+            close="$(_orc_skip_matching_paren "$s" $((i + 2)))"
+            content="${s:$((i + 2)):$((close - i - 2))}"
+            _orc_verb_is_write_suggestive "$content" 0 && return 0
+            _orc_scan_write_suggestive "$content" "" $((depth + 1)) && return 0
+            i=$((close + 1))
+            continue
           fi
           ;;
       esac
@@ -468,21 +603,46 @@ orc_segment_has_suspicious_substitution() {
         quote='"'
         ;;
       '>')
-        return 0
+        # A redirect is only THIS function's business when it's hiding
+        # inside a substitution's content (depth > 0) -- guard.sh's
+        # separate write-target resolution (orc_segment_write_targets /
+        # guard_check_write_targets) already owns a plain TOP-LEVEL
+        # redirect. Flagging depth-0 here would fire on every ordinary
+        # `cmd > file` with no substitution anywhere in the segment,
+        # double-guarding (and, for an unprotected target, wrongly
+        # blocking) something the write-target check already resolves
+        # correctly on its own.
+        [ "$depth" -gt 0 ] && return 0
         ;;
       '`')
-        _orc_next_word_is_write_verb "$s" $((i + 1)) && return 0
+        close="$(_orc_skip_matching_backtick "$s" $((i + 1)))"
+        content="${s:$((i + 1)):$((close - i - 1))}"
+        _orc_verb_is_write_suggestive "$content" 0 && return 0
+        _orc_scan_write_suggestive "$content" "" $((depth + 1)) && return 0
+        i=$((close + 1))
+        continue
         ;;
       '$')
         nc="${s:$((i + 1)):1}"
         if [ "$nc" = "(" ]; then
-          _orc_next_word_is_write_verb "$s" $((i + 2)) && return 0
+          close="$(_orc_skip_matching_paren "$s" $((i + 2)))"
+          content="${s:$((i + 2)):$((close - i - 2))}"
+          _orc_verb_is_write_suggestive "$content" 0 && return 0
+          _orc_scan_write_suggestive "$content" "" $((depth + 1)) && return 0
+          i=$((close + 1))
+          continue
         fi
         ;;
     esac
     i=$((i + 1))
   done
   return 1
+}
+
+# orc_segment_has_suspicious_substitution <segment> -- see
+# _orc_scan_write_suggestive above for the actual walk.
+orc_segment_has_suspicious_substitution() {
+  _orc_scan_write_suggestive "$1" ""
 }
 
 orc_segment_write_targets() {
