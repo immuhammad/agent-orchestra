@@ -718,6 +718,70 @@ else
   echo "FAIL: 'bash -v script.sh' should not be newly blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
 fi
 
+echo "== issue #72 round 7 (agy): unspaced subshell parens fuse into the leading word instead of being recognized as their own token =="
+# agy's dedicated security pass on PR #78 round 7: bash treats '(' as a
+# METACHARACTER -- it never needs surrounding whitespace to be parsed as
+# its own token, unlike an ordinary word boundary. Neither
+# orc_tokenize_words (top level) nor _orc_verb_is_write_suggestive
+# (inner) broke a word on a LEADING unquoted '(', so `(tee file)`
+# resolved to the single fused word "(tee", matching neither the
+# write-verb list nor the existing (spaced) '(' grouping entry.
+expect_blocked "SECURITY -- issue #72 round 7: unspaced '(tee ...)' subshell at the TOP LEVEL -- must fail closed same as the spaced '( tee ... )' form" \
+  '(tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 7: unspaced '(tee ...)' subshell INSIDE a live substitution" \
+  'echo $( (tee .claude/settings.json) )'
+expect_allowed "issue #72 round 7 regression -- an ordinary word that merely CONTAINS parens (not a leading grouping construct) is not mistaken for one" \
+  'echo hello(1).txt'
+
+echo "== issue #72 round 7 (agy): a backslash-escaped backtick is bash's OWN nested-backtick-substitution boundary, not inert text =="
+# Real bash nests backtick command substitutions by escaping the INNER
+# backticks (\`...\`) -- once one layer of backslash-removal happens for
+# the OUTER backtick's content, the escaped backtick becomes a real,
+# live nested substitution boundary. This codebase's escape handling
+# treated EVERY escaped character uniformly as "next char is inert,
+# skip its special meaning" -- correct for \$ (#61's own fix depends on
+# this) but WRONG for \` specifically. Rather than replicate bash's
+# exact (genuinely obscure, rarely-used-on-purpose) nested-backtick
+# execution semantics, this is fixed conservatively: ANY backtick
+# character, escaped or not, is now treated as live and triggers
+# recursion into its content -- safe-direction over-blocking, not a
+# precise parser.
+expect_blocked "SECURITY -- issue #72 round 7: a backslash-escaped nested backtick is a REAL nested substitution boundary in bash, not inert -- must fail closed" \
+  'echo `echo \`tee .claude/settings.json\``'
+
+echo "== issue #72 round 7 (agy): missing keywords/wrappers that also hide a real command from word-based verb matching =="
+# All of these actually execute (or, for trap, defer-execute at process
+# exit -- which for a standalone Bash tool invocation happens
+# immediately after the command finishes, since the hosting shell then
+# exits) whatever real command follows them, verified against real bash
+# semantics before adding: '!' negates a command's exit status but still
+# RUNS it; do/then/else/elif are reserved words this segmenter's naive
+# semicolon-split can turn into a segment's OWN leading word (`if true;
+# then tee ...; fi` splits into a segment literally starting with
+# "then"), hiding the real command exactly like eval/sudo already do;
+# coproc runs a command as a coprocess; timeout runs a command under a
+# time limit.
+expect_blocked "SECURITY -- issue #72 round 7: '! tee ...' (negation, still executes) hides the real verb -- must fail closed" \
+  '! tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 7: a real, syntactically-complete 'if ...; then tee ...; fi' -- this segmenter's naive semicolon-split turns 'then tee ...' into its own segment whose leading word is 'then', hiding the real verb -- must fail closed" \
+  'if true; then tee .claude/settings.json; fi'
+expect_blocked "SECURITY -- issue #72 round 7: a real, syntactically-complete 'for ...; do tee ...; done' (same class, loops) hides the real verb -- must fail closed" \
+  'for i in 1; do tee .claude/settings.json; done'
+expect_blocked "SECURITY -- issue #72 round 7: 'coproc tee ...' hides the real verb -- must fail closed" \
+  'coproc tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 7: 'timeout 10 tee ...' hides the real verb -- must fail closed" \
+  'timeout 10 tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 7: 'trap \"tee ...\" EXIT' defers execution to process exit, which happens immediately for a standalone invocation -- must fail closed" \
+  'trap "tee .claude/settings.json" EXIT'
+expect_blocked "SECURITY -- issue #72 round 7: all six also caught one level deep inside a live substitution" \
+  'echo $(! tee .claude/settings.json)'
+
+echo "-- regressions: the existing round-1 inert-text tests (single-quoted, and backslash-escaped DOLLAR specifically) must be unaffected by the backtick-specific escape fix --"
+expect_allowed "issue #72 round 7 regression -- a SINGLE-QUOTED \$(tee) is still inert (unaffected by the backtick-only escape fix)" \
+  "echo ${SQ}\$(tee)${SQ}"
+expect_allowed "issue #72 round 7 regression -- a BACKSLASH-ESCAPED \$(tee) (escaped DOLLAR, not backtick) is still inert" \
+  'echo \$(tee)'
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"

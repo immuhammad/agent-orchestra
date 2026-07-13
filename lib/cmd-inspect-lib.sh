@@ -274,11 +274,38 @@ orc_tokenize_words() {
 # no flag detection is needed), which means adding them here is
 # effectively INERT for the top-level path (it never actually resolves
 # to "source"/"." there) and exists purely to close the inner-scanner gap.
+# issue #72 round 7 (agy's dedicated security pass on PR #78): the
+# trailing !/do/then/else/elif/coproc/trap/timeout entries below were
+# each confirmed against real bash semantics before adding, not just
+# matched against agy's list blindly. coproc runs a command as a
+# coprocess. timeout (GNU) runs a command under a time limit. trap
+# defers execution to when its named signal fires -- for a standalone
+# Bash-tool invocation with an EXIT trap, that's immediately after the
+# command finishes, since the hosting shell then exits. These three are
+# genuine WRAPPER commands (like eval/sudo) that take the real command
+# as their own argument, so unconditional blocking is correct.
+#
+# '!'/do/then/else/elif are deliberately NOT here, despite also being
+# able to hide a real verb (`if true; then tee <path>; fi` splits on the
+# `;` into a segment literally starting with "then") -- unlike coproc/
+# trap/timeout, these are PURE SYNTAX with no independent existence: "!"
+# negates the exit status of whatever follows it and "then"/"do" merely
+# introduce a compound statement's body, they never wrap or obscure a
+# command the way eval's string argument does. Blocking them
+# unconditionally broke a real, already-shipped, already-tested
+# legitimate pattern (#59's own brace-free inbox-check idiom: `for m in
+# *.msg; do echo "$m"; cat "$m"; done` splits into a segment starting
+# with "do" too, and it must stay allowed). They get SKIP-THROUGH
+# treatment instead, in orc_segment_leading_verb and _orc_verb_is_write_
+# suggestive below, so the REAL command that follows is what actually
+# gets checked -- correctly allowing `do echo ...` while still blocking
+# `then tee <protected>` once "tee" itself is what's being evaluated.
 orc_is_opaque_executor() {
   case "$1" in
     '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin|find|\
     source|.|\
-    bash|sh|zsh|python|python3|perl|ruby|php|node|lua|make|awk)
+    bash|sh|zsh|python|python3|perl|ruby|php|node|lua|make|awk|\
+    coproc|trap|timeout)
       return 0
       ;;
     *)
@@ -315,6 +342,19 @@ orc_segment_leading_verb() {
   done
   [ "$idx" -ge "$n" ] && return 0
   local verb="${words[$idx]}"
+  # issue #72 round 7 (agy's dedicated security pass on PR #78): bash
+  # treats '(' as a METACHARACTER -- a subshell grouping never needs
+  # whitespace after the opening paren (`(tee file)` is exactly as live
+  # as `( tee file )`), but orc_tokenize_words only splits on
+  # WHITESPACE, so an unspaced "(tee" fused into one word that matched
+  # neither the write-verb list nor the existing (whitespace-shaped) '('
+  # grouping entry. A leading unquoted '(' is always significant in
+  # command position regardless of what immediately follows it, so it's
+  # reported as its own resolved verb here -- matching how a real shell
+  # would recognize the subshell regardless of spacing.
+  case "$verb" in
+    '('*) echo "("; ORC_LEADING_VERB_INDEX="$idx"; return 0 ;;
+  esac
   case "$verb" in
     bash|sh|zsh)
       # issue #72 round 6 (agy's dedicated security pass on PR #78): the
@@ -350,6 +390,16 @@ orc_segment_leading_verb() {
       # that path is the SEPARATE, location-based script-exec-trust check
       # in guard.sh (a few checks below this one) -- unaffected either
       # way, since this function was never in that check's path.
+      idx=$((idx + 1))
+      [ "$idx" -ge "$n" ] && return 0
+      verb="${words[$idx]}"
+      ;;
+    '!'|do|then|else|elif)
+      # issue #72 round 7: see orc_is_opaque_executor's header for why
+      # these are skip-through, not opaque -- pure syntax with no
+      # independent existence, unlike coproc/trap/timeout. Skipping
+      # through to the REAL command lets it hit the normal write-verb/
+      # opaque-executor checks, exactly like a plain leading "tee" would.
       idx=$((idx + 1))
       [ "$idx" -ge "$n" ] && return 0
       verb="${words[$idx]}"
@@ -534,6 +584,23 @@ _orc_verb_is_write_suggestive() {
       fi
       case "$c" in
         ' '|$'\t') break ;;
+        # issue #72 round 7 (agy's dedicated security pass on PR #78):
+        # bash treats '(' as a METACHARACTER -- `(tee file)` is exactly
+        # as live a subshell as `( tee file )`, no whitespace needed.
+        # Without this, an unspaced leading '(' just fused into the word
+        # like any other character ("(tee"), matching neither the
+        # write-verb list nor the '(' opaque entry. Only significant as
+        # the FIRST character of a word (word=="" so far) -- matches how
+        # a real shell only treats '(' specially in command position,
+        # not as an ordinary character once a word is already underway.
+        '(')
+          if [ -z "$word" ]; then
+            word="("
+            i=$((i + 1))
+            break
+          fi
+          word="${word}${c}"
+          ;;
         '\') escape=1 ;;
         "'") quote="'" ;;
         '"') quote='"' ;;
@@ -547,6 +614,16 @@ _orc_verb_is_write_suggestive() {
     if [[ "$word" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
       continue
     fi
+    # issue #72 round 7 (agy's dedicated security pass on PR #78): '!'/
+    # do/then/else/elif are pure syntax, not opaque wrappers -- see
+    # orc_is_opaque_executor's header for the full reasoning (blocking
+    # them unconditionally broke #59's own brace-free inbox-check idiom,
+    # which legitimately produces a "do ..." segment). Skip through to
+    # the REAL word that follows, same as the top-level resolver does,
+    # so it hits the normal write-verb/opaque-executor checks below.
+    case "$word" in
+      '!'|do|then|else|elif) continue ;;
+    esac
     # agy's dedicated security pass on PR #78 round 3: this resolved word
     # is exactly what guard.sh's SIBLING top-level check
     # (orc_segment_leading_verb, consumed by guard.sh's own leading_verb
@@ -623,9 +700,26 @@ _orc_skip_matching_paren() {
 
 # _orc_skip_matching_backtick <string> <start-index> -- <start-index> is
 # the character immediately after an already-consumed opening backtick.
-# Echoes the index of the next unescaped backtick (real bash's own
-# backtick-matching rule -- no nesting without escaping the inner one),
-# or <the string's length> if unterminated.
+# Echoes the index of the next UNESCAPED backtick (a backslash-escaped
+# one is literal text for the purpose of finding THIS span's own end --
+# see below), or <the string's length> if unterminated.
+#
+# issue #72 round 7 (agy's dedicated security pass on PR #78): real bash
+# nests backtick substitutions by escaping the inner backticks -- once
+# one layer of backslash-removal happens for the OUTER substitution, an
+# escaped backtick becomes a REAL, LIVE nested substitution boundary,
+# not inert text the way \$ or \<anything-else> is. That liveness is
+# handled by the MAIN SCANNER (_orc_scan_write_suggestive), not here: an
+# escaped backtick encountered mid-scan is treated as a live backtick-
+# open trigger, which recurses with a FRESH call into this same
+# function for the nested span. If this function ALSO tried to stop at
+# an escaped backtick, it would report the WRONG span boundary for the
+# span it's currently measuring (the escape marks where a NESTED span
+# begins, not where the CURRENT one ends) and silently truncate the
+# content before the real danger -- confirmed by a failing test during
+# development. This function only ever answers "where does a literal
+# span of text end," unaware of live/inert; that judgment belongs
+# entirely to the caller.
 _orc_skip_matching_backtick() {
   local s="$1" i="$2" len="${#s}" c escape=0
   while [ "$i" -lt "$len" ]; do
@@ -691,6 +785,18 @@ _orc_scan_write_suggestive() {
     if [ "$quote" = '"' ]; then
       case "$c" in
         '\')
+          # issue #72 round 7 (agy's dedicated security pass on PR #78):
+          # a backslash-escaped backtick is bash's own nested-backtick-
+          # substitution boundary, not inert the way \$ is -- see
+          # _orc_skip_matching_backtick's header for the full reasoning.
+          # Don't set the escape flag for it; just consume the
+          # backslash and let the next iteration see the backtick and
+          # process it via the ordinary '`' case below, live.
+          nc="${s:$((i + 1)):1}"
+          if [ "$nc" = '`' ]; then
+            i=$((i + 1))
+            continue
+          fi
           escape=1
           i=$((i + 1))
           continue
@@ -726,6 +832,17 @@ _orc_scan_write_suggestive() {
     # Unquoted.
     case "$c" in
       '\')
+        # issue #72 round 7 (agy's dedicated security pass on PR #78):
+        # see the double-quoted branch's identical check above and
+        # _orc_skip_matching_backtick's header -- an escaped backtick is
+        # live, not inert. Consume only the backslash and let the next
+        # iteration process the backtick normally via the '`' case
+        # below.
+        nc="${s:$((i + 1)):1}"
+        if [ "$nc" = '`' ]; then
+          i=$((i + 1))
+          continue
+        fi
         escape=1
         ;;
       "'")
