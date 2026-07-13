@@ -322,11 +322,32 @@ retry_deferred_nudges() {
 }
 
 dispatch_main() {
-  local VERB="${1:?usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg> [timeout_s]}"
-  local AGENT="${2:?usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg> [timeout_s]}"
-  local ISSUE="${3:?usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg> [timeout_s]}"
-  local MSG="${4:?usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg> [timeout_s]}"
-  local TIMEOUT="${5:-120}"
+  local USAGE="usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg>|--body-file <path> [timeout_s]"
+  local VERB="${1:?$USAGE}"
+  local AGENT="${2:?$USAGE}"
+  local ISSUE="${3:?$USAGE}"
+  # issue #59: a real dispatch body is 3-8KB of structured text -- passing
+  # that as a POSITIONAL string arg forces the CALLER into command
+  # substitution ("$(cat file)"), which is exactly the kind of construct
+  # guard.sh cannot safely verify and correctly refuses to trust. --body-file
+  # lets the caller Write the body to a file and pass a PATH instead: no
+  # substitution anywhere in the Bash tool call guard.sh inspects. The body
+  # is `cp`'d byte-for-byte (not read into a variable) so a trailing-newline
+  # mismatch or embedded NUL-adjacent oddity in the body can't silently
+  # change what lands in the inbox. The short positional-string form still
+  # works unchanged for short messages.
+  local MSG="" BODY_FILE="" TIMEOUT
+  if [ "${4:-}" = "--body-file" ]; then
+    BODY_FILE="${5:?$USAGE}"
+    if [ ! -f "$BODY_FILE" ]; then
+      echo "dispatch.sh: --body-file '$BODY_FILE' does not exist" >&2
+      return 1
+    fi
+    TIMEOUT="${6:-120}"
+  else
+    MSG="${4:?$USAGE}"
+    TIMEOUT="${5:-120}"
+  fi
   local INBOX="$CANON_DIR/inbox/$(inbox_dir_name "$AGENT")"
 
   case "$VERB" in
@@ -346,7 +367,11 @@ dispatch_main() {
   ts=$(date '+%Y%m%d%H%M%S')
   file="$INBOX/${ts}-${ISSUE}.msg"
   ack="${file%.msg}.ack"
-  echo "$MSG" > "$file"
+  if [ -n "$BODY_FILE" ]; then
+    cp "$BODY_FILE" "$file"
+  else
+    echo "$MSG" > "$file"
+  fi
   echo "dispatch.sh: wrote $file"
 
   [ "$VERB" = "message" ] && return 0

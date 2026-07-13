@@ -268,35 +268,220 @@ orc_segment_leading_verb() {
 # by an ordinary, non-write substitution (`echo "$(git branch
 # --show-current)"`) so this doesn't reopen #39's false-positive half for
 # the (very common) legitimate use of command substitution.
-orc_segment_has_suspicious_substitution() {
-  local segment="$1"
-  case "$segment" in
-    *'$('*|*'`'*) : ;;
+# orc_string_has_live_command_substitution <text> -- (#61) true if <text>
+# contains a $(...) or backtick command substitution that a REAL shell
+# would actually expand: unquoted, or inside DOUBLE quotes (bash still
+# expands $()/`` inside "..."). False for one that real bash would NEVER
+# expand: inside SINGLE quotes (which suppress all expansion), or
+# immediately preceded by a backslash escaping the `$`/backtick itself.
+# This existed because the raw-substring check this replaced (`case
+# "$segment" in *'$('*|*'`'*)`) matched the TEXT "$(" or "`" anywhere,
+# with zero regard for quoting -- so a single-quoted, purely illustrative
+# example like '$(tee)' (exactly the shape a decisions.log entry or a
+# --title would use to CITE a bypass, not run one) read identically to a
+# live, unquoted $(tee) once further downstream logic tokenizes it, and
+# tripped the same fail-closed write-verb heuristic as a genuine bypass.
+# A plain character scan (not the tokenizer above) because quote state
+# must be tracked continuously across the WHOLE string, including
+# whitespace and separator characters the tokenizer/segmenter treat
+# specially -- this only needs to answer "is there a live $(/`` anywhere",
+# not produce a word stream. Bash 3.2 safe.
+#
+# agy's dedicated security pass on PR #70 found a real bypass in an
+# earlier version of this function: a single shared `case "$c"` handled
+# quote/escape/substitution detection regardless of what quote state we
+# were already in, so a LITERAL single-quote encountered while ALREADY
+# inside double quotes fell through to the same `"'") quote="'" ;;`
+# branch used for a real single-quote-open and unconditionally switched
+# state to single-quoted -- e.g. `echo "'$(tee .claude/settings.json)'"`
+# was read as "enters double quotes, then single quotes, so the $( that
+# follows is inert" and returned false (not live). Real bash disagrees: a
+# `'` has NO special meaning at all while already inside double quotes
+# (quote types don't nest), so the $( right after it is fully live and
+# WOULD have run tee against the protected file -- a genuine guard
+# bypass, verified live by agy. Fixed by giving each of the three states
+# (unquoted / single-quoted / double-quoted) its OWN dedicated handling
+# block instead of one shared case statement, so a quote character can
+# only ever change state out of the state it's actually a delimiter for
+# -- the same "one active quote at a time, no reinterpretation" posture
+# orc_split_top_level_segments above already uses correctly.
+orc_string_has_live_command_substitution() {
+  local s="$1" i c nc quote="" escape=0 len
+  len=${#s}
+  i=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ "$escape" -eq 1 ]; then
+      escape=0
+      i=$((i + 1))
+      continue
+    fi
+
+    if [ "$quote" = "'" ]; then
+      # Single-quoted: bash suppresses EVERY expansion and every other
+      # quote character's special meaning here -- the only thing that can
+      # end this state is the matching closing single quote.
+      [ "$c" = "'" ] && quote=""
+      i=$((i + 1))
+      continue
+    fi
+
+    if [ "$quote" = '"' ]; then
+      # Double-quoted: a literal `'` is just data (must NOT toggle any
+      # quote state) -- but $()/`` are still LIVE here, same as unquoted.
+      case "$c" in
+        '\')
+          escape=1
+          ;;
+        '"')
+          quote=""
+          ;;
+        '`')
+          return 0
+          ;;
+        '$')
+          nc="${s:$((i + 1)):1}"
+          [ "$nc" = "(" ] && return 0
+          ;;
+      esac
+      i=$((i + 1))
+      continue
+    fi
+
+    # Unquoted.
+    case "$c" in
+      '\')
+        escape=1
+        ;;
+      "'")
+        quote="'"
+        ;;
+      '"')
+        quote='"'
+        ;;
+      '`')
+        return 0
+        ;;
+      '$')
+        nc="${s:$((i + 1)):1}"
+        [ "$nc" = "(" ] && return 0
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# _orc_next_word_is_write_verb <string> <start-index> -- echoes nothing,
+# returns 0 if the run of letters starting at <start-index> (after
+# skipping leading spaces/tabs) exactly equals a known write verb
+# (tee/cp/mv/touch/mkdir/sed/dd/rm). Used to inspect what immediately
+# follows a LIVE `$(`/backtick directly off the character stream, at the
+# exact index the scanner found it live -- NOT via the word tokenizer,
+# which strips quote characters before this ever sees the word and would
+# let a stray literal quote character (agy's PR #70 finding) glue onto
+# the verb and defeat an exact match (e.g. the tokenized word for
+# "'$(tee ...)'" is "'tee" once quotes are stripped, which matches no
+# verb even though "tee" is what actually runs).
+_orc_next_word_is_write_verb() {
+  local s="$1" i="$2" c word="" len="${#s}"
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    case "$c" in
+      ' '|$'\t') i=$((i + 1)); continue ;;
+    esac
+    break
+  done
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    case "$c" in
+      [A-Za-z]) word="${word}${c}" ;;
+      *) break ;;
+    esac
+    i=$((i + 1))
+  done
+  case "$word" in
+    tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
     *) return 1 ;;
   esac
-  local w stripped
-  while IFS= read -r w; do
-    case "$w" in
-      '>'|'>>'|'&>'|'&>>') return 0 ;;
-    esac
-    stripped="$w"
-    while [[ "$stripped" == '$('* || "$stripped" == '('* || "$stripped" == '`'* ]]; do
-      case "$stripped" in
-        '$('*) stripped="${stripped#\$\(}" ;;
-        '('*) stripped="${stripped#(}" ;;
-        '`'*) stripped="${stripped#\`}" ;;
+}
+
+# orc_segment_has_suspicious_substitution <segment> -- see the header
+# comment above orc_string_has_live_command_substitution for the quoting
+# rules this shares. Walks <segment> with the SAME quote/escape state
+# machine (its own pass, not a reuse of the tokenizer above) and returns
+# true the moment it finds either: a LIVE, unquoted `>` (a bare `>`
+# outside any quotes is ALWAYS a real shell redirect in bash, never plain
+# data -- this only ever runs once the caller already knows a live
+# substitution is present, so flagging any unquoted `>` here is exactly
+# as targeted as the old "redirect token in the tokenized word stream"
+# check it replaces), or a LIVE $(...)/`` whose content opens with a
+# known write verb.
+orc_segment_has_suspicious_substitution() {
+  local segment="$1"
+  orc_string_has_live_command_substitution "$segment" || return 1
+  local s="$segment" i c nc quote="" escape=0 len
+  len=${#s}
+  i=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ "$escape" -eq 1 ]; then
+      escape=0
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$quote" = "'" ]; then
+      [ "$c" = "'" ] && quote=""
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$quote" = '"' ]; then
+      case "$c" in
+        '\')
+          escape=1
+          ;;
+        '"')
+          quote=""
+          ;;
+        '`')
+          _orc_next_word_is_write_verb "$s" $((i + 1)) && return 0
+          ;;
+        '$')
+          nc="${s:$((i + 1)):1}"
+          if [ "$nc" = "(" ]; then
+            _orc_next_word_is_write_verb "$s" $((i + 2)) && return 0
+          fi
+          ;;
       esac
-    done
-    while [[ "$stripped" == *')' || "$stripped" == *'`' ]]; do
-      case "$stripped" in
-        *')') stripped="${stripped%)}" ;;
-        *'`') stripped="${stripped%\`}" ;;
-      esac
-    done
-    case "$stripped" in
-      tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
+      i=$((i + 1))
+      continue
+    fi
+    # Unquoted.
+    case "$c" in
+      '\')
+        escape=1
+        ;;
+      "'")
+        quote="'"
+        ;;
+      '"')
+        quote='"'
+        ;;
+      '>')
+        return 0
+        ;;
+      '`')
+        _orc_next_word_is_write_verb "$s" $((i + 1)) && return 0
+        ;;
+      '$')
+        nc="${s:$((i + 1)):1}"
+        if [ "$nc" = "(" ]; then
+          _orc_next_word_is_write_verb "$s" $((i + 2)) && return 0
+        fi
+        ;;
     esac
-  done < <(orc_tokenize_words "$segment")
+    i=$((i + 1))
+  done
   return 1
 }
 

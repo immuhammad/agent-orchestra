@@ -171,6 +171,52 @@ grep -q 'protected_paths=career-ops/' "$TMP/build.err" && pass "build log report
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
+echo "== issue #59: liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
+if grep -v '^[[:space:]]*#' "$DIR/../bin/orc" | grep -q 'nohup'; then
+  fail "bin/orc should no longer launch gatekeeper-liveness.sh via nohup (a comment MAY still mention nohup to explain why -- only a live invocation fails this) -- the harness's own restart drill needs an inspectable path, same as the other three loops"
+else
+  pass "bin/orc no longer uses nohup"
+fi
+
+echo "== issue #59: liveness watchdog launches via a tmux session, same mechanism as the other three loops =="
+LIVE_SESSION="orctest-liveness-$$"
+LIVE_TMP="$(mktemp -d)"
+(
+  cd "$LIVE_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: liveness-test-project
+EOF
+  ORC_SESSION="$LIVE_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$LIVE_TMP/build.err"
+)
+sleep 1
+if tmux has-session -t "${LIVE_SESSION}-liveness" 2>/dev/null; then
+  pass "orc_build_session started a dedicated tmux session for the liveness watchdog (${LIVE_SESSION}-liveness)"
+else
+  fail "expected a tmux session '${LIVE_SESSION}-liveness' for the liveness watchdog, none found: $(cat "$LIVE_TMP/build.err" 2>/dev/null)"
+fi
+tmux kill-session -t "$LIVE_SESSION" 2>/dev/null || true
+tmux kill-session -t "${LIVE_SESSION}-liveness" 2>/dev/null || true
+rm -rf "$LIVE_TMP"
+
+echo "== issue #59: ORC_SKIP_LIVENESS=1 still skips the liveness watchdog entirely (regression) =="
+SKIP_SESSION="orctest-liveness-skip-$$"
+SKIP_TMP="$(mktemp -d)"
+(
+  cd "$SKIP_TMP"
+  echo "project: liveness-skip-test" > orchestrator.yaml
+  ORC_SESSION="$SKIP_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SKIP_TMP/build.err"
+)
+sleep 1
+if tmux has-session -t "${SKIP_SESSION}-liveness" 2>/dev/null; then
+  fail "ORC_SKIP_LIVENESS=1 should skip the liveness watchdog tmux session entirely"
+else
+  pass "ORC_SKIP_LIVENESS=1 skips the liveness tmux session"
+fi
+tmux kill-session -t "$SKIP_SESSION" 2>/dev/null || true
+rm -rf "$SKIP_TMP"
+
 echo "== issue #22: orc_build_session seeds the inbox dirs dispatch.sh actually uses, not a hand-made layout =="
 for agent in orchestra builder agy scribe; do
   if [ -d "$TMP/.harness/inbox/$agent" ]; then

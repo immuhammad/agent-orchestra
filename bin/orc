@@ -80,14 +80,31 @@ orc_build_session() {
     tmux send-keys -t "$session:0.4" "$ORC_LIB_DIR/watch.sh" C-m
   fi
 
-  # Gatekeeper liveness watchdog (T19): independent background process, not
-  # a pane, so a gatekeeper crash/hang can't also silence its own warning.
-  # Log lands in THIS clone's own state dir (./.harness/state, cwd-relative
-  # -- clone-per-project means there's no shared install to clobber).
+  # Gatekeeper liveness watchdog (T19): independent process, not a pane in
+  # the main session, so a gatekeeper crash/hang can't also silence its own
+  # warning. Log lands in THIS clone's own state dir (./.harness/state,
+  # cwd-relative -- clone-per-project means there's no shared install to
+  # clobber).
+  #
+  # issue #59: this used to be `nohup ... &`, which guard.sh correctly
+  # fails closed on (nohup is an opaque executor it can't safely inspect
+  # for a hidden write, same posture as eval/sudo/env -- see guard.sh's
+  # leading_verb check) -- and did so MID-DRILL, after the other three
+  # loops had already been killed, which is the worst possible moment to
+  # discover a restart path doesn't work. A detached tmux session launched
+  # the SAME way as the other three loops (gatekeeper-supervisor/watch, via
+  # `tmux send-keys`) is fully inspectable and needs no special-casing here
+  # -- `${session}-liveness` so two clone-per-project rooms never collide
+  # on a shared session name (issue #19's own reasoning, applied here).
+  # `-c "$PWD"` reproduces nohup's cwd-preserving behavior: gatekeeper-
+  # liveness.sh resolves its project root from $PWD at launch time.
   if [ "${ORC_SKIP_LIVENESS:-0}" != "1" ]; then
     mkdir -p ./.harness/state
-    nohup "$ORC_LIB_DIR/gatekeeper-liveness.sh" >> ./.harness/state/gatekeeper-liveness.log 2>&1 &
-    disown
+    local liveness_session="${session}-liveness"
+    tmux kill-session -t "$liveness_session" 2>/dev/null || true
+    tmux new-session -d -s "$liveness_session" -c "$PWD"
+    tmux send-keys -t "$liveness_session" \
+      "$ORC_LIB_DIR/gatekeeper-liveness.sh >> ./.harness/state/gatekeeper-liveness.log 2>&1" C-m
   fi
 
   # issue #18 item 5 (C1): seed merge-watch-state on a fresh room so
