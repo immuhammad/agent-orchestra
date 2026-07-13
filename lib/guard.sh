@@ -431,6 +431,39 @@ while IFS= read -r seg; do
     esac
   fi
 
+  # #39 round 2 finding 3 (agy's dedicated security pass on PR #57):
+  # grouping ({ ... }, ( ... )) and command executors (eval/env/time/
+  # sudo/...) hid the real verb from every check below -- the segment's
+  # leading word was "{"/"("/"eval"/etc, none of which is a known write
+  # verb, so `{ tee .claude/settings.json; }` and `eval "tee
+  # .claude/settings.json"` sailed through untouched. This codebase
+  # cannot safely unwrap/recurse into these (eval's argument is a whole
+  # NEW command line that would need re-parsing from scratch), so fail
+  # CLOSED outright rather than pretend to understand them.
+  leading_verb="$(orc_segment_leading_verb "$trimmed")"
+  case "$leading_verb" in
+    '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin)
+      echo "guard.sh: blocked -- '$leading_verb' wraps or groups another command that can't be safely inspected for a hidden write, failing closed: $COMMAND" >&2
+      exit 2
+      ;;
+  esac
+
+  # #39 round 2 finding 2 (agy's dedicated security pass on PR #57):
+  # command substitution ($(...)/backticks) can hide a write verb from
+  # every word-based check above -- `echo $(tee .claude/settings.json)`'s
+  # leading verb is "echo", and "tee" never appears as its own clean
+  # word (it's fused into "$(tee"). Fails CLOSED only when the
+  # substitution ALSO looks write-suggestive (a bare redirect token, or a
+  # write-verb word once wrapper characters are stripped) -- see
+  # orc_segment_has_suspicious_substitution's header for why this is
+  # deliberately conditional, not a blanket ban on $()/backticks (those
+  # are extremely common for entirely benign uses like
+  # `$(git rev-parse HEAD)`).
+  if orc_segment_has_suspicious_substitution "$trimmed"; then
+    echo "guard.sh: blocked -- command substitution in this segment cannot be safely verified for a hidden write, failing closed: $COMMAND" >&2
+    exit 2
+  fi
+
   # #39: variable-assignment tracking, then the resolved write-target
   # check -- both need this segment's own tokenized words, and both must
   # see guard_cwd/the variable table as they stand AFTER any earlier

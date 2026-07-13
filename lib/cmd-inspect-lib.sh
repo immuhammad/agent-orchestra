@@ -53,13 +53,21 @@ orc_lexical_normalize() {
 }
 
 # orc_split_top_level_segments <command string> -- echoes one shell
-# "segment" per line, splitting on UNQUOTED ; && || |. Quote-aware: a
-# separator character inside a single- or double-quoted argument is passed
-# through as literal text, not treated as a split point. Unlike
-# lib/quota-stop-lib.sh's qsg_split_top_level (built on top of this), this
-# does NOT reject on redirection -- it only splits; callers decide what to
-# do with an embedded `<`/`>`/`&`. Bash 3.2 safe (character-by-character
-# scan, no regex extensions).
+# "segment" per line, splitting on UNQUOTED ; && || | AND a bare unquoted
+# `&` (backgrounding -- `cmd1 & cmd2` runs cmd1 in the background and
+# cmd2 as an ordinary NEXT command; #39 round 2, agy's dedicated security
+# pass on PR #57: a bare `&` used to be appended to the current segment
+# instead of splitting it, so `echo a & tee .claude/settings.json` was
+# seen as ONE segment whose leading verb is "echo", hiding the `tee` from
+# the write-verb check entirely). A `&` immediately followed by `>` is
+# the `&>`/`&>>` redirect operator, not backgrounding -- left embedded in
+# the segment for orc_tokenize_words to recognize later, same as before.
+# Quote-aware: a separator character inside a single- or double-quoted
+# argument is passed through as literal text, not treated as a split
+# point. Unlike lib/quota-stop-lib.sh's qsg_split_top_level (built on top
+# of this), this does NOT reject on redirection -- it only splits;
+# callers decide what to do with an embedded `<`/`>`. Bash 3.2 safe
+# (character-by-character scan, no regex extensions).
 orc_split_top_level_segments() {
   local s="$1" i c quote="" cur="" len
   len=${#s}
@@ -84,8 +92,10 @@ orc_split_top_level_segments() {
         if [ "${s:$((i + 1)):1}" = "&" ]; then
           echo "$cur"; cur=""
           i=$((i + 1))
-        else
+        elif [ "${s:$((i + 1)):1}" = ">" ]; then
           cur="${cur}${c}"
+        else
+          echo "$cur"; cur=""
         fi
         ;;
       '|')
@@ -213,6 +223,83 @@ orc_tokenize_words() {
 # cp/mv). Deliberately does NOT look at any other argument (a quoted
 # message, a git commit -m body, etc.) -- that's the other half of #39,
 # the false-positive an unanchored whole-string grep was causing.
+# orc_segment_leading_verb <segment> -- echoes the segment's own leading
+# command word after skipping any VAR=value env-prefix and an optional
+# bash/sh/zsh interpreter word, or nothing if the segment is a pure
+# assignment with no command. Shared leading-word resolution for
+# orc_segment_write_targets AND guard.sh's opaque-construct check
+# (grouping/executors, #39 round 2 finding 3) -- one leading-word
+# resolver, not two.
+orc_segment_leading_verb() {
+  local segment="$1"
+  local -a words=()
+  local w
+  while IFS= read -r w; do
+    words+=("$w")
+  done < <(orc_tokenize_words "$segment")
+  local n="${#words[@]}" idx=0
+  while [ "$idx" -lt "$n" ] && [[ "${words[$idx]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+    idx=$((idx + 1))
+  done
+  [ "$idx" -ge "$n" ] && return 0
+  local verb="${words[$idx]}"
+  case "$verb" in
+    bash|sh|zsh)
+      idx=$((idx + 1))
+      [ "$idx" -ge "$n" ] && return 0
+      verb="${words[$idx]}"
+      ;;
+  esac
+  echo "$verb"
+}
+
+# orc_segment_has_suspicious_substitution <segment> -- (#39 round 2,
+# finding 2 of agy's dedicated security pass on PR #57) true if the
+# segment contains an unquoted command substitution ($(...) or backticks)
+# that ALSO looks write-suggestive: a bare redirect operator token
+# anywhere, or a word that -- after stripping any leading `$(`/`(`/
+# backtick and trailing `)`/backtick wrapper characters -- exactly
+# matches a known write verb. `echo $(tee .claude/settings.json)` hides
+# "tee" from orc_segment_write_targets entirely (the word is literally
+# "$(tee", which matches no verb); this codebase cannot safely evaluate
+# what a substitution actually runs, so a segment matching this heuristic
+# fails CLOSED rather than being silently let through -- the same posture
+# already used everywhere else something can't be verified. NOT triggered
+# by an ordinary, non-write substitution (`echo "$(git branch
+# --show-current)"`) so this doesn't reopen #39's false-positive half for
+# the (very common) legitimate use of command substitution.
+orc_segment_has_suspicious_substitution() {
+  local segment="$1"
+  case "$segment" in
+    *'$('*|*'`'*) : ;;
+    *) return 1 ;;
+  esac
+  local w stripped
+  while IFS= read -r w; do
+    case "$w" in
+      '>'|'>>'|'&>'|'&>>') return 0 ;;
+    esac
+    stripped="$w"
+    while [[ "$stripped" == '$('* || "$stripped" == '('* || "$stripped" == '`'* ]]; do
+      case "$stripped" in
+        '$('*) stripped="${stripped#\$\(}" ;;
+        '('*) stripped="${stripped#(}" ;;
+        '`'*) stripped="${stripped#\`}" ;;
+      esac
+    done
+    while [[ "$stripped" == *')' || "$stripped" == *'`' ]]; do
+      case "$stripped" in
+        *')') stripped="${stripped%)}" ;;
+        *'`') stripped="${stripped%\`}" ;;
+      esac
+    done
+    case "$stripped" in
+      tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
+    esac
+  done < <(orc_tokenize_words "$segment")
+  return 1
+}
+
 orc_segment_write_targets() {
   local segment="$1"
   local -a words=()
@@ -249,12 +336,24 @@ orc_segment_write_targets() {
   esac
 
   local -a nonflag=()
-  local j t has_inplace_flag=0
+  local j t has_inplace_flag=0 target_dir_flag=""
   j=$((idx + 1))
   while [ "$j" -lt "$n" ]; do
     t="${words[$j]}"
     case "$t" in
       -i|-i.*) has_inplace_flag=1 ;;
+    esac
+    # GNU cp/mv -t DIR / --target-directory=DIR inverts which argument is
+    # the destination -- #39 round 2 finding 4 (agy's dedicated security
+    # pass on PR #57): "always trust the LAST non-flag arg" got the
+    # destination backwards for `cp -t .claude/settings.json
+    # innocent_source`, checking the harmless-looking source instead of
+    # the real target. -t's own value is itself a non-flag-shaped word,
+    # so it's captured explicitly here (highest priority below) rather
+    # than left to fall into nonflag and be picked by position.
+    case "$t" in
+      --target-directory=*) target_dir_flag="${t#--target-directory=}" ;;
+      -t) nxt=$((j + 1)); [ "$nxt" -lt "$n" ] && target_dir_flag="${words[$nxt]}" ;;
     esac
     case "$t" in
       -*|'>'|'>>'|'&>'|'&>>') : ;;
@@ -270,8 +369,12 @@ orc_segment_write_targets() {
       done
       ;;
     cp|mv)
-      local cnt="${#nonflag[@]}"
-      [ "$cnt" -ge 1 ] && echo "${nonflag[$((cnt - 1))]}"
+      if [ -n "$target_dir_flag" ]; then
+        echo "$target_dir_flag"
+      else
+        local cnt="${#nonflag[@]}"
+        [ "$cnt" -ge 1 ] && echo "${nonflag[$((cnt - 1))]}"
+      fi
       ;;
     sed)
       # Only sed -i (or -i.bak style, GNU/BSD) actually writes to the

@@ -474,6 +474,50 @@ expect_allowed "sed whose SCRIPT ARGUMENT merely contains the two characters '-i
 expect_blocked "sed -i (real in-place edit) into a protected path is still blocked" \
   "sed -i 's/x/y/' .claude/settings.json"
 
+echo "== issue #39 round 2: agy's dedicated security pass on PR #57 found 4 further parser bypasses -- all confirmed real =="
+
+echo "-- finding 1: a single & (background operator) was appended to the current segment instead of splitting it, hiding a second command from the verb check --"
+expect_blocked "SECURITY -- 'echo a & tee .claude/settings.json' is blocked (bare & splits into its own segment, same as ;)" \
+  "echo a & tee .claude/settings.json"
+expect_allowed "a literal '&' inside quotes is still just data, not a segment split" \
+  "echo 'a & b'"
+
+echo "-- finding 2: command substitution can hide a write verb, or mangle a redirect target's suffix, past the tokenizer entirely --"
+expect_blocked "SECURITY -- 'echo \$(tee .claude/settings.json)' is blocked (write verb hidden inside \$())" \
+  'echo $(tee .claude/settings.json)'
+expect_blocked "SECURITY -- 'echo \$(echo x > .claude/settings.json)' is blocked (redirect hidden inside \$())" \
+  'echo $(echo x > .claude/settings.json)'
+expect_blocked "SECURITY -- backtick form of the same hidden-write bypass is blocked" \
+  'echo `tee .claude/settings.json`'
+expect_allowed "an ordinary, non-write command substitution is NOT over-blocked (only fails closed when write-suggestive)" \
+  'echo "branch: $(git branch --show-current)"'
+
+echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
+expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
+  "{ tee .claude/settings.json; }"
+expect_blocked "SECURITY -- '( tee .claude/settings.json )' subshell-grouping bypass is blocked" \
+  "( tee .claude/settings.json )"
+expect_blocked "SECURITY -- 'eval \"tee .claude/settings.json\"' is blocked" \
+  'eval "tee .claude/settings.json"'
+expect_blocked "SECURITY -- 'time tee .claude/settings.json' is blocked" \
+  "time tee .claude/settings.json"
+expect_blocked "SECURITY -- 'env tee .claude/settings.json' is blocked" \
+  "env tee .claude/settings.json"
+expect_blocked "SECURITY -- 'sudo tee .claude/settings.json' is blocked" \
+  "sudo tee .claude/settings.json"
+expect_allowed "an ordinary command is NOT mistaken for a grouping/executor wrapper" \
+  "echo hello"
+
+echo "-- finding 4: GNU cp/mv -t DIR (and --target-directory=DIR) inverts which argument is the destination -- the parser must not always trust 'last non-flag arg' --"
+expect_blocked "SECURITY -- 'cp -t .claude/settings.json innocent_source' (-t target inversion) is blocked" \
+  "cp -t .claude/settings.json innocent_source"
+expect_blocked "SECURITY -- 'cp --target-directory=.claude/settings.json innocent_source' is blocked" \
+  "cp --target-directory=.claude/settings.json innocent_source"
+expect_blocked "SECURITY -- 'mv -t .claude/settings.json innocent_source' (-t target inversion) is blocked" \
+  "mv -t .claude/settings.json innocent_source"
+expect_allowed "an ordinary 'cp src dest' (no -t) still resolves dest as the LAST argument, unaffected" \
+  "cp innocent_source /tmp/backup.json"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
