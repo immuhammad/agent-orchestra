@@ -100,6 +100,14 @@ if [ "$ENV_RESULT" = "/explicit/env/override" ]; then
 else
   fail "expected the env var to win over the config key, got '$ENV_RESULT'"
 fi
+
+echo "dev_target_root: project/agent-orchestra" > "$FAKE_PROJECT/orchestrator.yaml"
+EMPTY_ENV_RESULT="$(cd "$FAKE_PROJECT" && ORC_WORKTREE_REPO_ROOT="" mw_dev_target_root)"
+if [ -z "$EMPTY_ENV_RESULT" ]; then
+  pass "#47 round 2 (agy) -- an explicitly-exported EMPTY ORC_WORKTREE_REPO_ROOT is a deliberate 'don't override' signal and still wins over the config key, not falling through to it"
+else
+  fail "#47 round 2 REGRESSION -- an explicit empty ORC_WORKTREE_REPO_ROOT should win outright (stay empty), not fall through to the config key, got '$EMPTY_ENV_RESULT'"
+fi
 rm -f "$FAKE_PROJECT/orchestrator.yaml"
 
 # mw_teardown_branch is mocked to a harmless default (success, no-op) for

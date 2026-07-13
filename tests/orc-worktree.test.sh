@@ -427,6 +427,50 @@ else
 fi
 teardown_cleanup
 
+echo "== #47 round 2 (agy's dedicated security pass on PR #65): a network/auth error checking the remote must NOT be mistaken for 'branch already gone' =="
+# git ls-remote --exit-code returns exit 2 when origin explicitly confirms
+# no matching ref exists, but a DIFFERENT non-zero (128, unreachable
+# remote/auth failure/etc) on any other failure. The original
+# branch_exists_remote collapsed both into the same "false" -- a network
+# blip during teardown's remote-delete step would silently skip it while
+# cmd_teardown still logged overall success, exactly the false-success
+# class #47 is about, just relocated to the new code. Reproduced fully
+# offline: origin points at a path that isn't a git repo at all, so
+# ls-remote fails with a real fatal error (exit 128), not exit 2.
+NET_ORIGIN_BARE="$(mktemp -d)"
+NET_ORIGIN_BARE="$(cd "$NET_ORIGIN_BARE" && pwd -P)"
+git init -q --bare "$NET_ORIGIN_BARE"
+
+NET_DEVROOT="$(mktemp -d)"
+NET_DEVROOT="$(cd "$NET_DEVROOT" && pwd -P)"
+git init -q "$NET_DEVROOT"
+git -C "$NET_DEVROOT" config user.email "test@test.local"
+git -C "$NET_DEVROOT" config user.name "test"
+git -C "$NET_DEVROOT" remote add origin "$NET_ORIGIN_BARE"
+git -C "$NET_DEVROOT" commit -q --allow-empty -m init
+git -C "$NET_DEVROOT" push -q -u origin HEAD:main
+
+NET_ISSUE="net-error-scratch"
+NET_BRANCH="feature/issue-$NET_ISSUE"
+NET_WT="$NET_DEVROOT/.worktrees/issue-$NET_ISSUE"
+git -C "$NET_DEVROOT" worktree add -q -b "$NET_BRANCH" "$NET_WT" main
+git -C "$NET_DEVROOT" push -q -u origin "$NET_BRANCH"
+
+# Break the remote AFTER pushing, so the branch genuinely exists on
+# "origin" but is now unreachable -- exactly the network-blip shape.
+git -C "$NET_DEVROOT" remote set-url origin "$NET_DEVROOT/definitely-not-a-git-repo"
+
+OUT="$(ORC_WORKTREE_REPO_ROOT="$NET_DEVROOT" bash "$ORC" teardown "$NET_ISSUE" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  pass "#47 round 2 -- teardown fails loudly when the remote can't be reached, instead of silently skipping the delete and reporting success"
+else
+  fail "#47 round 2 REGRESSION -- a network/auth error checking the remote branch was mistaken for 'already gone', teardown reported success: $OUT"
+fi
+
+git -C "$NET_DEVROOT" worktree remove --force "$NET_WT" >/dev/null 2>&1
+rm -rf "$NET_DEVROOT" "$NET_ORIGIN_BARE"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

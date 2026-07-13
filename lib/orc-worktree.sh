@@ -119,6 +119,32 @@ branch_exists_remote() {
   git -C "$REPO_ROOT" ls-remote --exit-code --heads origin "$1" >/dev/null 2>&1
 }
 
+# _teardown_remote_branch_state <branch> -- echoes "exists", "absent", or
+# "unknown" for the branch on origin, always returns 0. #47 round 2 (agy's
+# dedicated security pass on PR #65): branch_exists_remote above is a plain
+# boolean built on `git ls-remote --exit-code`'s raw exit status, which is
+# 2 when origin explicitly confirms no matching ref exists, but some OTHER
+# non-zero (128, typically) on a network blip, auth failure, or
+# unreachable remote -- a plain boolean collapses both into "false",
+# indistinguishable from "confirmed absent". cmd_teardown's remote section
+# used exactly that boolean and, on a network error, fell into "already
+# gone, nothing to delete" -- skipping the delete silently while still
+# logging overall success, the same false-success class #47 itself is
+# about. This distinguishes the three cases explicitly; cmd_teardown is the
+# one caller that needs it. cmd_start's existing branch_exists_remote
+# usage (a simple "does it exist, for refusing to re-point a branch"
+# check) is left untouched -- out of scope for this finding.
+_teardown_remote_branch_state() {
+  local status
+  git -C "$REPO_ROOT" ls-remote --exit-code --heads origin "$1" >/dev/null 2>&1
+  status=$?
+  case "$status" in
+    0) echo "exists" ;;
+    2) echo "absent" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
 worktree_is_checked_out() {
   local path="$1"
   git -C "$REPO_ROOT" worktree list --porcelain | grep -q "^worktree $path\$"
@@ -320,21 +346,33 @@ cmd_teardown() {
   fi
 
   # -- remote branch (#47: never existed before) ----------------------------
-  # Absence here is NOT treated as suspicious the way worktree/local-branch
-  # absence is: a branch that was `start`ed but never pushed via `finish`
-  # legitimately has no remote counterpart, and that's a normal state, not
-  # a sign anything is wrong.
-  if branch_exists_remote "$branch"; then
-    if git -C "$REPO_ROOT" push origin --delete "$branch" >/dev/null 2>&1 \
-      && ! branch_exists_remote "$branch"; then
-      echo "orc-worktree.sh: deleted remote branch $branch"
-    else
-      echo "orc-worktree.sh: teardown FAILED: could not verify remote branch $branch was deleted -- refusing to report success" >&2
+  # Confirmed absence is NOT treated as suspicious the way worktree/local-
+  # branch absence is: a branch that was `start`ed but never pushed via
+  # `finish` legitimately has no remote counterpart, and that's a normal
+  # state, not a sign anything is wrong. An UNKNOWN state (network/auth
+  # error, unreachable remote) is different -- #47 round 2: conflating
+  # "confirmed absent" with "couldn't check" let a network blip skip the
+  # delete silently while still reporting overall success.
+  local remote_state
+  remote_state="$(_teardown_remote_branch_state "$branch")"
+  case "$remote_state" in
+    exists)
+      if git -C "$REPO_ROOT" push origin --delete "$branch" >/dev/null 2>&1 \
+        && [ "$(_teardown_remote_branch_state "$branch")" = "absent" ]; then
+        echo "orc-worktree.sh: deleted remote branch $branch"
+      else
+        echo "orc-worktree.sh: teardown FAILED: could not verify remote branch $branch was deleted -- refusing to report success" >&2
+        failed=1
+      fi
+      ;;
+    absent)
+      echo "orc-worktree.sh: remote branch $branch already gone (or never pushed), nothing to delete"
+      ;;
+    unknown)
+      echo "orc-worktree.sh: teardown FAILED: could not verify whether remote branch $branch exists on origin (network or auth error?) -- refusing to report success" >&2
       failed=1
-    fi
-  else
-    echo "orc-worktree.sh: remote branch $branch already gone (or never pushed), nothing to delete"
-  fi
+      ;;
+  esac
 
   [ "$failed" -eq 0 ]
 }

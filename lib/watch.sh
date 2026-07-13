@@ -138,7 +138,12 @@ mw_close_issue() {
 # key. Neither set -> empty, and mw_teardown_branch below falls back to
 # orc-worktree.sh's unchanged $PWD-based default, exactly as before.
 mw_dev_target_root() {
-  if [ -n "${ORC_WORKTREE_REPO_ROOT:-}" ]; then
+  # `${VAR+x}` (existence) rather than `${VAR:-}` (existence-or-empty): an
+  # explicitly-exported EMPTY ORC_WORKTREE_REPO_ROOT is a deliberate "don't
+  # override" signal from whoever set it, distinct from never having set it
+  # at all -- checked precisely so it still short-circuits the config-key
+  # fallback below, per agy's dedicated security pass on PR #65.
+  if [ -n "${ORC_WORKTREE_REPO_ROOT+x}" ]; then
     echo "$ORC_WORKTREE_REPO_ROOT"
     return 0
   fi
