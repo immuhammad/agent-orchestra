@@ -688,6 +688,36 @@ else
   echo "FAIL: an ordinary redirect target regressed, got: $ORDINARY_TARGETS"; FAIL=$((FAIL + 1))
 fi
 
+echo "== issue #72 round 6 (agy): three more parity holes -- source/. only caught at top level (inner scanner gap), backslash-verb and multi-flag bash only caught by the inner scanner (top-level gap) =="
+echo "-- source/. (inner-scanner-only gap: top level already has separate location-based trust protection for these via the script-exec-trust check) --"
+expect_blocked "SECURITY -- issue #72 round 6: '. /tmp/script.sh' (dot-source, untrusted path) INSIDE a live substitution -- the inner scanner had no equivalent to the top-level's location-based trust check, so it never recognized '.'/source as opaque at all" \
+  'echo $(. /tmp/script.sh)'
+expect_blocked "SECURITY -- issue #72 round 6: 'source /tmp/script.sh' INSIDE a live substitution -- same gap, the 'source' spelling" \
+  'echo $(source /tmp/script.sh)'
+echo "-- backslash-escaped verb (top-level gap: orc_tokenize_words never processed escapes, so a leading backslash -- the classic alias-bypass idiom, real bash still runs the plain command -- evaded both the opaque-executor check and write-target detection) --"
+expect_blocked "SECURITY -- issue #72 round 6: '\\\\tee .claude/settings.json' at the TOP LEVEL (backslash-escaped verb, the classic shell-alias-bypass idiom -- real bash still runs plain tee) -- must fail closed same as unescaped tee" \
+  '\tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 6 regression -- '\\\\tee' was ALREADY correctly blocked inside a live substitution (agy confirmed this); must stay blocked after the top-level fix" \
+  'echo $(\tee .claude/settings.json)'
+echo "-- bash with a flag BEFORE -c (top-level gap: the -c detection only checked the single immediate next word, so any other flag first hid it) --"
+expect_blocked "SECURITY -- issue #72 round 6: 'bash -l -c \"tee ...\"' at the TOP LEVEL -- a flag before -c must not hide the inline-code flag from detection" \
+  'bash -l -c "tee .claude/settings.json"'
+expect_blocked "SECURITY -- issue #72 round 6 regression -- 'bash -l -c' was ALREADY correctly blocked inside a live substitution (agy confirmed this); must stay blocked" \
+  'echo $(bash -l -c "tee .claude/settings.json")'
+echo "-- regressions: trusted script-path execution (source/dot AND bash/sh/zsh with flags) must stay allowed at the top level --"
+run_guard_at_repo_root "source lib/orc-config.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 6 regression -- trusted 'source lib/foo.sh' (a real script path under this installation) stays allowed"; PASS=$((PASS + 1))
+else
+  echo "FAIL: trusted 'source lib/foo.sh' should stay allowed (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+run_guard_at_repo_root "bash -v tests/guard.test.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 6 regression -- 'bash -v script.sh' (a non-c flag before a real trusted script path) is not newly blocked by the multi-flag -c scan"; PASS=$((PASS + 1))
+else
+  echo "FAIL: 'bash -v script.sh' should not be newly blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"

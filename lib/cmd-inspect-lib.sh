@@ -261,9 +261,23 @@ orc_tokenize_words() {
 # command/flag inside a sed SCRIPT) is a real but much narrower and
 # different concern than "sed is an opaque wrapper" -- flagged as a
 # follow-up rather than folded in here at the cost of a regression.
+# issue #72 round 6 (agy's dedicated security pass on PR #78): source/.
+# added here too. guard.sh's top level has a SEPARATE, location-based
+# trust check for these (the script-exec-trust regex a few checks below
+# -- trusts a script path under this installation, blocks anything
+# else), so they were never a top-level gap. But the INNER substitution
+# scanner has no equivalent path-resolution machinery at all, so
+# `$(. /tmp/untrusted.sh)` sailed through it completely -- confirmed live
+# by agy. orc_segment_leading_verb below gives source/. the SAME
+# unconditional skip-through-to-the-script-path treatment as bash/sh/zsh
+# (they have no inline-code-string mode to guard against, unlike -c, so
+# no flag detection is needed), which means adding them here is
+# effectively INERT for the top-level path (it never actually resolves
+# to "source"/"." there) and exists purely to close the inner-scanner gap.
 orc_is_opaque_executor() {
   case "$1" in
     '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin|find|\
+    source|.|\
     bash|sh|zsh|python|python3|perl|ruby|php|node|lua|make|awk)
       return 0
       ;;
@@ -275,11 +289,18 @@ orc_is_opaque_executor() {
 
 # orc_segment_leading_verb <segment> -- echoes the segment's own leading
 # command word after skipping any VAR=value env-prefix and an optional
-# bash/sh/zsh interpreter word, or nothing if the segment is a pure
-# assignment with no command. Shared leading-word resolution for
-# orc_segment_write_targets AND guard.sh's opaque-construct check
-# (grouping/executors, #39 round 2 finding 3) -- one leading-word
-# resolver, not two.
+# bash/sh/zsh/source/. interpreter word, or nothing if the segment is a
+# pure assignment with no command. THE shared leading-word resolver --
+# orc_segment_write_targets below calls this directly instead of keeping
+# its own copy (issue #72 round 6: it used to have one, and the two
+# quietly drifted, which is exactly the class of bug this whole
+# refactor exists to stop). Also sets ORC_LEADING_VERB_INDEX (the
+# resolved verb's index into this segment's OWN tokenized word list) as
+# a side effect, since orc_segment_write_targets needs that index to
+# keep scanning arguments after the verb -- orc_tokenize_words is a pure
+# function, so re-tokenizing the same segment there reproduces the
+# identical array this index refers to.
+ORC_LEADING_VERB_INDEX=-1
 orc_segment_leading_verb() {
   local segment="$1"
   local -a words=()
@@ -288,6 +309,7 @@ orc_segment_leading_verb() {
     words+=("$w")
   done < <(orc_tokenize_words "$segment")
   local n="${#words[@]}" idx=0
+  ORC_LEADING_VERB_INDEX=-1
   while [ "$idx" -lt "$n" ] && [[ "${words[$idx]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
     idx=$((idx + 1))
   done
@@ -295,21 +317,56 @@ orc_segment_leading_verb() {
   local verb="${words[$idx]}"
   case "$verb" in
     bash|sh|zsh)
-      # issue #72 round 5 (Ahmad's parity directive): see
-      # orc_is_opaque_executor's header above for the full reasoning --
-      # skip through to the real script/command word (preserving the
-      # legitimate `bash script.sh` trust path), UNLESS the next word is
-      # an inline-code flag, in which case report the INTERPRETER ITSELF
-      # so it hits the opaque-executor check instead of silently
-      # resolving to "-c".
+      # issue #72 round 6 (agy's dedicated security pass on PR #78): the
+      # round-5 version of this only checked the SINGLE immediate next
+      # word for -c, so a flag before it (`bash -l -c "..."`) hid the
+      # inline-code flag entirely (leading_verb resolved to "-l", which
+      # matches nothing). Now scans forward past any number of leading
+      # flag words, looking for either -c (opaque -- report the
+      # interpreter itself, same as before) or the first non-flag word
+      # (the script path -- skip through to it, preserving the
+      # legitimate `bash script.sh` trust path this room's own test
+      # suite runs on).
+      local j=$((idx + 1))
+      while [ "$j" -lt "$n" ]; do
+        case "${words[$j]}" in
+          -c)
+            ORC_LEADING_VERB_INDEX="$j"
+            echo "$verb"
+            return 0
+            ;;
+          -*) j=$((j + 1)) ;;
+          *) break ;;
+        esac
+      done
+      [ "$j" -ge "$n" ] && return 0
+      idx="$j"
+      verb="${words[$idx]}"
+      ;;
+    source|.)
+      # issue #72 round 6: source/. always take a FILE argument -- unlike
+      # bash -c, there is no inline-code-string mode to detect, so this
+      # is an unconditional skip-through to the script path. Trust for
+      # that path is the SEPARATE, location-based script-exec-trust check
+      # in guard.sh (a few checks below this one) -- unaffected either
+      # way, since this function was never in that check's path.
       idx=$((idx + 1))
       [ "$idx" -ge "$n" ] && return 0
-      case "${words[$idx]}" in
-        -c) echo "$verb"; return 0 ;;
-      esac
       verb="${words[$idx]}"
       ;;
   esac
+  # issue #72 round 6 (agy's dedicated security pass on PR #78): strip
+  # backslash characters from the resolved verb before it's compared
+  # against anything. orc_tokenize_words never processed escapes at all
+  # (backslash was just an ordinary character to it), so a leading
+  # backslash -- real bash's well-known idiom for bypassing a shell
+  # alias/function of the same name, which still resolves to the REAL
+  # binary -- defeated both this check and orc_segment_write_targets's
+  # verb comparison: the resolved word was literally "\tee", matching
+  # neither "tee" nor any opaque-executor entry. `\tee .claude/settings.
+  # json` was allowed outright until this fix.
+  verb="${verb//\\/}"
+  ORC_LEADING_VERB_INDEX="$idx"
   echo "$verb"
 }
 
@@ -793,19 +850,30 @@ orc_segment_write_targets() {
     idx=$((idx + 1))
   done
 
-  idx=0
-  while [ "$idx" -lt "$n" ] && [[ "${words[$idx]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
-    idx=$((idx + 1))
-  done
-  [ "$idx" -ge "$n" ] && return 0
-  local verb="${words[$idx]}"
-  case "$verb" in
-    bash|sh|zsh)
-      idx=$((idx + 1))
-      [ "$idx" -ge "$n" ] && return 0
-      verb="${words[$idx]}"
-      ;;
-  esac
+  # issue #72 round 6 (agy's dedicated security pass on PR #78): this
+  # used to be a SECOND, independent copy of the env-prefix/bash-sh-zsh
+  # skip-through logic orc_segment_leading_verb already has above --
+  # despite that function's own header comment claiming it was already
+  # shared. It wasn't, and the two copies had already drifted apart (this
+  # copy never got backslash-stripping or the multi-flag -c scan when
+  # round 5 added them to the OTHER copy) -- exactly the "two lists meant
+  # to match will drift" lesson Ahmad's parity directive is about, just
+  # for verb RESOLUTION instead of the opaque-executor LIST. Now a real,
+  # single call: `\tee .claude/settings.json` (the classic backslash
+  # alias-bypass idiom) evaded this function's own tee|cp|mv|... match
+  # because the resolved word was literally "\tee" -- reusing the
+  # backslash-stripping fix from orc_segment_leading_verb closes it here
+  # too, for free, instead of needing a third copy of the same fix.
+  orc_segment_leading_verb "$segment" >/dev/null
+  idx="$ORC_LEADING_VERB_INDEX"
+  [ "$idx" -lt 0 ] && return 0
+  # words[] here is THIS function's own tokenization (orc_tokenize_words
+  # is pure, so it's identical to the one orc_segment_leading_verb used
+  # internally) -- index straight into it rather than re-invoking via
+  # command substitution, which would fork a subshell and lose the
+  # ORC_LEADING_VERB_INDEX side effect we just read. Backslash-stripped
+  # the same way orc_segment_leading_verb strips its own return value.
+  local verb="${words[$idx]//\\/}"
 
   local -a nonflag=()
   local j t has_inplace_flag=0 target_dir_flag=""
