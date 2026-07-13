@@ -3,7 +3,7 @@
 # Run: bash .harness/orc-worktree.test.sh
 #
 # Uses a scratch, non-numeric issue id ("t18-scratch") so the branch
-# (feature/issue-t18-scratch) and worktree (.claude/worktrees/issue-t18-scratch)
+# (feature/issue-t18-scratch) and worktree (.worktrees/issue-t18-scratch)
 # can never collide with a real issue, and are unambiguous to clean up. The
 # `finish` case does a REAL push + `gh pr create` against the actual repo
 # (that's what "VERIFY with a live cycle" means) -- cleanup below closes
@@ -20,7 +20,7 @@ INTEGRATION_BRANCH="$(cd "$REPO_ROOT" && source "$DIR/../lib/orc-config.sh" && o
 INTEGRATION_BRANCH="${INTEGRATION_BRANCH:-uat}"
 ISSUE="t18-scratch"
 BRANCH="feature/issue-$ISSUE"
-WT="$REPO_ROOT/.claude/worktrees/issue-$ISSUE"
+WT="$REPO_ROOT/.worktrees/issue-$ISSUE"
 
 PASS=0
 FAIL=0
@@ -207,7 +207,7 @@ fi
 # lifecycles never interact.
 TD_ISSUE="t18-teardown-scratch"
 TD_BRANCH="feature/issue-$TD_ISSUE"
-TD_WT="$REPO_ROOT/.claude/worktrees/issue-$TD_ISSUE"
+TD_WT="$REPO_ROOT/.worktrees/issue-$TD_ISSUE"
 TD_TMP="$(mktemp -d)"
 
 # Only clears worktree/branch debris -- never touches TD_TMP, which must
@@ -236,13 +236,26 @@ else
   fail "teardown should have deleted the merged branch: $OUT"
 fi
 
-echo "== teardown: idempotent no-op when worktree/branch are already gone =="
+echo "== #47: teardown on an ALREADY-gone worktree/branch now fails LOUDLY, not a silent no-op =="
+# #47: this used to be documented/tested as an idempotent no-op -- that was
+# exactly the bug. A merged PR always has a worktree+branch pair to clean
+# (start/resume always create them together); "found nothing" is either a
+# legitimate double-run (harmless in practice, since watch.sh's own
+# mw_already_processed state file guarantees teardown is only ever invoked
+# ONCE per merged PR in the real flow) or the wrong-repo-root/wrong-path bug
+# that cost this room three merges' worth of debris tonight -- and
+# cmd_teardown has no way to tell those apart from the inside. Per the
+# ticket: "return 0 MUST mean the worktree and branches are gone, not I
+# didn't find them" -- so it no longer guesses innocent-until-proven and
+# instead fails loud every time, on the theory that a human/agy noticing an
+# unnecessary complaint is far cheaper than a silent lie about cleanup that
+# already cost real debris three merges running.
 OUT="$(bash "$ORC" teardown "$TD_ISSUE" 2>&1)"
 STATUS=$?
-if [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q "nothing to remove" && echo "$OUT" | grep -q "already gone"; then
-  pass "re-running teardown on an already-gone worktree/branch is a clean no-op"
+if [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -qi "FAILED"; then
+  pass "re-running teardown on an already-gone worktree/branch now fails loudly instead of lying"
 else
-  fail "re-running teardown should be a clean no-op (status=$STATUS): $OUT"
+  fail "re-running teardown should fail loudly, not silently succeed (status=$STATUS): $OUT"
 fi
 
 echo "== teardown: dirty worktree is FLAGged to orchestra, never force-removed =="
@@ -299,6 +312,120 @@ if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$TD_BRANCH"; then
 else
   fail "teardown must never -D an unmerged branch"
 fi
+
+# -- #47: the two-repo mismatch that cost this room 3 merges' worth of -----
+# debris tonight, PLUS the never-implemented remote branch delete ----------
+#
+# Fully local/offline (a bare repo stands in for "origin") -- this
+# reproduces watch.sh's real bug (it runs from the HARNESS ROOT, a
+# different repo than the dev target whose worktree/branch it's tearing
+# down) without touching the real network or the real project repo, unlike
+# the live-network sections above.
+echo "== #47: teardown run from a DIFFERENT repo than the one holding the worktree/branch must fail loudly, not silently 'succeed' =="
+
+ORIGIN_BARE="$(mktemp -d)"
+git init -q --bare "$ORIGIN_BARE"
+
+# pwd -P (not plain mktemp's output): on macOS, /tmp/var is a symlink to
+# /private/var, so an unresolved mktemp path textually differs from the
+# canonicalized path `git worktree list --porcelain` reports, which broke
+# worktree_is_checked_out()'s string comparison -- same lesson
+# tests/guard.test.sh's sandbox helpers already learned.
+DEVROOT="$(mktemp -d)"
+DEVROOT="$(cd "$DEVROOT" && pwd -P)"
+git init -q "$DEVROOT"
+git -C "$DEVROOT" config user.email "test@test.local"
+git -C "$DEVROOT" config user.name "test"
+git -C "$DEVROOT" remote add origin "$ORIGIN_BARE"
+git -C "$DEVROOT" commit -q --allow-empty -m init
+git -C "$DEVROOT" push -q -u origin HEAD:main
+
+MM_ISSUE="mismatch-scratch"
+MM_BRANCH="feature/issue-$MM_ISSUE"
+MM_WT="$DEVROOT/.worktrees/issue-$MM_ISSUE"
+git -C "$DEVROOT" worktree add -q -b "$MM_BRANCH" "$MM_WT" main
+git -C "$DEVROOT" push -q -u origin "$MM_BRANCH"
+
+CALLERROOT="$(mktemp -d)"
+CALLERROOT="$(cd "$CALLERROOT" && pwd -P)"
+git init -q "$CALLERROOT"
+git -C "$CALLERROOT" config user.email "test@test.local"
+git -C "$CALLERROOT" config user.name "test"
+git -C "$CALLERROOT" commit -q --allow-empty -m "unrelated repo, e.g. the harness root watch.sh actually runs from"
+# orc-worktree.sh sources lib/dispatch.sh, which fails CLOSED at SOURCE
+# TIME if it can't resolve a canonical .harness dir from $PWD -- give the
+# caller repo its own orchestrator.yaml so that resolution succeeds and
+# this test actually exercises REPO_ROOT mismatch handling, not an
+# unrelated dispatch.sh bootstrap failure.
+echo "project: mismatch-test" > "$CALLERROOT/orchestrator.yaml"
+
+mismatch_cleanup() {
+  git -C "$DEVROOT" worktree remove --force "$MM_WT" >/dev/null 2>&1
+  rm -rf "$DEVROOT" "$CALLERROOT" "$ORIGIN_BARE"
+  true
+}
+
+echo "-- reproduces tonight's exact conditions: caller's \$PWD is the WRONG repo, no ORC_WORKTREE_REPO_ROOT override --"
+OUT="$(cd "$CALLERROOT" && bash "$ORC" teardown "$MM_ISSUE" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  pass "#47 -- teardown invoked from the wrong repo (no explicit root) fails loudly instead of reporting success"
+else
+  fail "#47 REGRESSION -- teardown invoked from the wrong repo silently reported success: $OUT"
+fi
+if [ -d "$MM_WT" ] && git -C "$DEVROOT" show-ref --verify --quiet "refs/heads/$MM_BRANCH"; then
+  pass "worktree and branch are untouched in the real dev repo after the wrong-repo attempt (nothing was silently 'cleaned up' in the wrong place either)"
+else
+  fail "worktree/branch should still exist in the real dev repo untouched after a wrong-repo teardown attempt"
+fi
+
+echo "-- with ORC_WORKTREE_REPO_ROOT explicitly pointed at the real dev repo: succeeds AND actually removes worktree + local branch + remote branch --"
+OUT="$(cd "$CALLERROOT" && ORC_WORKTREE_REPO_ROOT="$DEVROOT" bash "$ORC" teardown "$MM_ISSUE" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ]; then
+  pass "#47 -- teardown succeeds once the real repo root is given explicitly, from a caller sitting in a totally different repo"
+else
+  fail "#47 -- teardown should succeed with the correct ORC_WORKTREE_REPO_ROOT (status=$STATUS): $OUT"
+fi
+if [ ! -d "$MM_WT" ]; then
+  pass "worktree was actually removed"
+else
+  fail "worktree should have been removed"
+fi
+if ! git -C "$DEVROOT" show-ref --verify --quiet "refs/heads/$MM_BRANCH"; then
+  pass "local branch was actually deleted"
+else
+  fail "local branch should have been deleted"
+fi
+if ! git -C "$DEVROOT" ls-remote --exit-code --heads origin "$MM_BRANCH" >/dev/null 2>&1; then
+  pass "#47 finding 3 -- remote branch was actually deleted (this never existed in the code before #47)"
+else
+  fail "#47 REGRESSION -- remote branch should have been deleted, was left behind"
+fi
+
+mismatch_cleanup
+
+echo "== #47: remote-only absence (never pushed) is still a harmless no-op -- only LOCAL worktree/branch absence is treated as suspicious =="
+# A branch that was `start`ed but never `finish`ed (never pushed) has no
+# remote counterpart at all -- that's a legitimate state (not every scratch
+# branch reaches a real PR), so its absence on origin must not be treated
+# the same as a wrong-repo-root false success. Local worktree+branch are a
+# different story: start/resume always create them TOGETHER, so for a
+# teardown invoked on a real merged PR, their absence really is the
+# suspicious signal.
+# The preceding "unmerged branch" section intentionally leaves TD_BRANCH
+# behind un-deleted (that's what it's testing) -- clear it first so `start`
+# below isn't a silent no-op against a stale branch from that case.
+teardown_cleanup
+bash "$ORC" start "$TD_ISSUE" >/dev/null 2>&1
+OUT="$(bash "$ORC" teardown "$TD_ISSUE" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ]; then
+  pass "#47 -- a clean worktree + locally-merged branch with NO remote counterpart still tears down successfully (remote absence alone isn't suspicious)"
+else
+  fail "#47 -- teardown of a never-pushed branch should still succeed (status=$STATUS): $OUT"
+fi
+teardown_cleanup
 
 echo ""
 echo "$PASS passed, $FAIL failed"

@@ -11,7 +11,7 @@
 # out, `git show-ref` / `git ls-remote` for whether the branch exists.
 #
 #   start <issue> [base-commit]
-#     Create worktree .claude/worktrees/issue-<N> on a NEW branch
+#     Create worktree .worktrees/issue-<N> on a NEW branch
 #     feature/issue-<N>, branched from an explicit commit (default: the
 #     current tip of origin/uat, resolved to a SHA and pinned -- not a
 #     moving ref -- so the base is reproducible even if uat advances while
@@ -41,18 +41,34 @@
 #
 #   teardown <issue>
 #     Post-merge cleanup (issue #85, Task 4): removes the worktree at
-#     .claude/worktrees/issue-<N> ONLY if it is clean (`git status
-#     --porcelain` empty) -- a dirty worktree is NOT force-removed, it is
-#     FLAGged to orchestra via the inbox instead, since uncommitted work
-#     surviving a merge is exactly the kind of thing a human should look at,
-#     not something this script should silently discard. Then deletes the
+#     .worktrees/issue-<N> ONLY if it is clean (`git status --porcelain`
+#     empty) -- a dirty worktree is NOT force-removed, it is FLAGged to
+#     orchestra via the inbox instead, since uncommitted work surviving a
+#     merge is exactly the kind of thing a human should look at, not
+#     something this script should silently discard. Then deletes the local
 #     branch with `git branch -d` (never `-D`, matching the "this script
 #     never deletes a branch" rule below in spirit -- an unmerged branch
 #     must survive and get flagged too, per the T31 lesson that a merged PR
 #     doesn't necessarily absorb every commit that was ever pushed to its
-#     branch). Idempotent: an already-gone worktree or already-gone branch
-#     is a clean no-op, not an error. Only ever touches the worktree/branch
-#     for the given issue number (feature/issue-<N>) -- never anything else.
+#     branch), and finally deletes the REMOTE branch too (#47 -- this never
+#     existed before; "GitHub's delete_branch_on_merge didn't fire" was
+#     never GitHub's fault, the code simply never ran it).
+#
+#     #47: NOT idempotent on a missing worktree or missing LOCAL branch --
+#     a real merged PR always has both (start/resume always create them
+#     together), so either being absent is treated as a FAILURE, not a
+#     silent no-op. The previous version treated "I looked and found
+#     nothing" the same as "I cleaned up", which combined with a wrong
+#     REPO_ROOT (self-dogfood rooms run this from a DIFFERENT repo than the
+#     one holding the worktree) to silently lose three consecutive merges'
+#     worth of cleanup while logging success the whole time. A missing
+#     REMOTE branch is still a harmless no-op (a branch that was `start`ed
+#     but never pushed via `finish` legitimately has no remote counterpart).
+#     Every removal (worktree, local branch, remote branch) is VERIFIED
+#     gone before being logged as done -- `return 0` means the resources
+#     are actually gone, not merely that a removal command was attempted.
+#     Only ever touches the worktree/branch for the given issue number
+#     (feature/issue-<N>) -- never anything else.
 #
 # Hard rule carried over from AGENTS.md: this script never merges. It never
 # force-deletes a branch (`-D`) or force-removes a dirty worktree either --
@@ -86,7 +102,14 @@ usage() {
 }
 
 branch_name() { echo "feature/issue-$1"; }
-worktree_path() { echo "$REPO_ROOT/.claude/worktrees/issue-$1"; }
+# #47: worktrees are created at .worktrees/ (repo-root-relative, gitignored
+# -- see .gitignore), NOT .claude/worktrees/. The old path here never
+# matched where `start`/`resume` (or a Builder dispatch's own "work in a
+# worktree" convention) actually put anything, so a caller resolving the
+# WRONG REPO_ROOT (see REPO_ROOT above) landed on a path that would have
+# been wrong even in the RIGHT repo -- two independent mismatches stacked.
+# Single source of the convention so it can't drift internally again.
+worktree_path() { echo "$REPO_ROOT/.worktrees/issue-$1"; }
 
 branch_exists_local() {
   git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$1"
@@ -126,7 +149,7 @@ cmd_start() {
     return 1
   }
 
-  mkdir -p "$REPO_ROOT/.claude/worktrees"
+  mkdir -p "$REPO_ROOT/.worktrees"
   git -C "$REPO_ROOT" worktree add -b "$branch" "$wt" "$base_sha"
   echo "orc-worktree.sh: started $branch at $wt (base $base_sha)"
 }
@@ -174,7 +197,7 @@ cmd_resume() {
     fi
   fi
 
-  mkdir -p "$REPO_ROOT/.claude/worktrees"
+  mkdir -p "$REPO_ROOT/.worktrees"
   git -C "$REPO_ROOT" worktree add "$wt" "$branch"
   echo "orc-worktree.sh: resumed $branch at $wt"
 }
@@ -245,10 +268,11 @@ cmd_finish() {
 
 cmd_teardown() {
   local issue="$1"
-  local branch wt
+  local branch wt failed=0
   branch="$(branch_name "$issue")"
   wt="$(worktree_path "$issue")"
 
+  # -- worktree ------------------------------------------------------------
   if worktree_is_checked_out "$wt"; then
     if [ -n "$(git -C "$wt" status --porcelain)" ]; then
       dispatch_main assign orchestra "$issue" \
@@ -257,22 +281,62 @@ cmd_teardown() {
       return 1
     fi
     git -C "$REPO_ROOT" worktree remove "$wt"
-    echo "orc-worktree.sh: removed worktree at $wt"
+    if worktree_is_checked_out "$wt"; then
+      echo "orc-worktree.sh: teardown FAILED: 'git worktree remove' ran but $wt is still checked out -- refusing to report success" >&2
+      failed=1
+    else
+      echo "orc-worktree.sh: removed worktree at $wt"
+    fi
   else
-    echo "orc-worktree.sh: no worktree checked out at $wt, nothing to remove"
+    # #47: a real merged PR always has a worktree here (start/resume always
+    # create one) -- "not found" is either a legitimate double-run (harmless
+    # in practice: watch.sh's mw_already_processed state file guarantees
+    # teardown only ever runs ONCE per merged PR) or exactly the wrong-
+    # REPO_ROOT/wrong-path-convention bug that silently ate three merges'
+    # worth of cleanup while this line used to read "nothing to remove" and
+    # return success. Cannot tell those apart from here, so fail loud
+    # rather than guess innocent.
+    echo "orc-worktree.sh: teardown FAILED: no worktree checked out at $wt, but a just-merged issue is expected to have one -- REPO_ROOT ($REPO_ROOT) or the worktree path convention may be wrong. Refusing to report success; if this really is a legitimate re-run, verify the branch is also already gone before ignoring this." >&2
+    failed=1
   fi
 
+  # -- local branch ----------------------------------------------------------
   if branch_exists_local "$branch"; then
     local err
     if err="$(git -C "$REPO_ROOT" branch -d "$branch" 2>&1)"; then
-      echo "orc-worktree.sh: deleted merged branch $branch"
+      if branch_exists_local "$branch"; then
+        echo "orc-worktree.sh: teardown FAILED: 'git branch -d' ran but $branch still exists locally -- refusing to report success" >&2
+        failed=1
+      else
+        echo "orc-worktree.sh: deleted local branch $branch"
+      fi
     else
-      echo "orc-worktree.sh: teardown skipped: branch $branch not fully merged (git branch -d refused): $err" >&2
-      return 1
+      echo "orc-worktree.sh: teardown skipped: local branch $branch not fully merged (git branch -d refused): $err" >&2
+      failed=1
     fi
   else
-    echo "orc-worktree.sh: branch $branch already gone, nothing to delete"
+    echo "orc-worktree.sh: teardown FAILED: no local branch $branch found, but a just-merged issue is expected to have one -- REPO_ROOT ($REPO_ROOT) may be wrong. Refusing to report success." >&2
+    failed=1
   fi
+
+  # -- remote branch (#47: never existed before) ----------------------------
+  # Absence here is NOT treated as suspicious the way worktree/local-branch
+  # absence is: a branch that was `start`ed but never pushed via `finish`
+  # legitimately has no remote counterpart, and that's a normal state, not
+  # a sign anything is wrong.
+  if branch_exists_remote "$branch"; then
+    if git -C "$REPO_ROOT" push origin --delete "$branch" >/dev/null 2>&1 \
+      && ! branch_exists_remote "$branch"; then
+      echo "orc-worktree.sh: deleted remote branch $branch"
+    else
+      echo "orc-worktree.sh: teardown FAILED: could not verify remote branch $branch was deleted -- refusing to report success" >&2
+      failed=1
+    fi
+  else
+    echo "orc-worktree.sh: remote branch $branch already gone (or never pushed), nothing to delete"
+  fi
+
+  [ "$failed" -eq 0 ]
 }
 
 main() {

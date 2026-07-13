@@ -67,6 +67,41 @@ else
 fi
 : > "$MERGE_WATCH_STATE"
 
+echo "== #47: mw_dev_target_root -- ORC_WORKTREE_REPO_ROOT wins outright, falls back to an optional dev_target_root config key =="
+# The actual bug this closes: watch.sh runs from the HARNESS ROOT (per
+# orc.sh's pane launch, no cd of its own), but in a self-dogfood room the
+# real dev target (with the worktree/branch to tear down) is a SEPARATE
+# nested clone -- orc-worktree.sh's own $PWD-based REPO_ROOT inference
+# silently resolved to the wrong repo. This is unit-level: it only proves
+# mw_dev_target_root resolves correctly, not orc-worktree.sh's own teardown
+# plumbing (that has its own dedicated, live-repo coverage in
+# tests/orc-worktree.test.sh, including a full wrong-repo reproduction).
+FAKE_PROJECT="$TMP/fake-project-root"
+mkdir -p "$FAKE_PROJECT"
+unset ORC_WORKTREE_REPO_ROOT 2>/dev/null || true
+NEITHER_SET="$(cd "$FAKE_PROJECT" && mw_dev_target_root)"
+if [ -z "$NEITHER_SET" ]; then
+  pass "neither override nor config key set -> empty (unchanged \$PWD-based default for a normal, non-nested consumer)"
+else
+  fail "expected empty with neither override set, got '$NEITHER_SET'"
+fi
+
+echo "dev_target_root: project/agent-orchestra" > "$FAKE_PROJECT/orchestrator.yaml"
+CONFIG_RESULT="$(cd "$FAKE_PROJECT" && mw_dev_target_root)"
+if [ "$CONFIG_RESULT" = "project/agent-orchestra" ]; then
+  pass "reads the optional dev_target_root orchestrator.yaml key when set"
+else
+  fail "expected 'project/agent-orchestra' from the config key, got '$CONFIG_RESULT'"
+fi
+
+ENV_RESULT="$(cd "$FAKE_PROJECT" && ORC_WORKTREE_REPO_ROOT=/explicit/env/override mw_dev_target_root)"
+if [ "$ENV_RESULT" = "/explicit/env/override" ]; then
+  pass "ORC_WORKTREE_REPO_ROOT env var wins outright over the config key"
+else
+  fail "expected the env var to win over the config key, got '$ENV_RESULT'"
+fi
+rm -f "$FAKE_PROJECT/orchestrator.yaml"
+
 # mw_teardown_branch is mocked to a harmless default (success, no-op) for
 # every merge-watch case below unless a specific test overrides it -- it
 # has its own dedicated coverage further down, and orc-worktree.sh's actual
@@ -238,10 +273,16 @@ if grep -q 'dispatch_main assign orchestra "\$pr"' "$LIB/watch.sh"; then
 else
   fail "mw_notify_pick should call dispatch_main assign orchestra, not a raw pane write"
 fi
-if grep -q 'PICK next per PHASE-3-PLAN' "$LIB/watch.sh"; then
-  pass "the PICK-next message text matches the ticket's specified wording"
+echo "== #49: the ghost 'PHASE-3-PLAN' wording (no such plan ever existed) is gone from the actual dispatched message =="
+if grep -q 'PICK next per PHASE-3-PLAN"' "$LIB/watch.sh"; then
+  fail "#49 REGRESSION -- 'PICK next per PHASE-3-PLAN' (career-ops-harness ghost vocabulary) still present as the live dispatch text in watch.sh"
 else
-  fail "expected the 'PICK next per PHASE-3-PLAN' wording in mw_notify_pick"
+  pass "'PICK next per PHASE-3-PLAN' no longer appears as the live dispatch text in watch.sh"
+fi
+if grep -q 'PICK next per handoff.md / decisions.log' "$LIB/watch.sh"; then
+  pass "the PICK-next message now points at handoff.md / decisions.log, sources that actually exist"
+else
+  fail "expected the updated 'PICK next per handoff.md / decisions.log' wording in mw_notify_pick"
 fi
 
 echo "== deferred-nudge retry (live, isolated panes) =="

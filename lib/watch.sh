@@ -124,6 +124,27 @@ mw_close_issue() {
     && gh issue close "$issue" >/dev/null 2>&1
 }
 
+# mw_dev_target_root -- (#47) optional override for orc-worktree.sh's
+# REPO_ROOT resolution. watch.sh runs from wherever its OWN pane's cwd is
+# (the harness root, per orc.sh's pane launch -- no `cd` of its own), and
+# orc-worktree.sh defaults to inferring REPO_ROOT from ITS caller's $PWD.
+# For a normal (non-nested) consumer those are the same repo and nothing
+# needs to change; a self-dogfood room like this one nests the actual dev
+# target in a SEPARATE clone (e.g. project/agent-orchestra/), and inferring
+# from $PWD silently resolved to the wrong repo -- the root cause of #47's
+# false "removed worktree + merged branch" receipts. ORC_WORKTREE_REPO_ROOT
+# in the environment wins outright (matches orc-worktree.sh's own existing
+# override); otherwise reads an OPTIONAL orchestrator.yaml `dev_target_root`
+# key. Neither set -> empty, and mw_teardown_branch below falls back to
+# orc-worktree.sh's unchanged $PWD-based default, exactly as before.
+mw_dev_target_root() {
+  if [ -n "${ORC_WORKTREE_REPO_ROOT:-}" ]; then
+    echo "$ORC_WORKTREE_REPO_ROOT"
+    return 0
+  fi
+  orc_get_scalar dev_target_root
+}
+
 # mw_teardown_branch <issue> -- runs `orc-worktree.sh teardown <issue>` for
 # the merged PR's own head-branch issue number, printing whatever it printed
 # (its stdout+stderr becomes the honest reason for events.log on failure).
@@ -132,8 +153,13 @@ mw_close_issue() {
 # subprocess -- orc-worktree.sh's teardown behavior itself already has its
 # own dedicated test coverage in orc-worktree.test.sh.
 mw_teardown_branch() {
-  local issue="$1"
-  bash "$DIR/orc-worktree.sh" teardown "$issue" 2>&1
+  local issue="$1" dev_root
+  dev_root="$(mw_dev_target_root)"
+  if [ -n "$dev_root" ]; then
+    ORC_WORKTREE_REPO_ROOT="$dev_root" bash "$DIR/orc-worktree.sh" teardown "$issue" 2>&1
+  else
+    bash "$DIR/orc-worktree.sh" teardown "$issue" 2>&1
+  fi
 }
 
 # mw_notify_pick <pr> -- issue #105 (T44) Task 5: after merge-watch finishes
@@ -143,9 +169,15 @@ mw_teardown_branch() {
 # durable dispatch (write + nudge-if-idle, same `assign` verb gatekeeper's
 # alerts use) closes that gap mechanically. Split out so tests can override
 # it directly instead of driving a real dispatch_main call.
+#
+# #49 (bonus, picked up alongside #47): the old message pointed at a named
+# plan document that never existed in this project -- career-ops-harness
+# vocabulary carried over by copy-paste, and tests/watch.test.sh used to
+# actively PIN that ghost wording. Points at the two durable sources that
+# actually exist instead.
 mw_notify_pick() {
   local pr="$1"
-  dispatch_main assign orchestra "$pr" "PR #$pr merged & processed -- PICK next per PHASE-3-PLAN" >/dev/null
+  dispatch_main assign orchestra "$pr" "PR #$pr merged & processed -- PICK next per handoff.md / decisions.log" >/dev/null
 }
 
 # merge_watch_check -- one pass over currently-merged PRs, closing the
