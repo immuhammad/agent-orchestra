@@ -552,6 +552,61 @@ expect_allowed "issue #72 regression -- a resolvable, non-write leading token (g
 expect_blocked "issue #72 -- a write verb appearing LATER inside substitution content (not just as the immediate leading word) is still caught by the recursive content scan" \
   'echo $(git log; tee .claude/settings.json)'
 
+echo "== issue #72 round 3 (agy): _orc_verb_is_write_suggestive must fail closed on grouping/executors, same as the top-level orc_segment_leading_verb check =="
+# agy's dedicated security pass on PR #78: the new recursive verb
+# resolver only compared against the tee/cp/mv/... write-verb list --
+# it never inherited the SIBLING top-level check's fail-closed list for
+# grouping ({, () and command executors (eval/env/time/sudo/nice/nohup/
+# exec/xargs/command/builtin), first added in #39 round 2 specifically
+# because those wrap/hide a real verb from word-based inspection. Verified
+# live by agy: $({ tee .claude/settings.json; }) and $(eval "tee ...")
+# both resolved their leading "verb" to "{"/"eval" -- neither is on the
+# write-verb list, so the substitution was declared safe even though it
+# writes.
+expect_blocked "SECURITY -- issue #72 round 3: '{ ... }' BRACE GROUPING inside a live substitution hides the real verb from write-verb matching -- must fail closed like the top-level check does" \
+  'echo $({ tee .claude/settings.json; })'
+expect_blocked "SECURITY -- issue #72 round 3: '( ... )' SUBSHELL GROUPING inside a live substitution hides the real verb -- must fail closed (spaced like the existing top-level '( tee ... )' test so this isn't \$(( arithmetic expansion or a '(tee' fused word)" \
+  'echo $( ( tee .claude/settings.json ) )'
+expect_blocked "SECURITY -- issue #72 round 3: 'eval' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(eval "tee .claude/settings.json")'
+expect_blocked "SECURITY -- issue #72 round 3: 'time' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(time tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 3: 'env' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(env tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 3: 'sudo' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(sudo tee .claude/settings.json)'
+expect_allowed "issue #72 round 3 regression -- an ordinary, non-grouping, non-executor command inside a live substitution is NOT mistaken for one of these" \
+  'echo $(echo hello)'
+
+echo "== issue #72 round 3 (agy): PROCESS SUBSTITUTION >(...)/<(...) is a live command context this scanner didn't recognize at all =="
+# agy's dedicated security pass on PR #78: >(...) and <(...) run their
+# content as a live process exactly like $(...) does -- the redirect
+# DIRECTION only decides whether the substitution's fd is fed TO or FROM
+# the surrounding command, it has no bearing on whether the content
+# executes (verified live by agy: `echo hello < <(tee .claude/settings.json)`
+# still runs tee as a side effect of opening the process substitution,
+# even though its output is only ever used as echo's stdin, never
+# written anywhere). The scanner only ever looked for '$(' and a
+# backtick, so this construct sailed through both this function AND
+# (separately, pre-existing, unrelated to this PR) orc_segment_write_
+# targets, which misreads ">(...)"'s content as an ordinary redirect
+# TARGET path -- a harmless-looking nonexistent filename, not a live
+# command -- and finds no protected-path match. This fix closes it at
+# the substitution-scanner layer: '>(' / '<(' now open a live command
+# context exactly like '$(' does (same matching-paren tracking, same
+# recursive verb/content check), which blocks it before write-target
+# resolution is ever reached. Unlike \$(...), process substitution is
+# NOT recognized inside ANY quotes in real bash (not even double) -- it
+# is UNQUOTED-ONLY syntax, so this only triggers in the unquoted branch.
+expect_blocked "SECURITY -- issue #72 round 3: output process substitution '> >(tee ...)' runs tee as a live process regardless of what reads its output" \
+  'echo hello > >(tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 3: input process substitution '< <(tee ...)' STILL runs tee as a side effect of opening it, even though only its output is read" \
+  'echo hello < <(tee .claude/settings.json)'
+expect_allowed "issue #72 round 3 regression -- an ordinary, non-write process substitution stays allowed" \
+  'diff <(echo a) <(echo b)'
+expect_allowed "issue #72 round 3 regression -- '>(' / '<(' are literal text once double-quoted (real bash does not recognize process substitution inside quotes at all) and must not be over-blocked" \
+  'echo "not a process sub: >(tee) <(tee)"'
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"

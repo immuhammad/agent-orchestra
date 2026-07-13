@@ -430,9 +430,22 @@ _orc_verb_is_write_suggestive() {
     if [[ "$word" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
       continue
     fi
+    # agy's dedicated security pass on PR #78 round 3: this resolved word
+    # is exactly what guard.sh's SIBLING top-level check
+    # (orc_segment_leading_verb, consumed by guard.sh's own leading_verb
+    # case) already fails closed on when it's the leading word of an
+    # ordinary segment -- grouping ('{'/'(') and command executors that
+    # wrap/hide a real verb from word-based inspection the same way
+    # inside a live substitution as they do at the top level ($({ tee
+    # .claude/settings.json; }), $(eval "tee ...")). This check MUST stay
+    # in lockstep with guard.sh's list -- the whole reason #39 round 2
+    # added it there in the first place is that these constructs are
+    # opaque to word matching, and that opacity is exactly as real one
+    # level down inside a substitution.
     base="${word##*/}"
     case "$base" in
       tee|cp|mv|touch|mkdir|sed|dd|rm) return 0 ;;
+      '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin) return 0 ;;
       *) return 1 ;;
     esac
   done
@@ -603,6 +616,24 @@ _orc_scan_write_suggestive() {
         quote='"'
         ;;
       '>')
+        # agy's dedicated security pass on PR #78 round 3: '>(' is
+        # PROCESS SUBSTITUTION -- its content runs as a live command
+        # exactly like '$(' does, regardless of the redirect direction
+        # (verified live: `echo hello < <(tee ...)` still runs tee even
+        # though only the substitution's OUTPUT is read). Real bash only
+        # recognizes this UNQUOTED (never inside any quotes, unlike
+        # $()/`` which stay live in double quotes), which is exactly
+        # where this branch runs. Treated identically to '$(': same
+        # matching-paren tracking, same recursive verb/content check.
+        nc="${s:$((i + 1)):1}"
+        if [ "$nc" = "(" ]; then
+          close="$(_orc_skip_matching_paren "$s" $((i + 2)))"
+          content="${s:$((i + 2)):$((close - i - 2))}"
+          _orc_verb_is_write_suggestive "$content" 0 && return 0
+          _orc_scan_write_suggestive "$content" "" $((depth + 1)) && return 0
+          i=$((close + 1))
+          continue
+        fi
         # A redirect is only THIS function's business when it's hiding
         # inside a substitution's content (depth > 0) -- guard.sh's
         # separate write-target resolution (orc_segment_write_targets /
@@ -613,6 +644,21 @@ _orc_scan_write_suggestive() {
         # blocking) something the write-target check already resolves
         # correctly on its own.
         [ "$depth" -gt 0 ] && return 0
+        ;;
+      '<')
+        # Input process substitution '<(...)' -- same live-command
+        # reasoning as '>(' above; a bare '<' with no following '(' is
+        # an ordinary input redirect, which never writes anywhere and is
+        # not this function's concern.
+        nc="${s:$((i + 1)):1}"
+        if [ "$nc" = "(" ]; then
+          close="$(_orc_skip_matching_paren "$s" $((i + 2)))"
+          content="${s:$((i + 2)):$((close - i - 2))}"
+          _orc_verb_is_write_suggestive "$content" 0 && return 0
+          _orc_scan_write_suggestive "$content" "" $((depth + 1)) && return 0
+          i=$((close + 1))
+          continue
+        fi
         ;;
       '`')
         close="$(_orc_skip_matching_backtick "$s" $((i + 1)))"
