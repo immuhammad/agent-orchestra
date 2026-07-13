@@ -189,6 +189,47 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
+echo "== issue #59: --body-file <path> replaces the positional MSG arg for large bodies =="
+# A real dispatch body is 3-8KB of structured text -- passing that as a
+# POSITIONAL string arg is exactly what forces callers into command
+# substitution ("$(cat file)"), which guard.sh correctly refuses to trust
+# (it can't inspect what a substitution actually expands to). --body-file
+# lets the caller Write the body to a file and pass a PATH instead: no
+# substitution, fully inspectable by the guard.
+BODY_FILE="$(mktemp)"
+printf 'PICK: #99.\nMulti-line dispatch body.\nLine three with a $(looks-like-substitution) marker.\n' > "$BODY_FILE"
+OUT="$(bash "$DISPATCH" message testagent 9004 --body-file "$BODY_FILE" 2>&1)"
+STATUS=$?
+WRITTEN="$(ls -t "$CANON_DIR"/inbox/testagent/*-9004.msg 2>/dev/null | head -1)"
+if [ "$STATUS" -eq 0 ] && [ -n "$WRITTEN" ] && diff -q "$BODY_FILE" "$WRITTEN" >/dev/null 2>&1; then
+  pass "--body-file wrote the .msg with the file's EXACT contents (multi-line, byte-for-byte)"
+else
+  fail "--body-file did not write the exact file contents (status=$STATUS): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg "$BODY_FILE"
+
+echo "== issue #59: --body-file works with assign/handoff too, not just message =="
+BODY_FILE2="$(mktemp)"
+printf 'ASSIGN body from a file.\n' > "$BODY_FILE2"
+OUT="$(bash "$DISPATCH" assign testagent 9005 --body-file "$BODY_FILE2" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && ls "$CANON_DIR"/inbox/testagent/*-9005.msg >/dev/null 2>&1; then
+  pass "assign verb accepts --body-file"
+else
+  fail "assign verb should accept --body-file (status=$STATUS): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg "$BODY_FILE2"
+
+echo "== issue #59: --body-file with a nonexistent path fails loudly instead of writing an empty/garbage .msg =="
+OUT="$(bash "$DISPATCH" message testagent 9006 --body-file "/no/such/file-$$" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -ne 0 ] && ! ls "$CANON_DIR"/inbox/testagent/*-9006.msg >/dev/null 2>&1; then
+  pass "--body-file with a missing path fails without writing a .msg"
+else
+  fail "--body-file with a missing path should fail loudly, not silently write a (garbage) .msg (status=$STATUS): $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+
 echo "== assign verb: writes .msg, returns immediately without an ack =="
 START=$SECONDS
 OUT="$(bash "$DISPATCH" assign testagent 9002 "hello" 2>&1)"

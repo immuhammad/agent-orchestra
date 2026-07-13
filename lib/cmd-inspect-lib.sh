@@ -268,12 +268,66 @@ orc_segment_leading_verb() {
 # by an ordinary, non-write substitution (`echo "$(git branch
 # --show-current)"`) so this doesn't reopen #39's false-positive half for
 # the (very common) legitimate use of command substitution.
+# orc_string_has_live_command_substitution <text> -- (#61) true if <text>
+# contains a $(...) or backtick command substitution that a REAL shell
+# would actually expand: unquoted, or inside DOUBLE quotes (bash still
+# expands $()/`` inside "..."). False for one that real bash would NEVER
+# expand: inside SINGLE quotes (which suppress all expansion), or
+# immediately preceded by a backslash escaping the `$`/backtick itself.
+# This existed because the raw-substring check this replaced (`case
+# "$segment" in *'$('*|*'`'*)`) matched the TEXT "$(" or "`" anywhere,
+# with zero regard for quoting -- so a single-quoted, purely illustrative
+# example like '$(tee)' (exactly the shape a decisions.log entry or a
+# --title would use to CITE a bypass, not run one) read identically to a
+# live, unquoted $(tee) once further downstream logic tokenizes it, and
+# tripped the same fail-closed write-verb heuristic as a genuine bypass.
+# A plain character scan (not the tokenizer above) because quote state
+# must be tracked continuously across the WHOLE string, including
+# whitespace and separator characters the tokenizer/segmenter treat
+# specially -- this only needs to answer "is there a live $(/`` anywhere",
+# not produce a word stream. Bash 3.2 safe.
+orc_string_has_live_command_substitution() {
+  local s="$1" i c nc quote="" escape=0 len
+  len=${#s}
+  i=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ "$escape" -eq 1 ]; then
+      escape=0
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$quote" = "'" ]; then
+      [ "$c" = "'" ] && quote=""
+      i=$((i + 1))
+      continue
+    fi
+    case "$c" in
+      '\')
+        escape=1
+        ;;
+      "'")
+        quote="'"
+        ;;
+      '"')
+        if [ "$quote" = '"' ]; then quote=""; else quote='"'; fi
+        ;;
+      '`')
+        return 0
+        ;;
+      '$')
+        nc="${s:$((i + 1)):1}"
+        [ "$nc" = "(" ] && return 0
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
 orc_segment_has_suspicious_substitution() {
   local segment="$1"
-  case "$segment" in
-    *'$('*|*'`'*) : ;;
-    *) return 1 ;;
-  esac
+  orc_string_has_live_command_substitution "$segment" || return 1
   local w stripped
   while IFS= read -r w; do
     case "$w" in

@@ -492,6 +492,31 @@ expect_blocked "SECURITY -- backtick form of the same hidden-write bypass is blo
 expect_allowed "an ordinary, non-write command substitution is NOT over-blocked (only fails closed when write-suggestive)" \
   'echo "branch: $(git branch --show-current)"'
 
+echo "== issue #61: the suspicious-substitution scanner is escape/quote-aware -- INERT \$()/backtick text must not fail closed =="
+# Root cause: the scanner used to gate on a raw substring match for '$(' or
+# a backtick ANYWHERE in the segment text, with no regard for whether that
+# text could ever actually expand. A single-quoted bare-verb example like
+# '$(tee)' -- exactly the shape a decisions.log entry or a --title would use
+# to CITE an example command, not run one -- reads identically to a live,
+# unquoted $(tee) once quotes are stripped, so it tripped the same
+# write-verb heuristic as a real bypass. Real bash never expands $(...)/`` `
+# inside single quotes or after a backslash escape; it DOES still expand
+# them inside double quotes and when unquoted -- the fix (orc_string_has_
+# live_command_substitution in cmd-inspect-lib.sh) matches that exactly,
+# gating the whole heuristic on there being at least one LIVE occurrence
+# before ever looking for a write verb.
+SQ="'"
+expect_allowed "issue #61 -- a SINGLE-QUOTED \$(tee) is inert text (single quotes suppress expansion), not a live substitution" \
+  "echo ${SQ}\$(tee)${SQ}"
+expect_allowed "issue #61 -- a SINGLE-QUOTED backtick-tee-backtick is inert text, not a live substitution" \
+  "echo ${SQ}\`tee\`${SQ}"
+expect_allowed "issue #61 -- a BACKSLASH-ESCAPED \$(tee) is inert text (the backslash escapes the \$, so it never expands), not a live substitution" \
+  'echo \$(tee)'
+expect_blocked "SECURITY -- escape-awareness must NOT weaken real detection: an UNQUOTED, unescaped \$(tee) is still a live, write-suggestive substitution and stays blocked" \
+  'echo $(tee)'
+expect_blocked "SECURITY -- a write-verb \$() inside DOUBLE quotes is STILL live (double quotes do not suppress command substitution in real bash) and must stay blocked" \
+  'echo "$(tee)"'
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"
@@ -517,6 +542,28 @@ expect_blocked "SECURITY -- 'mv -t .claude/settings.json innocent_source' (-t ta
   "mv -t .claude/settings.json innocent_source"
 expect_allowed "an ordinary 'cp src dest' (no -t) still resolves dest as the LAST argument, unaffected" \
   "cp innocent_source /tmp/backup.json"
+
+echo "== issue #59: an agent can still do its OWN documented job through this guard =="
+# The point of #59 isn't "make the guard more permissive" -- it's "the
+# guard's own designers never asserted their own workflows survive it".
+# These two lock in the specific workarounds handoff.md had to document by
+# hand: the brace-free inbox-check idiom, and dispatching via --body-file
+# instead of command substitution.
+expect_allowed "the documented brace-free inbox-check idiom (a 'for' loop with no { } grouping) is not blocked -- an agent can still check its own inbox" \
+  'for m in .harness/inbox/builder/*.msg; do echo "$m"; cat "$m"; done'
+REPO_ROOT="$(cd "$DIR/.." >/dev/null 2>&1 && pwd)"
+run_guard_dispatch_bodyfile() {
+  local payload out status
+  payload="$(jq -n --arg cmd "bash lib/dispatch.sh assign builder 59 --body-file /tmp/scratch/dispatch-59.txt" '{tool_input: {command: $cmd}}')"
+  out="$(cd "$REPO_ROOT" && echo "$payload" | bash "$GUARD" 2>&1)"
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: issue #59 -- dispatching via 'bash lib/dispatch.sh ... --body-file <path>' (no command substitution) is not blocked -- Orchestra can still dispatch a large body"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: issue #59 -- --body-file dispatch should not be blocked (status=$status): $out"; FAIL=$((FAIL + 1))
+  fi
+}
+run_guard_dispatch_bodyfile
 
 echo ""
 echo "$PASS passed, $FAIL failed"
