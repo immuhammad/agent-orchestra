@@ -519,6 +519,289 @@ expect_blocked "SECURITY -- a write-verb \$() inside DOUBLE quotes is STILL live
 expect_blocked "SECURITY -- agy's PR #70 finding: a LITERAL single-quote INSIDE double quotes must not re-enter single-quote mode -- real bash treats it as a plain character, so the \$() right after it is still LIVE and must stay blocked" \
   'echo "'"'"'$(tee .claude/settings.json)'"'"'"'
 
+echo "== issue #72: write-verb detection inside a LIVE substitution resolves the actually-executed token, not just an exact bare-word match =="
+# agy's dedicated security pass on PR #70 round 2 (and Orchestra's
+# independent live re-verification against merged main) found the
+# word-based verb check was blind to anything but a bare, unquoted,
+# unescaped verb as the immediate next word: an absolute path, a quoted
+# or backslash-escaped verb, and a verb reached through a NESTED
+# substitution all evaded it, on main, since #39 round 2 shipped -- not a
+# #59/#61 regression, confirmed by testing the identical payloads against
+# lib/cmd-inspect-lib.sh as it existed before any of those changes. Fix:
+# resolve the actually-executed leading token of each live substitution's
+# content (quote removal, backslash-unescaping, basename-of-path), fail
+# CLOSED if that resolution hits another live construct (a nested
+# substitution or an unresolvable variable) rather than guessing.
+expect_blocked "SECURITY -- issue #72: an ABSOLUTE PATH to a write verb inside a live substitution is still write-suggestive (basename resolves to a known verb)" \
+  'echo x | $(/usr/bin/tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72: the BACKTICK form of an absolute-path write verb is still write-suggestive" \
+  'echo x | `/usr/bin/tee .claude/settings.json`'
+expect_blocked "SECURITY -- issue #72: a BACKSLASH-ESCAPED verb character (\\tee, unescapes to the literal word 'tee') inside a live substitution is still write-suggestive" \
+  'echo x | $(\tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72: a NESTED substitution used AS the verb itself cannot be resolved without executing it -- fails CLOSED rather than guessing" \
+  'echo x | $( $(echo tee) .claude/settings.json )'
+SQ="'"
+expect_blocked "SECURITY -- issue #72: a SINGLE-QUOTED verb inside a live (unquoted) substitution still resolves to the literal verb" \
+  "echo x | \$(${SQ}tee${SQ} .claude/settings.json)"
+expect_blocked "SECURITY -- issue #72: a DOUBLE-QUOTED verb inside a live substitution still resolves to the literal verb" \
+  'echo x | $("tee" .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72: a leading NAME=value ENV-PREFIX before the real verb (FOO=bar tee ...) does not hide the verb -- real bash still runs tee" \
+  'echo x | $(FOO=bar tee .claude/settings.json)'
+expect_allowed "issue #72 regression -- a resolvable, non-write leading token (git) inside a live substitution stays allowed (the #39-round-2 / #61 goal, must not be collateral damage)" \
+  'echo "branch: $(git branch --show-current)"'
+expect_blocked "issue #72 -- a write verb appearing LATER inside substitution content (not just as the immediate leading word) is still caught by the recursive content scan" \
+  'echo $(git log; tee .claude/settings.json)'
+
+echo "== issue #72 round 3 (agy): _orc_verb_is_write_suggestive must fail closed on grouping/executors, same as the top-level orc_segment_leading_verb check =="
+# agy's dedicated security pass on PR #78: the new recursive verb
+# resolver only compared against the tee/cp/mv/... write-verb list --
+# it never inherited the SIBLING top-level check's fail-closed list for
+# grouping ({, () and command executors (eval/env/time/sudo/nice/nohup/
+# exec/xargs/command/builtin), first added in #39 round 2 specifically
+# because those wrap/hide a real verb from word-based inspection. Verified
+# live by agy: $({ tee .claude/settings.json; }) and $(eval "tee ...")
+# both resolved their leading "verb" to "{"/"eval" -- neither is on the
+# write-verb list, so the substitution was declared safe even though it
+# writes.
+expect_blocked "SECURITY -- issue #72 round 3: '{ ... }' BRACE GROUPING inside a live substitution hides the real verb from write-verb matching -- must fail closed like the top-level check does" \
+  'echo $({ tee .claude/settings.json; })'
+expect_blocked "SECURITY -- issue #72 round 3: '( ... )' SUBSHELL GROUPING inside a live substitution hides the real verb -- must fail closed (spaced like the existing top-level '( tee ... )' test so this isn't \$(( arithmetic expansion or a '(tee' fused word)" \
+  'echo $( ( tee .claude/settings.json ) )'
+expect_blocked "SECURITY -- issue #72 round 3: 'eval' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(eval "tee .claude/settings.json")'
+expect_blocked "SECURITY -- issue #72 round 3: 'time' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(time tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 3: 'env' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(env tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 3: 'sudo' inside a live substitution hides the real verb -- must fail closed" \
+  'echo $(sudo tee .claude/settings.json)'
+expect_allowed "issue #72 round 3 regression -- an ordinary, non-grouping, non-executor command inside a live substitution is NOT mistaken for one of these" \
+  'echo $(echo hello)'
+
+echo "== issue #72 round 3 (agy): PROCESS SUBSTITUTION >(...)/<(...) is a live command context this scanner didn't recognize at all =="
+# agy's dedicated security pass on PR #78: >(...) and <(...) run their
+# content as a live process exactly like $(...) does -- the redirect
+# DIRECTION only decides whether the substitution's fd is fed TO or FROM
+# the surrounding command, it has no bearing on whether the content
+# executes (verified live by agy: `echo hello < <(tee .claude/settings.json)`
+# still runs tee as a side effect of opening the process substitution,
+# even though its output is only ever used as echo's stdin, never
+# written anywhere). The scanner only ever looked for '$(' and a
+# backtick, so this construct sailed through both this function AND
+# (separately, pre-existing, unrelated to this PR) orc_segment_write_
+# targets, which misreads ">(...)"'s content as an ordinary redirect
+# TARGET path -- a harmless-looking nonexistent filename, not a live
+# command -- and finds no protected-path match. This fix closes it at
+# the substitution-scanner layer: '>(' / '<(' now open a live command
+# context exactly like '$(' does (same matching-paren tracking, same
+# recursive verb/content check), which blocks it before write-target
+# resolution is ever reached. Unlike \$(...), process substitution is
+# NOT recognized inside ANY quotes in real bash (not even double) -- it
+# is UNQUOTED-ONLY syntax, so this only triggers in the unquoted branch.
+expect_blocked "SECURITY -- issue #72 round 3: output process substitution '> >(tee ...)' runs tee as a live process regardless of what reads its output" \
+  'echo hello > >(tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 3: input process substitution '< <(tee ...)' STILL runs tee as a side effect of opening it, even though only its output is read" \
+  'echo hello < <(tee .claude/settings.json)'
+expect_allowed "issue #72 round 3 regression -- an ordinary, non-write process substitution stays allowed" \
+  'diff <(echo a) <(echo b)'
+expect_allowed "issue #72 round 3 regression -- '>(' / '<(' are literal text once double-quoted (real bash does not recognize process substitution inside quotes at all) and must not be over-blocked" \
+  'echo "not a process sub: >(tee) <(tee)"'
+
+echo "== issue #72 round 4 (agy): 'find -exec' is an executor _orc_verb_is_write_suggestive missed, which also kept the >(...) write-target misread reachable via other unblocked interpreters =="
+# agy's dedicated security pass on PR #78 round 4: find -exec is the
+# SAME class of construct as eval/sudo/time (an executor opaque to
+# word-based verb matching), but neither this function's blocklist nor
+# guard.sh's own top-level leading_verb check had it. Verified live by
+# agy: $(find . -exec tee .claude/settings.json \;) resolved its leading
+# verb to "find", which matched neither the write-verb list nor the
+# grouping/executor list, so it read as safe.
+expect_blocked "SECURITY -- issue #72 round 4: 'find -exec' inside a live substitution is still an unblocked executor -- must fail closed" \
+  'echo $(find . -exec tee .claude/settings.json \;)'
+expect_blocked "SECURITY -- issue #72 round 4: the reachable >(...) write-target misread agy asked about, closed for the find vector specifically -- find inside a process substitution is now blocked" \
+  'echo hello > >(find . -exec tee .claude/settings.json \;)'
+
+echo "== issue #72 round 5-8 (Ahmad's parity directive, then the #84 split): the inner substitution scanner and the top-level guard must reject the SAME set, off ONE shared list -- but that shared list does NOT include plain script interpreters =="
+# Ahmad's round-5 decision: stop enumerating verbs one at a time (bash ->
+# python -> find -> process-sub was the same whack-a-mole every round).
+# The fix is STRUCTURAL parity -- one shared opaque-executor definition
+# (orc_is_opaque_executor in cmd-inspect-lib.sh) consumed by BOTH
+# guard.sh's top-level leading_verb check and _orc_verb_is_write_
+# suggestive, so the two can never drift the way #52/#57 already taught
+# this codebase two "matching" lists always eventually do.
+#
+# Rounds 5-6 put bash/sh/zsh/python/etc ON that shared list, unconditionally
+# blocked, closing the bash -c / python -c / bash -l -c bypasses below --
+# real, agy-confirmed exploits. But a live probe before Gate-2 sign-off
+# found this ALSO blocked the room's OWN load-bearing calls that run an
+# interpreter against a real SCRIPT FILE with no inline-code flag
+# (`python <scriptfile>`, and by construction any interpreter this list
+# would cover) -- the exact "blanket block breaks legitimate use" failure
+# mode Builder's own round-4 escalation had already warned about for this
+# exact class. Ahmad's decision (round 8): SPLIT. Distinguishing a
+# trusted script PATH from a dangerous inline-code STRING needs a real
+# allowlist design -- that's #84, not #78. Under #78, both of the exploits
+# below are a KNOWN, EXPLICITLY ACCEPTED gap matching main's pre-#72
+# behavior (not silently reopened -- tracked as #84), and the two
+# regression tests immediately after this block are what actually caught
+# the room-breaking version, so they stay as the load-bearing check now.
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -c \"tee ...\"' at the TOP LEVEL: KNOWN gap, deferred to #84's allowlist design, matches main's pre-#72 behavior" \
+  'bash -c "tee .claude/settings.json"'
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -c \"tee ...\"' INSIDE a live substitution: same deferral" \
+  'echo $(bash -c "tee .claude/settings.json")'
+expect_allowed "issue #72 round 8 (#84 split) -- 'python -c \"...\"' at the TOP LEVEL: same deferral" \
+  'python -c "import os; os.system(\"tee .claude/settings.json\")"'
+expect_allowed "issue #72 round 8 (#84 split) -- 'python -c \"...\"' INSIDE a live substitution: same deferral" \
+  'echo $(python -c "import os; os.system(\"tee .claude/settings.json\")")'
+expect_allowed "issue #72 round 8 (#84 split) -- process substitution running bash -c: same deferral, #84's job to close" \
+  'echo hello > >(bash -c "tee .claude/settings.json")'
+echo "-- these must stay ALLOWED -- the room-breaking regression a live probe caught before Gate-2 --"
+run_guard_at_repo_root "bash lib/orc-worktree.sh finish 116"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 5 regression -- THE ROOM'S OWN TEST-EXECUTION MECHANISM: 'bash script.sh' (a trusted script PATH, no inline-code flag) must stay allowed at the top level -- this is not a synthetic case, tests/*.test.sh in THIS repo run exactly this way"; PASS=$((PASS + 1))
+else
+  echo "FAIL: issue #72 round 5 regression -- trusted 'bash script.sh' execution must NOT be broken by the opaque-executor parity fix (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+run_guard_at_repo_root "bash tests/guard.test.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 5 regression -- running THIS repo's own test suite via 'bash tests/foo.test.sh' still trusted (the exact invocation every test in this suite depends on)"; PASS=$((PASS + 1))
+else
+  echo "FAIL: issue #72 round 5 regression -- 'bash tests/guard.test.sh' must stay trusted (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+expect_allowed "issue #72 round 5 regression -- an ordinary, non-write command substitution stays allowed" \
+  'echo "branch: $(git branch --show-current)"'
+
+echo "-- issue #72 round 5 (Ahmad's directive item 2): orc_segment_write_targets must not misread '>(' process-substitution content as an ordinary target path --"
+# Direct unit check (not through guard.sh) since this is about what a
+# SPECIFIC internal function emits, not just the overall block/allow
+# outcome -- agy's finding was that the OLD code emitted the literal text
+# "(bash" as a write-target CANDIDATE (tokenize_words fuses the '(' onto
+# the word right after '>' with no separating space), which any real
+# protected path never starts with, so it silently passed resolution.
+# The substitution scanner now independently blocks the exploit agy
+# demonstrated (bash/find inside '>(...)'), but Ahmad's directive is
+# explicit that this function itself must stop treating process-
+# substitution content as a target word at all, not just rely on a
+# different function catching the exploit downstream.
+CMDLIB="$DIR/../lib/cmd-inspect-lib.sh"
+PROCSUB_TARGETS="$(bash -c "source '$CMDLIB'; orc_segment_write_targets 'echo hello > >(bash -c \"tee .claude/settings.json\")'")"
+# Note: the FIRST '>' in "> >(...)" (a redirect token followed by the
+# SECOND '>' as its own separate token, since there's a space between
+# them) still emits the literal text ">" as a "target" -- a pre-existing
+# tokenizer quirk, unrelated to this fix, and harmless (no real protected
+# path is ever literally ">"). What this fix actually closes is the
+# parenthesized process-substitution CONTENT no longer appearing at all.
+if ! printf '%s\n' "$PROCSUB_TARGETS" | grep -q '^('; then
+  echo "PASS: orc_segment_write_targets emits no '(...'-shaped target for '> >(bash ...)' -- process-substitution content is no longer misread as a path"; PASS=$((PASS + 1))
+else
+  echo "FAIL: orc_segment_write_targets should not emit a '(...'-shaped target for process substitution, got: $PROCSUB_TARGETS"; FAIL=$((FAIL + 1))
+fi
+ORDINARY_TARGETS="$(bash -c "source '$CMDLIB'; orc_segment_write_targets 'echo hello > .claude/settings.json'")"
+if [ "$ORDINARY_TARGETS" = ".claude/settings.json" ]; then
+  echo "PASS: orc_segment_write_targets still correctly resolves an ORDINARY (non-process-substitution) redirect target"; PASS=$((PASS + 1))
+else
+  echo "FAIL: an ordinary redirect target regressed, got: $ORDINARY_TARGETS"; FAIL=$((FAIL + 1))
+fi
+
+echo "== issue #72 round 6 (agy): three more parity holes -- source/. only caught at top level (inner scanner gap), backslash-verb and multi-flag bash only caught by the inner scanner (top-level gap) =="
+echo "-- source/. (inner-scanner-only gap: top level already has separate location-based trust protection for these via the script-exec-trust check) --"
+expect_blocked "SECURITY -- issue #72 round 6: '. /tmp/script.sh' (dot-source, untrusted path) INSIDE a live substitution -- the inner scanner had no equivalent to the top-level's location-based trust check, so it never recognized '.'/source as opaque at all" \
+  'echo $(. /tmp/script.sh)'
+expect_blocked "SECURITY -- issue #72 round 6: 'source /tmp/script.sh' INSIDE a live substitution -- same gap, the 'source' spelling" \
+  'echo $(source /tmp/script.sh)'
+echo "-- backslash-escaped verb (top-level gap: orc_tokenize_words never processed escapes, so a leading backslash -- the classic alias-bypass idiom, real bash still runs the plain command -- evaded both the opaque-executor check and write-target detection) --"
+expect_blocked "SECURITY -- issue #72 round 6: '\\\\tee .claude/settings.json' at the TOP LEVEL (backslash-escaped verb, the classic shell-alias-bypass idiom -- real bash still runs plain tee) -- must fail closed same as unescaped tee" \
+  '\tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 6 regression -- '\\\\tee' was ALREADY correctly blocked inside a live substitution (agy confirmed this); must stay blocked after the top-level fix" \
+  'echo $(\tee .claude/settings.json)'
+echo "-- issue #72 round 8 (#84 split): 'bash -l -c' (any inline-code flag, with or without a preceding flag) is the SAME deferred class as bare 'bash -c' above, not a separate gap -- distinguishing this from a trusted 'bash script.sh' is #84's allowlist design job --"
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -l -c \"tee ...\"' at the TOP LEVEL: deferred to #84, same as bare bash -c" \
+  'bash -l -c "tee .claude/settings.json"'
+expect_allowed "issue #72 round 8 (#84 split) -- 'bash -l -c' INSIDE a live substitution: same deferral" \
+  'echo $(bash -l -c "tee .claude/settings.json")'
+echo "-- regressions: trusted script-path execution (source/dot AND bash/sh/zsh with flags) must stay allowed at the top level --"
+run_guard_at_repo_root "source lib/orc-config.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 6 regression -- trusted 'source lib/foo.sh' (a real script path under this installation) stays allowed"; PASS=$((PASS + 1))
+else
+  echo "FAIL: trusted 'source lib/foo.sh' should stay allowed (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+run_guard_at_repo_root "bash -v tests/guard.test.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 6 regression -- 'bash -v script.sh' (a non-c flag before a real trusted script path) is not newly blocked by the multi-flag -c scan"; PASS=$((PASS + 1))
+else
+  echo "FAIL: 'bash -v script.sh' should not be newly blocked (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+run_guard_at_repo_root "python lib/orc-config.sh"
+if [ "$GUARD_STATUS" -eq 0 ]; then
+  echo "PASS: issue #72 round 8 (Ahmad's explicit ask, the #84-split load-bearing regression) -- 'python <scriptfile>' with NO inline-code flag stays allowed -- this is the exact call class the pre-fix version broke, and no test asserted it before this"; PASS=$((PASS + 1))
+else
+  echo "FAIL: 'python <scriptfile>' with no inline-code flag should stay allowed (status=$GUARD_STATUS): $GUARD_OUT"; FAIL=$((FAIL + 1))
+fi
+
+echo "== issue #72 round 7 (agy): unspaced subshell parens fuse into the leading word instead of being recognized as their own token =="
+# agy's dedicated security pass on PR #78 round 7: bash treats '(' as a
+# METACHARACTER -- it never needs surrounding whitespace to be parsed as
+# its own token, unlike an ordinary word boundary. Neither
+# orc_tokenize_words (top level) nor _orc_verb_is_write_suggestive
+# (inner) broke a word on a LEADING unquoted '(', so `(tee file)`
+# resolved to the single fused word "(tee", matching neither the
+# write-verb list nor the existing (spaced) '(' grouping entry.
+expect_blocked "SECURITY -- issue #72 round 7: unspaced '(tee ...)' subshell at the TOP LEVEL -- must fail closed same as the spaced '( tee ... )' form" \
+  '(tee .claude/settings.json)'
+expect_blocked "SECURITY -- issue #72 round 7: unspaced '(tee ...)' subshell INSIDE a live substitution" \
+  'echo $( (tee .claude/settings.json) )'
+expect_allowed "issue #72 round 7 regression -- an ordinary word that merely CONTAINS parens (not a leading grouping construct) is not mistaken for one" \
+  'echo hello(1).txt'
+
+echo "== issue #72 round 7 (agy): a backslash-escaped backtick is bash's OWN nested-backtick-substitution boundary, not inert text =="
+# Real bash nests backtick command substitutions by escaping the INNER
+# backticks (\`...\`) -- once one layer of backslash-removal happens for
+# the OUTER backtick's content, the escaped backtick becomes a real,
+# live nested substitution boundary. This codebase's escape handling
+# treated EVERY escaped character uniformly as "next char is inert,
+# skip its special meaning" -- correct for \$ (#61's own fix depends on
+# this) but WRONG for \` specifically. Rather than replicate bash's
+# exact (genuinely obscure, rarely-used-on-purpose) nested-backtick
+# execution semantics, this is fixed conservatively: ANY backtick
+# character, escaped or not, is now treated as live and triggers
+# recursion into its content -- safe-direction over-blocking, not a
+# precise parser.
+expect_blocked "SECURITY -- issue #72 round 7: a backslash-escaped nested backtick is a REAL nested substitution boundary in bash, not inert -- must fail closed" \
+  'echo `echo \`tee .claude/settings.json\``'
+
+echo "== issue #72 round 7 (agy): missing keywords/wrappers that also hide a real command from word-based verb matching =="
+# All of these actually execute (or, for trap, defer-execute at process
+# exit -- which for a standalone Bash tool invocation happens
+# immediately after the command finishes, since the hosting shell then
+# exits) whatever real command follows them, verified against real bash
+# semantics before adding: '!' negates a command's exit status but still
+# RUNS it; do/then/else/elif are reserved words this segmenter's naive
+# semicolon-split can turn into a segment's OWN leading word (`if true;
+# then tee ...; fi` splits into a segment literally starting with
+# "then"), hiding the real command exactly like eval/sudo already do;
+# coproc runs a command as a coprocess; timeout runs a command under a
+# time limit.
+expect_blocked "SECURITY -- issue #72 round 7: '! tee ...' (negation, still executes) hides the real verb -- must fail closed" \
+  '! tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 7: a real, syntactically-complete 'if ...; then tee ...; fi' -- this segmenter's naive semicolon-split turns 'then tee ...' into its own segment whose leading word is 'then', hiding the real verb -- must fail closed" \
+  'if true; then tee .claude/settings.json; fi'
+expect_blocked "SECURITY -- issue #72 round 7: a real, syntactically-complete 'for ...; do tee ...; done' (same class, loops) hides the real verb -- must fail closed" \
+  'for i in 1; do tee .claude/settings.json; done'
+expect_blocked "SECURITY -- issue #72 round 7: 'coproc tee ...' hides the real verb -- must fail closed" \
+  'coproc tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 7: 'timeout 10 tee ...' hides the real verb -- must fail closed" \
+  'timeout 10 tee .claude/settings.json'
+expect_blocked "SECURITY -- issue #72 round 7: 'trap \"tee ...\" EXIT' defers execution to process exit, which happens immediately for a standalone invocation -- must fail closed" \
+  'trap "tee .claude/settings.json" EXIT'
+expect_blocked "SECURITY -- issue #72 round 7: all six also caught one level deep inside a live substitution" \
+  'echo $(! tee .claude/settings.json)'
+
+echo "-- regressions: the existing round-1 inert-text tests (single-quoted, and backslash-escaped DOLLAR specifically) must be unaffected by the backtick-specific escape fix --"
+expect_allowed "issue #72 round 7 regression -- a SINGLE-QUOTED \$(tee) is still inert (unaffected by the backtick-only escape fix)" \
+  "echo ${SQ}\$(tee)${SQ}"
+expect_allowed "issue #72 round 7 regression -- a BACKSLASH-ESCAPED \$(tee) (escaped DOLLAR, not backtick) is still inert" \
+  'echo \$(tee)'
+
 echo "-- finding 3: grouping ({ }, ( )) and command executors (eval/env/time/sudo/...) hid the real verb from the leading-word check --"
 expect_blocked "SECURITY -- '{ tee .claude/settings.json; }' brace-grouping bypass is blocked" \
   "{ tee .claude/settings.json; }"
@@ -532,6 +815,8 @@ expect_blocked "SECURITY -- 'env tee .claude/settings.json' is blocked" \
   "env tee .claude/settings.json"
 expect_blocked "SECURITY -- 'sudo tee .claude/settings.json' is blocked" \
   "sudo tee .claude/settings.json"
+expect_blocked "SECURITY -- issue #72 round 4 (agy): 'find . -exec tee ... \\;' is an executor (find -exec) opaque to word-based inspection, same class as eval/sudo -- must be blocked the same unconditional way regardless of arguments" \
+  'find . -exec tee .claude/settings.json \;'
 expect_allowed "an ordinary command is NOT mistaken for a grouping/executor wrapper" \
   "echo hello"
 

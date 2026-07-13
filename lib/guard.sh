@@ -440,13 +440,19 @@ while IFS= read -r seg; do
   # cannot safely unwrap/recurse into these (eval's argument is a whole
   # NEW command line that would need re-parsing from scratch), so fail
   # CLOSED outright rather than pretend to understand them.
+  #
+  # issue #72 round 5 (Ahmad's parity directive, after agy's review of PR
+  # #78 found bash/python/find/process-substitution evading the INNER
+  # substitution scanner one round at a time): this now calls
+  # orc_is_opaque_executor (cmd-inspect-lib.sh) -- the ONE shared
+  # definition _orc_verb_is_write_suggestive ALSO calls -- instead of its
+  # own copy of the list. Two lists meant to match will drift; one
+  # function can't.
   leading_verb="$(orc_segment_leading_verb "$trimmed")"
-  case "$leading_verb" in
-    '{'|'('|eval|env|time|sudo|nice|nohup|exec|xargs|command|builtin)
-      echo "guard.sh: blocked -- '$leading_verb' wraps or groups another command that can't be safely inspected for a hidden write, failing closed: $COMMAND" >&2
-      exit 2
-      ;;
-  esac
+  if orc_is_opaque_executor "$leading_verb"; then
+    echo "guard.sh: blocked -- '$leading_verb' wraps or groups another command that can't be safely inspected for a hidden write, failing closed: $COMMAND" >&2
+    exit 2
+  fi
 
   # #39 round 2 finding 2 (agy's dedicated security pass on PR #57):
   # command substitution ($(...)/backticks) can hide a write verb from
