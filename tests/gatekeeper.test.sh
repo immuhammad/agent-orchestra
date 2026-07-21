@@ -73,6 +73,27 @@ GATEKEEPER_ALERT_STATE_FILE="$(mktemp)"
 rm -f "$GATEKEEPER_ALERT_STATE_FILE" # gk_ensure_alert_state should recreate it
 GATEKEEPER_BUDGET_LOG="$(mktemp)"
 
+# issue #60 task D: gk_check_room_branch runs every gatekeeper_main tick and
+# fires its own durable orchestra alert on a room-branch mismatch. Every
+# EXISTING test below runs the real loop against the repo this test happens
+# to execute in -- often a feature-branch worktree, i.e. a genuine
+# mismatch -- which would otherwise inject an unrelated "room-branch" .msg
+# into every "exactly one alert" assertion below. A dedicated clean-repo
+# fixture, always on its own "uat" integration branch, keeps every
+# pre-existing (non-room-branch) test hermetic; the task D tests further
+# down override GATEKEEPER_ROOM_ROOT per-invocation to exercise mismatches
+# on purpose.
+export GATEKEEPER_ROOM_ROOT
+GATEKEEPER_ROOM_ROOT="$(mktemp -d)"
+GATEKEEPER_ROOM_ROOT="$(cd "$GATEKEEPER_ROOM_ROOT" && pwd -P)"
+git init -q "$GATEKEEPER_ROOM_ROOT"
+git -C "$GATEKEEPER_ROOM_ROOT" config user.email "test@test.local"
+git -C "$GATEKEEPER_ROOM_ROOT" config user.name "test"
+echo "project: gk-hermetic-room" > "$GATEKEEPER_ROOM_ROOT/orchestrator.yaml"
+git -C "$GATEKEEPER_ROOM_ROOT" checkout -q -b uat
+git -C "$GATEKEEPER_ROOM_ROOT" add orchestrator.yaml
+git -C "$GATEKEEPER_ROOM_ROOT" commit -q -m init
+
 PASS=0
 FAIL=0
 pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
@@ -106,6 +127,7 @@ cleanup() {
   [ -n "$LIVENESS_PID" ] && kill "$LIVENESS_PID" >/dev/null 2>&1
   tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
   rm -f "$GATEKEEPER_HEARTBEAT_FILE" "$GATEKEEPER_LIVENESS_LOG" "$AUTO_RESUME_STATE_FILE" "$GATEKEEPER_LIVENESS_HANDOFF_FILE"
+  rm -rf "$GATEKEEPER_ROOM_ROOT"
 }
 trap cleanup EXIT
 
@@ -553,6 +575,87 @@ if [ "$REAL_SESSION_EXISTS" = true ]; then
 else
   skip "no real 'harness' tmux session found on this machine to verify against"
 fi
+
+assert_eq() {
+  local desc="$1" expected="$2" actual="$3"
+  if [ "$expected" = "$actual" ]; then
+    pass "$desc"
+  else
+    fail "$desc (expected '$expected', got '$actual')"
+  fi
+}
+
+echo "== issue #60 task D: gatekeeper ROOM dashboard + once-per-crossing alert =="
+# Hermetic: real throwaway git repos, never the room's own checkout. Every
+# invocation below sources gatekeeper.sh in a FRESH bash -c process (same
+# idiom orc.test.sh uses for orc_build_session) rather than sourcing it
+# into THIS test script -- gatekeeper.sh's own `set -uo pipefail` would
+# otherwise leak into the rest of this file's shell.
+rb_gk_mk_repo() {
+  local dir
+  dir="$(mktemp -d)"
+  dir="$(cd "$dir" && pwd -P)"
+  git init -q "$dir"
+  git -C "$dir" config user.email "test@test.local"
+  git -C "$dir" config user.name "test"
+  printf 'project: gk-room-test\nintegration_branch: uat\n' > "$dir/orchestrator.yaml"
+  echo "$dir"
+}
+
+RB_GK_OK_REPO="$(rb_gk_mk_repo)"
+git -C "$RB_GK_OK_REPO" checkout -q -b uat
+git -C "$RB_GK_OK_REPO" add orchestrator.yaml
+git -C "$RB_GK_OK_REPO" commit -q -m init
+RB_GK_OK_HEAD="$(git -C "$RB_GK_OK_REPO" rev-parse --short HEAD)"
+RB_GK_OK_STATE="$(mktemp)"; rm -f "$RB_GK_OK_STATE"
+RB_GK_OK_INBOX_BEFORE=$(ls "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg 2>/dev/null | wc -l | tr -d ' ')
+RB_GK_OK_OUT="$(GATEKEEPER_ALERT_STATE_FILE="$RB_GK_OK_STATE" GATEKEEPER_ROOM_ROOT="$RB_GK_OK_REPO" \
+  bash -c "source '$GATEKEEPER'; gk_check_room_branch; USAGE_PCT=0; WEEKLY_PCT=0; AGY_PCT=0; HEARTBEAT_AGE=''; gatekeeper_render")"
+RB_GK_OK_INBOX_AFTER=$(ls "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg 2>/dev/null | wc -l | tr -d ' ')
+echo "$RB_GK_OK_OUT" | grep -q "== ROOM ==" && pass "ROOM section present on the dashboard" || fail "expected a ROOM section: $RB_GK_OK_OUT"
+echo "$RB_GK_OK_OUT" | grep -q "$RB_GK_OK_HEAD" && pass "ROOM section shows the short HEAD when on the integration branch" || fail "expected short HEAD '$RB_GK_OK_HEAD': $RB_GK_OK_OUT"
+assert_eq "on integration branch: no room-branch alert dispatched" "$RB_GK_OK_INBOX_BEFORE" "$RB_GK_OK_INBOX_AFTER"
+rm -rf "$RB_GK_OK_REPO" "$RB_GK_OK_STATE"
+
+RB_GK_MISMATCH_REPO="$(rb_gk_mk_repo)"
+git -C "$RB_GK_MISMATCH_REPO" checkout -q -b uat
+git -C "$RB_GK_MISMATCH_REPO" add orchestrator.yaml
+git -C "$RB_GK_MISMATCH_REPO" commit -q -m init
+git -C "$RB_GK_MISMATCH_REPO" checkout -q -b feature/rb-gk-mismatch
+RB_GK_MISMATCH_HEAD="$(git -C "$RB_GK_MISMATCH_REPO" rev-parse --short HEAD)"
+RB_GK_MISMATCH_STATE="$(mktemp)"; rm -f "$RB_GK_MISMATCH_STATE"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.ack
+
+RB_GK_MISMATCH_OUT1="$(GATEKEEPER_ALERT_STATE_FILE="$RB_GK_MISMATCH_STATE" GATEKEEPER_ROOM_ROOT="$RB_GK_MISMATCH_REPO" \
+  bash -c "source '$GATEKEEPER'; gk_check_room_branch; USAGE_PCT=0; WEEKLY_PCT=0; AGY_PCT=0; HEARTBEAT_AGE=''; gatekeeper_render")"
+RB_GK_MISMATCH_MSGCOUNT1=$(ls "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg 2>/dev/null | wc -l | tr -d ' ')
+echo "$RB_GK_MISMATCH_OUT1" | grep -qi "mismatch" && pass "ROOM section flags a branch mismatch" || fail "expected 'mismatch' in ROOM section: $RB_GK_MISMATCH_OUT1"
+assert_eq "first mismatch tick dispatches exactly one durable alert" "1" "$RB_GK_MISMATCH_MSGCOUNT1"
+
+# Second tick, SAME alert-state file, still mismatched -- once-per-crossing
+# means no second .msg.
+GATEKEEPER_ALERT_STATE_FILE="$RB_GK_MISMATCH_STATE" GATEKEEPER_ROOM_ROOT="$RB_GK_MISMATCH_REPO" \
+  bash -c "source '$GATEKEEPER'; gk_check_room_branch" >/dev/null
+RB_GK_MISMATCH_MSGCOUNT2=$(ls "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "still mismatched second tick: no additional alert (once-per-crossing)" "1" "$RB_GK_MISMATCH_MSGCOUNT2"
+
+# Return to the integration branch -- re-arms the alert (persisted state
+# flips back to not-alerted).
+git -C "$RB_GK_MISMATCH_REPO" checkout -q uat
+GATEKEEPER_ALERT_STATE_FILE="$RB_GK_MISMATCH_STATE" GATEKEEPER_ROOM_ROOT="$RB_GK_MISMATCH_REPO" \
+  bash -c "source '$GATEKEEPER'; gk_check_room_branch" >/dev/null
+RB_GK_REARMED="$(jq -r '.room_branch.alerted // false' "$RB_GK_MISMATCH_STATE")"
+assert_eq "back on integration branch: alert state re-arms (alerted=false)" "false" "$RB_GK_REARMED"
+
+# Cross back to a mismatch -- re-armed state means a FRESH alert fires.
+git -C "$RB_GK_MISMATCH_REPO" checkout -q feature/rb-gk-mismatch
+GATEKEEPER_ALERT_STATE_FILE="$RB_GK_MISMATCH_STATE" GATEKEEPER_ROOM_ROOT="$RB_GK_MISMATCH_REPO" \
+  bash -c "source '$GATEKEEPER'; gk_check_room_branch" >/dev/null
+RB_GK_MISMATCH_MSGCOUNT3=$(ls "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "re-crossing into mismatch after a re-arm fires a fresh alert" "2" "$RB_GK_MISMATCH_MSGCOUNT3"
+
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.ack
+rm -rf "$RB_GK_MISMATCH_REPO" "$RB_GK_MISMATCH_STATE"
 
 echo ""
 echo "$PASS passed, $FAIL failed"
