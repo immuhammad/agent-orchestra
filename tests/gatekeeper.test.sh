@@ -132,8 +132,16 @@ cleanup() {
 # issue #37: an EXIT trap does NOT fire on SIGKILL or when the sweep shell
 # is torn down mid-run, so gktest-<pid> sessions from abandoned runs used
 # to pile up forever (84 found once during PR #30 cleanup). EXIT is kept
-# for the clean path; INT/TERM/HUP cover the common interrupt paths.
-trap cleanup EXIT INT TERM HUP
+# for the clean path; INT/TERM/HUP cover the common interrupt paths and
+# MUST `exit` explicitly -- a bash trap handler that returns normally
+# RESUMES the script after the interrupted command (review finding on PR
+# #99: a plain `trap cleanup INT TERM HUP` cleaned up, then kept running
+# the rest of the suite against the torn-down environment, then cleaned
+# up again -- defeating e.g. `timeout 120 bash tests/gatekeeper.test.sh`).
+# cleanup is idempotent, so the EXIT-trap double-fire after this exit is
+# harmless.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM HUP
 
 # T26 VERIFY setup: count how many lines already match the leak markers
 # (see the final block) in the real harness session BEFORE this run, if it
@@ -186,6 +194,14 @@ echo "== issue #37: orphan gktest-* session reaping =="
 # fails -- a deterministic, non-flaky stale marker.
 ORPHAN_SESSION="gktest-2147483647"
 tmux new-session -d -s "$ORPHAN_SESSION" >/dev/null 2>&1
+# Assert the orphan actually exists BEFORE reaping -- without this, a
+# silently-failed new-session would make the "orphan was killed" check
+# below pass vacuously (green for the wrong reason).
+if tmux has-session -t "$ORPHAN_SESSION" 2>/dev/null; then
+  pass "dead-PID orphan fixture created ($ORPHAN_SESSION exists pre-reap)"
+else
+  fail "could not create the dead-PID orphan fixture $ORPHAN_SESSION"
+fi
 reap_orphan_sessions
 if tmux has-session -t "$ORPHAN_SESSION" 2>/dev/null; then
   fail "reap_orphan_sessions left a dead-PID orphan alive"
