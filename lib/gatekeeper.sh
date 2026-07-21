@@ -1,7 +1,6 @@
 #!/bin/bash
 # .harness/gatekeeper.sh — alert-only quota watchdog. Never kills agents.
 set -uo pipefail
-THRESHOLD=80
 CHECK_INTERVAL="${GATEKEEPER_INTERVAL:-300}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./harness-root.sh
@@ -155,6 +154,42 @@ gk_check_room_branch() {
 GK_VOICE="${GATEKEEPER_VOICE:-$(orc_get_scalar voice)}"
 GK_VOICE="${GK_VOICE:-off}"
 
+# issue #86: threshold now READ from orchestrator.yaml's
+# budgets.<pool>.failsafe_pct (previously a hardcoded literal -- the yaml
+# key was entirely decorative; Ahmad set it and it had zero effect). Falls
+# back to 80 (the prior hardcoded value) so a room with no budgets: block
+# behaves exactly as before -- but falls back LOUDLY, not silently, so a
+# missing/mistyped key is visible rather than only discoverable by reading
+# source. Claude and agy are independently configurable: the Claude
+# branches (5h, weekly, and its half of "both") use CLAUDE_THRESHOLD; the
+# agy branch (and its half of "both") uses AGY_THRESHOLD.
+#
+# Value computation only here -- no I/O. Sourcing this file (tests that
+# just want e.g. NOTIFY_SESSION's default, or gatekeeper-liveness.sh's
+# gkl_usage_pcts sourcing it in a subshell just for fetch_claude_usage)
+# must stay side-effect-free, same lesson as issue #41 finding B's EXIT-
+# trap leak -- the loud warning itself (to budget.log AND stderr) is
+# deferred to gatekeeper_main below, which only actually runs when this
+# script is EXECUTED, not merely sourced (see the BASH_SOURCE guard at the
+# bottom of this file).
+GK_THRESHOLD_DEFAULT=80
+CLAUDE_THRESHOLD="$(orc_get_budget_pct claude)"
+GK_CLAUDE_THRESHOLD_WARN=""
+case "$CLAUDE_THRESHOLD" in
+  ''|*[!0-9]*)
+    GK_CLAUDE_THRESHOLD_WARN="budgets.claude.failsafe_pct missing/invalid in orchestrator.yaml -- defaulting to ${GK_THRESHOLD_DEFAULT}%"
+    CLAUDE_THRESHOLD="$GK_THRESHOLD_DEFAULT"
+    ;;
+esac
+AGY_THRESHOLD="$(orc_get_budget_pct agy)"
+GK_AGY_THRESHOLD_WARN=""
+case "$AGY_THRESHOLD" in
+  ''|*[!0-9]*)
+    GK_AGY_THRESHOLD_WARN="budgets.agy.failsafe_pct missing/invalid in orchestrator.yaml -- defaulting to ${GK_THRESHOLD_DEFAULT}%"
+    AGY_THRESHOLD="$GK_THRESHOLD_DEFAULT"
+    ;;
+esac
+
 gk_say() {
   [ "$GK_VOICE" = "on" ] && say "$1" >/dev/null 2>&1
   return 0
@@ -205,7 +240,7 @@ fetch_claude_usage() {
 # controls what's currently ON SCREEN.
 gatekeeper_render() {
   tui_clear
-  echo "$(tui_bold "Gatekeeper") -- $(date '+%Y-%m-%d %H:%M:%S') (threshold ${THRESHOLD}%)"
+  echo "$(tui_bold "Gatekeeper") -- $(date '+%Y-%m-%d %H:%M:%S') (threshold claude ${CLAUDE_THRESHOLD}% / agy ${AGY_THRESHOLD}%)"
   echo ""
   echo "$(tui_section QUOTA)"
   echo "  Claude 5h: $(tui_traffic_light "$USAGE_PCT" "${USAGE_PCT}%") | Claude weekly: $(tui_traffic_light "$WEEKLY_PCT" "${WEEKLY_PCT}%") | agy(max pool): $(tui_traffic_light "$AGY_PCT" "${AGY_PCT}%")"
@@ -242,7 +277,9 @@ gatekeeper_render() {
 }
 
 gatekeeper_main() {
-echo "Gatekeeper active (threshold ${THRESHOLD}%)"
+echo "Gatekeeper active (threshold claude ${CLAUDE_THRESHOLD}% / agy ${AGY_THRESHOLD}%)"
+[ -n "$GK_CLAUDE_THRESHOLD_WARN" ] && echo "$(date) - WARN: $GK_CLAUDE_THRESHOLD_WARN" | tee -a "$BUDGET_LOG" >&2
+[ -n "$GK_AGY_THRESHOLD_WARN" ] && echo "$(date) - WARN: $GK_AGY_THRESHOLD_WARN" | tee -a "$BUDGET_LOG" >&2
 while true; do
   # VERIFY jq path: fetch_claude_usage | jq '.five_hour, .seven_day'
   CLAUDE_USAGE_JSON="$(fetch_claude_usage)"
@@ -287,10 +324,10 @@ while true; do
   gatekeeper_render
 
   # --- both exhausted: everything pauses ---
-  if [ "$USAGE_PCT" -ge "$THRESHOLD" ] && [ "$AGY_PCT" -ge "$THRESHOLD" ]; then
+  if [ "$USAGE_PCT" -ge "$CLAUDE_THRESHOLD" ] && [ "$AGY_PCT" -ge "$AGY_THRESHOLD" ]; then
     if ! gk_is_alerted claude_5h || ! gk_is_alerted agy; then
-      echo "$(date) - ALERT: BOTH pools >=${THRESHOLD}% (C:${USAGE_PCT}% A:${AGY_PCT}%)" >> "$BUDGET_LOG"
-      gk_alert_orchestra "quota-both" "quota critical — BOTH pools >=${THRESHOLD}%. Follow AGENTS.md failsafe: update handoff, then HOLD. No fallback available."
+      echo "$(date) - ALERT: BOTH pools over threshold (C:${USAGE_PCT}%>=${CLAUDE_THRESHOLD}% A:${AGY_PCT}%>=${AGY_THRESHOLD}%)" >> "$BUDGET_LOG"
+      gk_alert_orchestra "quota-both" "quota critical — BOTH pools over threshold (claude>=${CLAUDE_THRESHOLD}% agy>=${AGY_THRESHOLD}%). Follow AGENTS.md failsafe: update handoff, then HOLD. No fallback available."
       gk_say "Both quota pools exhausted"
       gk_mark_alerted claude_5h; gk_mark_alerted agy
       ar_mark_pending "$NOTIFY_SESSION:0.0"
@@ -305,7 +342,7 @@ while true; do
     fi
   else
     # --- Claude 5h over: fallback = agy ---
-    if [ "$USAGE_PCT" -ge "$THRESHOLD" ] && ! gk_is_alerted claude_5h; then
+    if [ "$USAGE_PCT" -ge "$CLAUDE_THRESHOLD" ] && ! gk_is_alerted claude_5h; then
       echo "$(date) - ALERT: Claude 5h ${USAGE_PCT}%" >> "$BUDGET_LOG"
       gk_alert_orchestra "quota-5h" "quota Claude 5h at ${USAGE_PCT}% — follow AGENTS.md failsafe. Fallback available: agy."
       gk_say "Claude quota threshold"
@@ -317,7 +354,7 @@ while true; do
       ar_write_quota_stop_flag "5h" "$USAGE_PCT" "agy" "$FIVE_HOUR_RESETS_AT"
     fi
     # --- agy over: fallback = Claude (or throttle) ---
-    if [ "$AGY_PCT" -ge "$THRESHOLD" ] && ! gk_is_alerted agy; then
+    if [ "$AGY_PCT" -ge "$AGY_THRESHOLD" ] && ! gk_is_alerted agy; then
       echo "$(date) - ALERT: agy ${AGY_PCT}%" >> "$BUDGET_LOG"
       gk_alert_orchestra "quota-agy" "quota agy at ${AGY_PCT}% — follow AGENTS.md failsafe. Fallback: hand work back to Claude Code."
       gk_say "Antigravity quota threshold"
@@ -326,7 +363,7 @@ while true; do
   fi
 
   # --- Claude weekly (seven_day) over: same failsafe, no separate fallback pool ---
-  if [ "$WEEKLY_PCT" -ge "$THRESHOLD" ] && ! gk_is_alerted claude_weekly; then
+  if [ "$WEEKLY_PCT" -ge "$CLAUDE_THRESHOLD" ] && ! gk_is_alerted claude_weekly; then
     echo "$(date) - ALERT: Claude weekly ${WEEKLY_PCT}%" >> "$BUDGET_LOG"
     gk_alert_orchestra "quota-weekly" "quota Claude WEEKLY at ${WEEKLY_PCT}% — follow AGENTS.md failsafe (pool: weekly)."
     gk_say "Claude weekly quota threshold"

@@ -735,6 +735,137 @@ if grep -q "GATEKEEPER EXIT" "$GATEKEEPER_BUDGET_LOG"; then
 else
   fail "expected a 'GATEKEEPER EXIT' line in budget.log: $(cat "$GATEKEEPER_BUDGET_LOG")"
 fi
+
+echo "== issue #86: orc_get_budget_pct unit tests (direct, no subprocess) =="
+GK_UNIT_YAML="$(mktemp)"
+cat > "$GK_UNIT_YAML" <<'EOF'
+project: unit-test
+budgets:
+  claude:
+    failsafe_pct: 42
+  agy:
+    failsafe_pct: 90
+roles:
+  orchestra:
+    model: fable
+EOF
+GK_UNIT_CLAUDE="$(ORC_CONFIG_FILE="$GK_UNIT_YAML" bash -c "source '$LIB/orc-config.sh'; orc_get_budget_pct claude")"
+if [ "$GK_UNIT_CLAUDE" = "42" ]; then
+  pass "orc_get_budget_pct claude reads the nested budgets.claude.failsafe_pct value (42)"
+else
+  fail "expected orc_get_budget_pct claude to return 42, got '$GK_UNIT_CLAUDE'"
+fi
+GK_UNIT_AGY="$(ORC_CONFIG_FILE="$GK_UNIT_YAML" bash -c "source '$LIB/orc-config.sh'; orc_get_budget_pct agy")"
+if [ "$GK_UNIT_AGY" = "90" ]; then
+  pass "orc_get_budget_pct agy reads its own independent nested value (90), not the claude one"
+else
+  fail "expected orc_get_budget_pct agy to return 90, got '$GK_UNIT_AGY'"
+fi
+GK_UNIT_MISSING="$(ORC_CONFIG_FILE="$GK_UNIT_YAML" bash -c "source '$LIB/orc-config.sh'; orc_get_budget_pct nonexistent_pool")"
+if [ -z "$GK_UNIT_MISSING" ]; then
+  pass "orc_get_budget_pct returns empty for a pool that isn't in the yaml (caller falls back)"
+else
+  fail "expected empty for a missing pool key, got '$GK_UNIT_MISSING'"
+fi
+rm -f "$GK_UNIT_YAML"
+
+# gk_write_agy_statusline <pct> -- AGY_PCT is computed from a real file at
+# $HOME/.gemini/antigravity-cli/scratch/agy-statusline.json, not from the
+# curl-mocked JSON gk_mocked_run already controls -- gk_mocked_run already
+# points HOME at $FAKE_HOME, so writing the fixture there is enough.
+gk_write_agy_statusline() {
+  local pct="$1" remaining
+  remaining="$(awk -v p="$pct" 'BEGIN { printf "%.2f", (100-p)/100 }')"
+  mkdir -p "$FAKE_HOME/.gemini/antigravity-cli/scratch"
+  cat > "$FAKE_HOME/.gemini/antigravity-cli/scratch/agy-statusline.json" <<EOF
+{"quota":{"gemini-5h":{"remaining_fraction":$remaining},"3p-5h":{"remaining_fraction":$remaining}}}
+EOF
+}
+gk_write_agy_statusline 0
+
+GK_YAML_CLAUDE90="$FAKE_BIN/orchestrator-claude90.yaml"
+cat > "$GK_YAML_CLAUDE90" <<'EOF'
+project: gk-threshold-test
+budgets:
+  claude:
+    failsafe_pct: 90
+  agy:
+    failsafe_pct: 80
+EOF
+
+echo "== issue #86: budgets.claude.failsafe_pct is actually read -- a configured 90% threshold governs the Claude 5h branch =="
+: > "$GATEKEEPER_BUDGET_LOG"
+rm -f "$GATEKEEPER_ALERT_STATE_FILE" "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
+gk_mocked_run 4 '{"five_hour":{"utilization":85,"resets_at":"2026-07-11T00:00:00Z"},"seven_day":{"utilization":5}}' ORC_CONFIG_FILE="$GK_YAML_CLAUDE90"
+ORCH_MSGS_86A=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_86A[0]}" ]; then
+  fail "CORRECTNESS REGRESSION (issue #86): with budgets.claude.failsafe_pct=90, usage 85% should NOT alert, but it did: $(cat "${ORCH_MSGS_86A[0]}")"
+else
+  pass "issue #86: 85% usage below a configured 90% claude threshold does not alert"
+fi
+
+rm -f "$GATEKEEPER_ALERT_STATE_FILE" "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
+gk_mocked_run 4 '{"five_hour":{"utilization":92,"resets_at":"2026-07-11T00:00:00Z"},"seven_day":{"utilization":5}}' ORC_CONFIG_FILE="$GK_YAML_CLAUDE90"
+ORCH_MSGS_86B=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_86B[0]}" ]; then
+  pass "issue #86: 92% usage above the configured 90% claude threshold alerts"
+else
+  fail "expected an alert once usage (92%) crossed the configured claude threshold (90%)"
+fi
+
+GK_YAML_AGY90="$FAKE_BIN/orchestrator-agy90.yaml"
+cat > "$GK_YAML_AGY90" <<'EOF'
+project: gk-threshold-test
+budgets:
+  claude:
+    failsafe_pct: 80
+  agy:
+    failsafe_pct: 90
+EOF
+
+echo "== issue #86: budgets.agy.failsafe_pct is independently configurable -- governs only the agy branch, not claude's =="
+rm -f "$GATEKEEPER_ALERT_STATE_FILE" "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
+gk_write_agy_statusline 85
+gk_mocked_run 4 '{"five_hour":{"utilization":10,"resets_at":"2026-07-11T00:00:00Z"},"seven_day":{"utilization":5}}' ORC_CONFIG_FILE="$GK_YAML_AGY90"
+ORCH_MSGS_86C=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_86C[0]}" ]; then
+  fail "CORRECTNESS REGRESSION (issue #86): with budgets.agy.failsafe_pct=90, agy usage 85% should NOT alert, but it did: $(cat "${ORCH_MSGS_86C[0]}")"
+else
+  pass "issue #86: agy at 85% below a configured 90% agy threshold does not alert"
+fi
+
+rm -f "$GATEKEEPER_ALERT_STATE_FILE" "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
+gk_write_agy_statusline 92
+gk_mocked_run 4 '{"five_hour":{"utilization":10,"resets_at":"2026-07-11T00:00:00Z"},"seven_day":{"utilization":5}}' ORC_CONFIG_FILE="$GK_YAML_AGY90"
+ORCH_MSGS_86D=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_86D[0]}" ]; then
+  pass "issue #86: agy at 92% above the configured 90% agy threshold alerts"
+else
+  fail "expected an alert once agy usage (92%) crossed the configured agy threshold (90%)"
+fi
+gk_write_agy_statusline 0
+
+GK_YAML_NOBUDGETS="$FAKE_BIN/orchestrator-nobudgets.yaml"
+cat > "$GK_YAML_NOBUDGETS" <<'EOF'
+project: gk-threshold-test-nobudgets
+EOF
+
+echo "== issue #86: no budgets: block at all -- falls back to the prior default (80%), loudly (not silently) =="
+: > "$GATEKEEPER_BUDGET_LOG"
+rm -f "$GATEKEEPER_ALERT_STATE_FILE" "$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*.ack
+gk_mocked_run 4 '{"five_hour":{"utilization":82,"resets_at":"2026-07-11T00:00:00Z"},"seven_day":{"utilization":5}}' ORC_CONFIG_FILE="$GK_YAML_NOBUDGETS"
+ORCH_MSGS_86E=("$DISPATCH_CANON_DIR"/inbox/orchestra/*.msg)
+if [ -e "${ORCH_MSGS_86E[0]}" ]; then
+  pass "issue #86: absent budgets: block falls back to the 80% default (82% usage alerts)"
+else
+  fail "expected the 80% default to still alert at 82% usage when budgets: is absent"
+fi
+if grep -qi "budgets.claude.failsafe_pct missing" "$GATEKEEPER_BUDGET_LOG" 2>/dev/null; then
+  pass "issue #86: a missing budgets key produces a loud warning line, not silence"
+else
+  fail "expected a loud warning line about the missing budgets.claude.failsafe_pct key: $(cat "$GATEKEEPER_BUDGET_LOG" 2>/dev/null)"
+fi
+
 rm -rf "$FAKE_BIN"
 
 echo "== T26: notify() targets the throwaway session, never a hardcoded 'harness' =="
