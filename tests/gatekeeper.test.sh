@@ -129,7 +129,19 @@ cleanup() {
   rm -f "$GATEKEEPER_HEARTBEAT_FILE" "$GATEKEEPER_LIVENESS_LOG" "$AUTO_RESUME_STATE_FILE" "$GATEKEEPER_LIVENESS_HANDOFF_FILE"
   rm -rf "$GATEKEEPER_ROOM_ROOT"
 }
+# issue #37: an EXIT trap does NOT fire on SIGKILL or when the sweep shell
+# is torn down mid-run, so gktest-<pid> sessions from abandoned runs used
+# to pile up forever (84 found once during PR #30 cleanup). EXIT is kept
+# for the clean path; INT/TERM/HUP cover the common interrupt paths and
+# MUST `exit` explicitly -- a bash trap handler that returns normally
+# RESUMES the script after the interrupted command (review finding on PR
+# #99: a plain `trap cleanup INT TERM HUP` cleaned up, then kept running
+# the rest of the suite against the torn-down environment, then cleaned
+# up again -- defeating e.g. `timeout 120 bash tests/gatekeeper.test.sh`).
+# cleanup is idempotent, so the EXIT-trap double-fire after this exit is
+# harmless.
 trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM HUP
 
 # T26 VERIFY setup: count how many lines already match the leak markers
 # (see the final block) in the real harness session BEFORE this run, if it
@@ -148,6 +160,23 @@ if tmux has-session -t "$REAL_SESSION" >/dev/null 2>&1; then
   REAL_LEAK_COUNT_BEFORE="$(for p in 0 1 2 3 4; do tmux capture-pane -p -t "$REAL_SESSION:0.$p" 2>/dev/null; done | grep -Ec "$LEAK_MARKERS")"
 fi
 
+# issue #37: a trap alone is provably not enough (it cannot fire on
+# SIGKILL), so also self-heal on the way IN -- reap any gktest-<pid>
+# session whose PID suffix is no longer alive before creating ours. This
+# converges the machine even after a kill no trap could catch, and never
+# touches a live session (its own gktest-$$ included -- kill -0 $$ passes).
+reap_orphan_sessions() {
+  local s pid
+  while IFS= read -r s; do
+    pid="${s#gktest-}"
+    case "$pid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || tmux kill-session -t "$s" >/dev/null 2>&1
+  done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^gktest-')
+}
+reap_orphan_sessions
+
 # Throwaway session standing in for "harness": 5 panes (0-4), matching the
 # current pane map (orchestra/builder/agy/gatekeeper/watch -- issue #89
 # retired pane 3), so any pane-index-specific target has somewhere valid to
@@ -157,6 +186,34 @@ for _ in 1 2 3 4; do
   tmux split-window -t "$TEST_SESSION:0" -x 200 -y 50 >/dev/null 2>&1
 done
 tmux select-layout -t "$TEST_SESSION:0" tiled >/dev/null 2>&1
+
+echo "== issue #37: orphan gktest-* session reaping =="
+# A dead-PID orphan (stands in for a gktest-<pid> stranded by a SIGKILLed
+# run) must be reaped; the live current session (gktest-$$) must survive.
+# 2147483647 (INT_MAX) is never a live PID, so `kill -0` on it always
+# fails -- a deterministic, non-flaky stale marker.
+ORPHAN_SESSION="gktest-2147483647"
+tmux new-session -d -s "$ORPHAN_SESSION" >/dev/null 2>&1
+# Assert the orphan actually exists BEFORE reaping -- without this, a
+# silently-failed new-session would make the "orphan was killed" check
+# below pass vacuously (green for the wrong reason).
+if tmux has-session -t "$ORPHAN_SESSION" 2>/dev/null; then
+  pass "dead-PID orphan fixture created ($ORPHAN_SESSION exists pre-reap)"
+else
+  fail "could not create the dead-PID orphan fixture $ORPHAN_SESSION"
+fi
+reap_orphan_sessions
+if tmux has-session -t "$ORPHAN_SESSION" 2>/dev/null; then
+  fail "reap_orphan_sessions left a dead-PID orphan alive"
+  tmux kill-session -t "$ORPHAN_SESSION" >/dev/null 2>&1 || true
+else
+  pass "reap_orphan_sessions killed the dead-PID orphan"
+fi
+if tmux has-session -t "$TEST_SESSION" 2>/dev/null; then
+  pass "reap_orphan_sessions kept the live current session (gktest-\$\$)"
+else
+  fail "reap_orphan_sessions wrongly killed the live current session"
+fi
 
 echo "== live OAuth usage endpoint =="
 source "$GATEKEEPER" 2>/dev/null || true # BASH_SOURCE guard means the loop never runs
