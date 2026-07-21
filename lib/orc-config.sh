@@ -156,6 +156,43 @@ orc_get_role_model() {
   ' "$yaml"
 }
 
+# orc_get_budget_pct <pool> -- prints budgets.<pool>.failsafe_pct. Supports
+# the block mapping style: `budgets:\n  <pool>:\n    failsafe_pct: X` -- same
+# nested-lookup shape as orc_get_role_model (roles.<role>.model) above.
+# issue #86: orc_get_scalar only reads TOP-LEVEL `key: value` lines, so it
+# can't address a nested key like this directly; reuses that function's
+# proven indent-tracking awk technique rather than hand-rolling a second
+# yaml parser. Prints nothing if the file, the budgets: block, the pool, or
+# the failsafe_pct key is missing -- callers must supply their own fallback.
+orc_get_budget_pct() {
+  local pool="$1"
+  local yaml
+  yaml="$(orc_config_file)"
+  [ -f "$yaml" ] || return 0
+
+  awk -v pool_key="${pool}:" '
+    /^budgets:[[:space:]]*$/ { in_budgets = 1; next }
+    in_budgets && /^[^[:space:]]/ { in_budgets = 0 }
+    in_budgets {
+      trimmed = $0
+      gsub(/^[[:space:]]+/, "", trimmed)
+      if (trimmed == pool_key) { in_pool = 1; pool_indent = length($0) - length(trimmed); next }
+      if (in_pool) {
+        indent = length($0) - length(trimmed)
+        if (trimmed ~ /^[^[:space:]]/ && indent <= pool_indent) { in_pool = 0 }
+      }
+      if (in_pool && trimmed ~ /^failsafe_pct:/) {
+        line = trimmed
+        sub(/^failsafe_pct:[[:space:]]*/, "", line)
+        gsub(/^"|"$/, "", line)
+        gsub(/^'"'"'|'"'"'$/, "", line)
+        print line
+        exit
+      }
+    }
+  ' "$yaml"
+}
+
 # orc_session_name [fallback] -- derives the tmux SESSION name this
 # project's control room runs under, from orchestrator.yaml's `project`
 # scalar (falling back to the given default, or "harness", if unset).
