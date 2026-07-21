@@ -50,6 +50,10 @@ expect_denied "git commit is denied"                  "git commit -m 'agy note'"
 expect_denied "git reset is denied"                    "git reset HEAD~1"
 expect_denied "git reset --hard is still denied (pre-existing rule)" "git reset --hard origin/uat"
 
+echo "== issue #60 task A: gh pr checkout / git switch denied for agy =="
+expect_denied "gh pr checkout is denied"                "gh pr checkout 60"
+expect_denied "git switch is denied"                    "git switch main"
+
 echo "== regression: pre-existing G-series bans still work =="
 expect_denied "rm -rf is still denied"                "rm -rf /tmp/whatever"
 expect_denied "git push --force is still denied"      "git push --force origin uat"
