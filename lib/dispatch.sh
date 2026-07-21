@@ -111,25 +111,39 @@ inbox_dir_name() {
   esac
 }
 
-# pane_busy_markers <agent> -- per-agent/per-TUI busy vocabulary (issue #86
-# Task 3, finding 3). Claude Code's own TUI vocabulary (thinking/esc to
-# interrupt/compacting/generating/running...) doesn't cover agy's real busy
-# rendering -- live-confirmed 2026-07-10: agy renders `⣟ Working...` with
-# its bare `>` prompt still visible underneath, so with only the Claude-Code
-# words the busy check missed it entirely (false-IDLE -> a nudge's
-# keystrokes got injected mid-generation and lost). scribe/copilot never
-# reach this function in practice (issue #89: they're spawned headless, not
-# pane-nudged), kept in the widened branch anyway in case anything ever
-# calls pane_is_idle for them directly; an unknown/unmapped agent falls back
-# to the Claude-Code-only list (err-toward-busy: an agent this function
-# doesn't recognize is exactly the case to be MORE conservative for, not
-# less, so the extra 'working' word is added rather than omitted --
-# false-busy just delays a nudge, false-idle loses one).
+# pane_busy_markers <agent> -- busy-indicator regex (kept accepting an
+# agent arg for call-site compatibility; no longer used, see below).
+# issue #97 review round 2 (agy finding 2, reproduced live): a bare-word
+# substring match anywhere in the tail false-flagged busy on ORDINARY
+# PROSE merely containing one of these words on a genuinely idle pane
+# (e.g. "...thinking about this differently, working through the edge
+# cases...") -- this, not the prompt regex, was the real cause of the
+# 00:16 agy false-busy incident. Reworked to match how a real busy
+# indicator actually RENDERS instead of bare words anywhere: a
+# spinner-glyph-prefixed line (agy's confirmed "⣟ Working...", Claude's
+# own confirmed "✢ <whimsical loading text> (1m 20s · ↓ 2.8k tokens)" --
+# note that example doesn't even CONTAIN a status word, the glyph prefix
+# IS the signal), a token/time-counter parenthetical shape, the literal
+# "esc to interrupt" hint (specific enough to be safe as a bare phrase --
+# unlike single common words, this exact compound phrase essentially never
+# appears in ordinary prose), or a status word that IS the entire
+# (trimmed) line rather than embedded mid-sentence. No longer per-agent:
+# a shape-anchored match is precise enough to be safe for every TUI, so
+# the old agy-only 'working' carve-out (and the false-idle gap it
+# otherwise left open for a no-agent-hint call) is no longer needed.
 pane_busy_markers() {
-  case "${1:-}" in
-    agy|scribe|copilot) echo 'thinking|esc to interrupt|compacting|generating|running\.\.\.|working' ;;
-    *)                  echo 'thinking|esc to interrupt|compacting|generating|running\.\.\.' ;;
-  esac
+  # A Unicode RANGE inside this bracket expression (e.g. `[⠀-⣿...]` for the
+  # whole Braille block) is NOT safe here: confirmed live on this machine's
+  # grep -E (BSD grep) -- combining a wide codepoint range with other
+  # discrete characters in one bracket expression matched completely
+  # unrelated lines (❯, ─, ⏵, ← all falsely matched), the exact same class
+  # of byte-level UTF-8 mishandling already hit and worked around in this
+  # file's awk usage above. Explicit alternation of only the specific
+  # glyphs actually confirmed real (agy's "⣟ Working...", Claude's own
+  # "✢ ... (1m 20s · ↓ 2.8k tokens)") plus a few common asterisk-style
+  # spinner symbols and a literal '*' -- each verified individually, no
+  # range operator, before landing.
+  echo '^[[:space:]]*(⣟|✢|✳|✻|✵|⏺|✶|✦|\*)|\([0-9]+[ms][^)]*tokens?\)|esc to interrupt|^[[:space:]]*(thinking|working|compacting|generating|running)\.\.\.[[:space:]]*$'
 }
 
 # Idle heuristic (T17 VERIFY: must be documented, not just implemented):
@@ -183,28 +197,48 @@ pane_is_idle() {
   if echo "$tail" | grep -Eiq "$markers"; then
     return 1
   fi
-  # issue #97 (live-repro'd, SIX stranded nudges): this used to require a
-  # BARE prompt line (nothing after the >/❯, not even whitespace) --
-  # correctly finds an idle prompt with hint/chrome lines rendered BELOW it
-  # (those are separate lines; grep already scans every line of $tail), but
-  # any TEXT ON the prompt line itself (a previous nudge's "check inbox"
-  # still sitting there unsubmitted, or Claude Code's input-box ghost/hint
-  # text appended after the prompt char on the SAME line) made every line
-  # fail to match -- no bare prompt anywhere, so the pane read busy, the
-  # nudge deferred, and the next retry saw the exact same unsubmitted text
-  # and deferred again, forever. Safe to treat as idle: send_submit
-  # (send-lib.sh) already clears the input line with C-u before typing --
-  # added specifically because stray content already on the line silently
-  # merged with a fresh nudge otherwise -- so a pending prompt-line string
-  # is not "someone mid-generation", just leftover text a real nudge safely
-  # clears first. Dropping the trailing `[[:space:]]*$` anchor is the whole
-  # fix: a prompt-shaped line (>/❯ as the first non-whitespace character)
-  # now matches with or without whatever follows it. Still requires the
-  # busy-marker check above to have already passed, so a genuine spinner/
-  # "Thinking..."/mid-generation line still reads busy regardless of
-  # whether some OTHER line in the tail happens to start with >/❯ (e.g. a
-  # markdown blockquote scrolled past in generated output) -- busy wins.
-  echo "$tail" | grep -Eq '^[[:space:]]*[>❯]'
+  # Bare idle prompt: a line that is JUST >/❯, nothing else (not even a
+  # ghost-text/hint suffix on the SAME line) -- the original, strict check.
+  if echo "$tail" | grep -Eq '^[[:space:]]*[>❯][[:space:]]*$'; then
+    return 0
+  fi
+  # issue #97 review round 2 (agy finding 1, reproduced live): an EARLIER
+  # version of this fix dropped the anchor entirely (matched a prompt char
+  # at the start of ANY line, trailing content or not) to handle stuck
+  # unsubmitted nudge text on the prompt line -- but that also matches any
+  # GENERATED line starting with '>' (a markdown blockquote, a quoted
+  # shell transcript), and once the real busy marker scrolls out of the
+  # 10-line tail window on a long response, that reads a genuinely busy
+  # pane as idle (confirmed by direct reproduction) -- exactly the
+  # AGENTS.md-forbidden outcome (nudge keystrokes injected mid-generation).
+  # Scoped instead to the ACTUAL input-box shape: a prompt-shaped line
+  # (with or without trailing text) immediately followed by a border line
+  # (a run of box-drawing dashes). That framing is Claude Code's own fixed
+  # UI chrome around its input box -- rendered regardless of what's typed
+  # on the prompt line -- and essentially never appears immediately after
+  # an arbitrary line of generated output. Still recognizes the original
+  # stranded-nudge bug (stuck "check inbox" text on the FRAMED prompt
+  # line, e.g. immediately followed by Claude Code's own separator) without
+  # reopening the blockquote false-IDLE risk: an isolated '> quoted text'
+  # deep in scrolled output is never followed by that same framing.
+  #
+  # A pure-bash line-walk, not awk: macOS's awk ("one true awk") mishandles
+  # a `{8,}` interval combined with a multi-byte UTF-8 character class --
+  # confirmed live, every line falsely matched the border regex regardless
+  # of content once both were combined in one awk pattern. grep -E does not
+  # have this problem (already proven correct elsewhere in this exact file,
+  # e.g. the `[>❯]` prompt-char class), so the line-by-line comparison is
+  # done with grep instead.
+  local prev_line cur_line
+  prev_line=""
+  while IFS= read -r cur_line; do
+    if [ -n "$prev_line" ] && echo "$prev_line" | grep -Eq '^[[:space:]]*[>❯]' \
+      && echo "$cur_line" | grep -Eq '[─━]{8,}'; then
+      return 0
+    fi
+    prev_line="$cur_line"
+  done <<< "$tail"
+  return 1
 }
 
 nudge_agent() {

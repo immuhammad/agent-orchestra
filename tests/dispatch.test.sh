@@ -69,16 +69,19 @@ else
   pass "busy pane correctly detected as not idle"
 fi
 
-echo "== issue #86 Task 3: per-agent busy markers (agy's live-observed 'Working...' render) =="
+echo "== issue #86 Task 3 / #97 review round 2: busy markers are shape-anchored and agent-agnostic (agy's live-observed 'Working...' render) =="
 # A DEDICATED third pane (0.2), not the shared 0.1 pane the T24 section
 # below depends on staying busy -- reusing 0.1 here would both leave stale
 # 'Thinking...' scrollback contaminating this check AND interrupt the
 # sleep the T24 section expects to still be running.
 tmux split-window -h -t "$TEST_SESSION:0" 2>&1
-# agy's real busy rendering (live-confirmed 2026-07-10): "Working..." with a
-# bare '>' prompt still visible underneath -- none of the Claude-Code-only
-# words (thinking/generating/compacting/esc to interrupt/running...) match
-# this, so the DEFAULT marker set alone reads it as idle.
+# agy's real busy rendering (live-confirmed 2026-07-10): a spinner glyph
+# (⣟) prefixing "Working...", with a bare '>' prompt still visible
+# underneath. issue #97 review round 2 (agy finding 2): pane_busy_markers
+# is no longer per-agent -- a spinner-glyph-prefixed line is a safe signal
+# for ANY TUI (prose essentially never starts a line with one), so this
+# now matches with or without an agent hint, closing the gap the ORIGINAL
+# per-agent split left open (previously only matched when called AS agy).
 tmux send-keys -t "$TEST_SESSION:0.2" "printf '⣟ Working...\\n> \\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.2" "agy"; then
@@ -87,9 +90,9 @@ else
   pass "agy's 'Working...' render correctly detected as busy for agent 'agy'"
 fi
 if pane_is_idle "$TEST_SESSION:0.2"; then
-  pass "same render with NO agent hint falls back to the Claude-Code-only list (documents the gap 'working' widening exists to close)"
+  fail "CORRECTNESS REGRESSION (issue #97): a spinner-glyph-prefixed busy line should be detected busy regardless of agent hint (shape-anchored, not per-agent)"
 else
-  fail "no-agent-hint call unexpectedly matched 'working' -- pane_busy_markers default branch may have widened"
+  pass "issue #97: the same spinner-glyph render is ALSO detected busy with NO agent hint -- the old per-agent gap is closed by shape-anchoring"
 fi
 tmux send-keys -t "$TEST_SESSION:0.2" C-c 2>&1
 
@@ -161,15 +164,15 @@ else
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
-echo "-- interaction check: a genuine busy marker still wins even when a prompt-shaped line is ALSO present --"
+echo "-- interaction check: a genuine (shape-anchored) busy marker still wins even when a prompt-shaped line is ALSO present --"
 tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
 sleep 0.5
-tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Generating response...\\n❯ check inbox\\n'; sleep 30" Enter 2>&1
+tmux send-keys -t "$TEST_SESSION:0.1" "printf '✢ Generating... (1m 20s · ↓ 500 tokens)\\n❯ check inbox\\n──────────\\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.1"; then
-  fail "CORRECTNESS REGRESSION (issue #97): the #97 prompt-line widening should never override a genuine busy marker"
+  fail "CORRECTNESS REGRESSION (issue #97): a genuine busy marker should never be overridden by a prompt-shaped (even framed) line elsewhere in the tail"
 else
-  pass "issue #97: a genuine busy marker still reads busy even with a prompt-shaped line elsewhere in the tail"
+  pass "issue #97: a genuine busy marker still reads busy even with a FRAMED prompt-shaped line elsewhere in the tail"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
@@ -194,6 +197,41 @@ if pane_is_idle "$TEST_SESSION:0.1"; then
   fail "CORRECTNESS REGRESSION (issue #97): plain scrolled generated prose with no prompt line and no busy marker should stay busy (ambiguous content errs toward busy)"
 else
   pass "issue #97: mid-output scroll with no prompt-shaped line and no busy marker correctly stays busy"
+fi
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+
+echo "-- review round 2 finding 1 (agy, reproduced live): an UNFRAMED markdown-blockquote-shaped line, with the real busy marker scrolled out of the tail window, must NOT read idle --"
+# This is the exact false-IDLE this round's revert exists to prevent: a
+# generated line starting with '>' (quoting the user, or a shell
+# transcript) is NOT followed by Claude Code's own border-line chrome --
+# real generated text never renders that framing -- so it must stay busy
+# even though nothing IN THIS WINDOW says so explicitly (errs toward busy
+# on ambiguous content, per AGENTS.md).
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf '> quoting the original request here\\nline 2 of continued generation\\nline 3 of continued generation\\nline 4 of continued generation\\nline 5 of continued generation\\nline 6 of continued generation\\nline 7 of continued generation\\nline 8 of continued generation\\nline 9 of continued generation\\nstill generating, line 10\\n'; sleep 30" Enter 2>&1
+sleep 2
+if pane_is_idle "$TEST_SESSION:0.1"; then
+  fail "CORRECTNESS REGRESSION (issue #97 finding 1): an unframed blockquote-shaped line with the busy marker scrolled out of the tail window false-IDLEd"
+else
+  pass "issue #97: an unframed blockquote-shaped line does not false-IDLE even with no busy marker in the current tail window"
+fi
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+
+echo "-- review round 2 finding 2 (agy, the 00:16 incident, reproduced live): ordinary prose containing 'working'/'thinking' + a genuinely idle prompt reads idle --"
+# The real 00:16 cause per agy: the OLD bare-word busy-marker match found
+# 'working'/'thinking' lingering in ordinary prose from a just-finished
+# response and flagged a genuinely idle pane busy. Shape-anchored markers
+# (spinner glyph / token-counter / esc-to-interrupt / whole-line status
+# word) must not match plain prose use of these common words.
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf 'I was thinking about this differently -- working through\\nthe edge cases one more time before wrapping up.\\n> \\nGemini 2.5 Pro | context left 92%%\\n'; sleep 30" Enter 2>&1
+sleep 2
+if pane_is_idle "$TEST_SESSION:0.1" "agy"; then
+  pass "issue #97: prose containing 'thinking'/'working' + a genuinely idle prompt reads idle (the 00:16 incident's real cause is fixed)"
+else
+  fail "CORRECTNESS REGRESSION (issue #97 finding 2): ordinary prose containing common status words still false-flags busy on a genuinely idle pane"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
@@ -237,17 +275,16 @@ echo "== issue #33: pane_is_idle trusts a FRESH hook-based state file over a scr
 source "$DIR/../lib/pane-state-lib.sh"
 tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 GHOST_TARGET="$TEST_SESSION:0.3"
-# issue #97 follow-up: this used to render prompt+trailing-hint-text
-# ("❯ Try \"fix the auth bug\"") to prove hook-state trumps a screen-scrape
-# misread -- but #97 widened the screen-scrape prompt match to accept text
-# ON the prompt line too (see dispatch.sh's pane_is_idle), so that exact
-# fixture would now read idle from the screen-scrape ALONE and no longer
-# exercise the override at all. Swapped to a fixture with a genuine busy
-# MARKER ("esc to interrupt", checked before -- and independently of --
-# the prompt-line match), which #97's widening does not and should not
-# affect: screen-scrape alone must still read this busy, so the fresh
-# "idle" hook state is the only thing that can flip it.
-tmux send-keys -t "$GHOST_TARGET" "printf 'Thinking... (esc to interrupt)\\n❯ \\n'; sleep 30" Enter 2>&1
+# issue #97 review round 2 (agy finding 3): restored to its ORIGINAL
+# intent/fixture -- prompt+trailing-hint-text on a SINGLE line, no border
+# line following it, no busy marker. #97's final design (positionally-
+# scoped framed-prompt match, not a blanket end-anchor drop) does NOT read
+# this as idle from the screen-scrape alone: it's not bare, and it's not
+# FRAMED (no border line follows the prompt in this single-line fixture),
+# so it still correctly falls to busy on scrape alone -- meaning the fresh
+# hook state below is still the only thing that flips it, exactly as this
+# test was originally designed to prove.
+tmux send-keys -t "$GHOST_TARGET" "printf '❯ Try \"fix the auth bug\"\\n'; sleep 30" Enter 2>&1
 sleep 1
 GHOST_PANE_ID="$(tmux display-message -p -t "$GHOST_TARGET" '#{pane_id}')"
 pane_state_write "$GHOST_PANE_ID" "idle"
