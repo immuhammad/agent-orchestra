@@ -27,6 +27,18 @@ source "$DIR/orc-config.sh"
 # shellcheck source=./harness-root.sh
 source "$DIR/harness-root.sh"
 
+# room_branch_integration_branch <root> -- prints the configured
+# integration branch name (orchestrator.yaml's integration_branch,
+# falling back to "uat"), same resolution orc-worktree.sh uses. Split out
+# from room_branch_state so callers that only need the branch NAME (e.g.
+# the restore-command allow-list below) don't duplicate this resolution.
+room_branch_integration_branch() {
+  local root="${1:?usage: room_branch_integration_branch <root>}"
+  local integration
+  integration="$(cd "$root" 2>/dev/null && orc_get_scalar integration_branch 2>/dev/null)"
+  echo "${integration:-uat}"
+}
+
 # room_branch_state <root> -> prints "ok", "mismatch <branch>", or "unknown"
 room_branch_state() {
   local root="${1:?usage: room_branch_state <root>}"
@@ -38,8 +50,7 @@ room_branch_state() {
     return 0
   fi
 
-  integration="$(cd "$root" 2>/dev/null && orc_get_scalar integration_branch 2>/dev/null)"
-  integration="${integration:-uat}"
+  integration="$(room_branch_integration_branch "$root")"
 
   if [ "$current" = "$integration" ]; then
     echo "ok"
@@ -71,4 +82,27 @@ room_branch_override_active() {
   local canon_dir
   canon_dir="$(harness_canonical_dir "$root" 2>/dev/null)" || return 1
   [ -f "$canon_dir/state/room-branch-override" ]
+}
+
+# room_branch_restore_command_allowed <command> <root> -- issue #60 task E:
+# the ONE Bash escape hatch the room-branch gate allows beyond the shared
+# qsg park-honestly set (lib/quota-stop-lib.sh) -- a gated session must be
+# able to restore itself onto the integration branch, or the gate has no
+# way out short of an operator override. Deliberately as strict as
+# lib/quota-stop-lib.sh's own allow-list: any chaining/redirection/
+# substitution metacharacter hard-rejects outright, and the trimmed
+# command must be EXACTLY "git checkout <integration>" or "git switch
+# <integration>" -- no extra flags, no trailing arguments.
+room_branch_restore_command_allowed() {
+  local cmd="$1" root="$2" integration trimmed
+  [ -z "$cmd" ] && return 1
+  case "$cmd" in
+    *';'*|*'&&'*|*'||'*|*'|'*|*'<'*|*'>'*|*'$('*|*'`'*|*'&'*) return 1 ;;
+  esac
+  trimmed="$(echo "$cmd" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  integration="$(room_branch_integration_branch "$root")"
+  case "$trimmed" in
+    "git checkout $integration"|"git switch $integration") return 0 ;;
+    *) return 1 ;;
+  esac
 }

@@ -90,6 +90,62 @@ else
   fail "ORC_ALLOW_UNMERGED_HARNESS=1 -> active even without a file"
 fi
 
+echo "== room_branch_integration_branch =="
+R9="$(mk_repo)"
+assert_eq "no config: falls back to uat" "uat" "$(room_branch_integration_branch "$R9")"
+R10="$(mk_repo)"
+printf 'integration_branch: release\n' > "$R10/orchestrator.yaml"
+assert_eq "configured integration_branch is honored" "release" "$(room_branch_integration_branch "$R10")"
+
+echo "== room_branch_restore_command_allowed (issue #60 task E) =="
+R11="$(mk_repo)"
+printf 'integration_branch: uat\n' > "$R11/orchestrator.yaml"
+if room_branch_restore_command_allowed "git checkout uat" "$R11"; then
+  pass "exact 'git checkout <integration>' is allowed"
+else
+  fail "exact 'git checkout <integration>' should be allowed"
+fi
+if room_branch_restore_command_allowed "git switch uat" "$R11"; then
+  pass "exact 'git switch <integration>' is allowed"
+else
+  fail "exact 'git switch <integration>' should be allowed"
+fi
+if room_branch_restore_command_allowed "  git checkout uat  " "$R11"; then
+  pass "surrounding whitespace is tolerated"
+else
+  fail "surrounding whitespace should be tolerated"
+fi
+if room_branch_restore_command_allowed "git checkout feature/other" "$R11"; then
+  fail "checking out a DIFFERENT branch must not be allowed"
+else
+  pass "checking out a DIFFERENT branch is not allowed"
+fi
+if room_branch_restore_command_allowed "git checkout uat && rm -rf /" "$R11"; then
+  fail "SECURITY: a chained && after the restore command must not be allowed"
+else
+  pass "a chained && after the restore command is rejected"
+fi
+if room_branch_restore_command_allowed "git checkout uat; rm -rf /" "$R11"; then
+  fail "SECURITY: a chained ; after the restore command must not be allowed"
+else
+  pass "a chained ; after the restore command is rejected"
+fi
+if room_branch_restore_command_allowed "git checkout \$(echo uat)" "$R11"; then
+  fail "SECURITY: command substitution must not be allowed"
+else
+  pass "command substitution in the branch arg is rejected"
+fi
+if room_branch_restore_command_allowed "git checkout uat > /tmp/poc" "$R11"; then
+  fail "SECURITY: a trailing redirection must not be allowed"
+else
+  pass "a trailing redirection is rejected"
+fi
+if room_branch_restore_command_allowed "git checkout -- uat" "$R11"; then
+  fail "extra flags must not be allowed -- exact match only"
+else
+  pass "extra flags (git checkout -- uat) are rejected -- exact match only"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
