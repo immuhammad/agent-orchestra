@@ -28,9 +28,20 @@ if ! jq empty "$SETTINGS_FILE" >/dev/null 2>&1; then
   exit 2
 fi
 
-if jq -r '.hooks.PreToolUse[]?.hooks[]?.command // empty' "$SETTINGS_FILE" 2>/dev/null | grep -q "quota-stop-gate.sh"; then
-  exit 0
+HOOK_COMMANDS="$(jq -r '.hooks.PreToolUse[]?.hooks[]?.command // empty' "$SETTINGS_FILE" 2>/dev/null)"
+
+if ! echo "$HOOK_COMMANDS" | grep -q "quota-stop-gate.sh"; then
+  echo "check-hook-wiring.sh: WARNING -- $SETTINGS_FILE does NOT wire hooks/quota-stop-gate.sh as a PreToolUse hook (issue #10). The quota-stop failsafe is silently INACTIVE in this room: an active quota-stop flag will NOT block tool use. Re-sync $SETTINGS_FILE from templates/settings.json (the tracked source of truth) to fix." >&2
+  exit 2
 fi
 
-echo "check-hook-wiring.sh: WARNING -- $SETTINGS_FILE does NOT wire hooks/quota-stop-gate.sh as a PreToolUse hook (issue #10). The quota-stop failsafe is silently INACTIVE in this room: an active quota-stop flag will NOT block tool use. Re-sync $SETTINGS_FILE from templates/settings.json (the tracked source of truth) to fix." >&2
-exit 2
+# issue #60 task E: same doctor check, one more grep -- a room-branch
+# mismatch gate that ships but isn't wired is exactly issue #10's own
+# incident shape (a hook that exists but nothing in this gitignored,
+# per-room config actually invokes it).
+if ! echo "$HOOK_COMMANDS" | grep -q "room-branch-gate.sh"; then
+  echo "check-hook-wiring.sh: WARNING -- $SETTINGS_FILE does NOT wire hooks/room-branch-gate.sh as a PreToolUse hook (issue #60). The room-branch gate is silently INACTIVE in this room. Re-sync $SETTINGS_FILE from templates/settings.json (the tracked source of truth) to fix." >&2
+  exit 2
+fi
+
+exit 0

@@ -82,6 +82,12 @@ if [ -f "$AGENTS_HOOKS_TEMPLATE" ]; then
   else
     fail "expected guard-agy.sh to still be wired second, got: $SECOND_AGY_CMD"
   fi
+  THIRD_AGY_CMD="$(jq -r '."agy-guard".PreToolUse[0].hooks[2].command // empty' "$AGENTS_HOOKS_TEMPLATE")"
+  if echo "$THIRD_AGY_CMD" | grep -q "guard-room-branch-agy.sh"; then
+    pass "issue #60: guard-room-branch-agy.sh wired third under agy-guard's PreToolUse"
+  else
+    fail "expected guard-room-branch-agy.sh to be wired third, got: $THIRD_AGY_CMD"
+  fi
 fi
 
 echo ""

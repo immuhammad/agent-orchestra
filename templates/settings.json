@@ -19,6 +19,7 @@
         "matcher": ".*",
         "hooks": [
           { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/quota-stop-gate.sh" },
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/room-branch-gate.sh" },
           { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/pane-state.sh busy" }
         ]
       },

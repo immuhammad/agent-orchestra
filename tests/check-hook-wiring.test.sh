@@ -47,6 +47,26 @@ else
   fail "expected exit 2 naming quota-stop-gate.sh as missing (got status=$STATUS): $OUT"
 fi
 
+echo "== issue #60 task E: a settings.json wiring quota-stop-gate.sh but NOT room-branch-gate.sh fails LOUDLY, naming it =="
+cat > "$TMP/settings-missing-room-gate.json" <<'EOF'
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": ".*", "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/quota-stop-gate.sh" } ] },
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/lib/guard.sh" } ] },
+      { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/lib/guard-write.sh" } ] }
+    ]
+  }
+}
+EOF
+OUT="$(bash "$CHECK" "$TMP/settings-missing-room-gate.json" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -qi "room-branch-gate"; then
+  pass "a settings.json missing room-branch-gate.sh fails loudly, naming it"
+else
+  fail "expected exit 2 naming room-branch-gate.sh as missing (got status=$STATUS): $OUT"
+fi
+
 echo "== a correctly-wired settings.json (matching templates/settings.json) passes =="
 cp "$DIR/../templates/settings.json" "$TMP/settings-correct.json"
 OUT="$(bash "$CHECK" "$TMP/settings-correct.json" 2>&1)"

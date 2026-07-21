@@ -154,7 +154,7 @@ roles:
 protected_paths:
   - career-ops/
 EOF
-  ORC_SESSION="$SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
+  ORC_SESSION="$SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$TMP/build.err"
 )
 
@@ -186,7 +186,7 @@ LIVE_TMP="$(mktemp -d)"
   cat > orchestrator.yaml <<'EOF'
 project: liveness-test-project
 EOF
-  ORC_SESSION="$LIVE_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+  ORC_SESSION="$LIVE_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$LIVE_TMP/build.err"
 )
 sleep 1
@@ -205,7 +205,7 @@ SKIP_TMP="$(mktemp -d)"
 (
   cd "$SKIP_TMP"
   echo "project: liveness-skip-test" > orchestrator.yaml
-  ORC_SESSION="$SKIP_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+  ORC_SESSION="$SKIP_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SKIP_TMP/build.err"
 )
 sleep 1
@@ -249,7 +249,7 @@ cp "$DIR/../templates/settings.json" "$HOOKWIRE_TMP/.claude/settings.json"
 (
   cd "$HOOKWIRE_TMP"
   echo "project: hookwire-test" > orchestrator.yaml
-  ORC_SESSION="$HOOKWIRE_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
+  ORC_SESSION="$HOOKWIRE_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$HOOKWIRE_TMP/build.err"
 )
 if grep -qi "quota-stop-gate" "$HOOKWIRE_TMP/build.err" 2>/dev/null; then
@@ -296,7 +296,7 @@ chmod +x "$FAKE_GH_BIN/gh"
   cat > orchestrator.yaml <<'EOF'
 project: seed-test-project
 EOF
-  PATH="$FAKE_GH_BIN:$PATH" ORC_SESSION="$SEED_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 \
+  PATH="$FAKE_GH_BIN:$PATH" ORC_SESSION="$SEED_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SEED_TMP/build.err"
 )
 if [ -f "$SEED_TMP/.harness/merge-watch-state" ]; then
@@ -313,7 +313,7 @@ SEED_TMP2="$(mktemp -d)"
 project: seed-skip-test-project
 EOF
   mkdir -p .harness
-  ORC_SESSION="orctest-seedskip-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 \
+  ORC_SESSION="orctest-seedskip-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SEED_TMP2/build.err"
 )
 if [ ! -f "$SEED_TMP2/.harness/merge-watch-state" ]; then
@@ -323,6 +323,135 @@ else
 fi
 tmux kill-session -t "orctest-seedskip-$$" 2>/dev/null || true
 rm -rf "$SEED_TMP" "$SEED_TMP2"
+
+echo "== issue #60 task C: orc_build_session refuses/warns on room-branch mismatch =="
+rb_mk_repo() {
+  local dir
+  dir="$(mktemp -d)"
+  dir="$(cd "$dir" && pwd -P)"
+  git init -q "$dir"
+  git -C "$dir" config user.email "test@test.local"
+  git -C "$dir" config user.name "test"
+  echo "$dir"
+}
+
+RB_REFUSE_TMP="$(rb_mk_repo)"
+(
+  cd "$RB_REFUSE_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: rbcheck-mismatch-noover
+integration_branch: uat
+EOF
+  git checkout -q -b uat
+  git commit -q --allow-empty -m init
+  git checkout -q -b feature/rb-refuse
+  ORC_SESSION="orctest-rbrefuse-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$RB_REFUSE_TMP/build.err"
+  echo $? > "$RB_REFUSE_TMP/exit.code"
+)
+assert_eq "mismatch + no override: orc_build_session exits 1" "1" "$(cat "$RB_REFUSE_TMP/exit.code")"
+grep -qi "refuse" "$RB_REFUSE_TMP/build.err" && pass "mismatch + no override: REFUSE reported on stderr" || fail "mismatch + no override: expected REFUSE on stderr: $(cat "$RB_REFUSE_TMP/build.err")"
+if tmux has-session -t "orctest-rbrefuse-$$" 2>/dev/null; then
+  fail "mismatch + no override: no tmux session should have been built"
+else
+  pass "mismatch + no override: no tmux session was built"
+fi
+tmux kill-session -t "orctest-rbrefuse-$$" 2>/dev/null || true
+rm -rf "$RB_REFUSE_TMP"
+
+RB_ENVOVERRIDE_TMP="$(rb_mk_repo)"
+(
+  cd "$RB_ENVOVERRIDE_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: rb-env-override-test
+integration_branch: uat
+EOF
+  git checkout -q -b uat
+  git commit -q --allow-empty -m init
+  git checkout -q -b feature/rb-env-override
+  ORC_SESSION="orctest-rbenv-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$RB_ENVOVERRIDE_TMP/build.err"
+  echo $? > "$RB_ENVOVERRIDE_TMP/exit.code"
+)
+assert_eq "mismatch + ORC_ALLOW_UNMERGED_HARNESS=1: orc_build_session exits 0" "0" "$(cat "$RB_ENVOVERRIDE_TMP/exit.code")"
+grep -qi "warn" "$RB_ENVOVERRIDE_TMP/build.err" && pass "mismatch + env override: loud warning on stderr" || fail "mismatch + env override: expected a warning: $(cat "$RB_ENVOVERRIDE_TMP/build.err")"
+if tmux has-session -t "orctest-rbenv-$$" 2>/dev/null; then
+  pass "mismatch + env override: tmux session was built (proceeded)"
+else
+  fail "mismatch + env override: expected orc_build_session to proceed and build the session: $(cat "$RB_ENVOVERRIDE_TMP/build.err")"
+fi
+tmux kill-session -t "orctest-rbenv-$$" 2>/dev/null || true
+rm -rf "$RB_ENVOVERRIDE_TMP"
+
+RB_FILEOVERRIDE_TMP="$(rb_mk_repo)"
+(
+  cd "$RB_FILEOVERRIDE_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: rb-file-override-test
+integration_branch: uat
+EOF
+  git checkout -q -b uat
+  git commit -q --allow-empty -m init
+  git checkout -q -b feature/rb-file-override
+  mkdir -p .harness/state
+  echo "approved hotfix, see issue #60" > .harness/state/room-branch-override
+  ORC_SESSION="orctest-rbfile-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$RB_FILEOVERRIDE_TMP/build.err"
+  echo $? > "$RB_FILEOVERRIDE_TMP/exit.code"
+)
+assert_eq "mismatch + file override: orc_build_session exits 0" "0" "$(cat "$RB_FILEOVERRIDE_TMP/exit.code")"
+grep -q "approved hotfix, see issue #60" "$RB_FILEOVERRIDE_TMP/build.err" && pass "mismatch + file override: reason is surfaced on stderr" || fail "mismatch + file override: expected the override reason on stderr: $(cat "$RB_FILEOVERRIDE_TMP/build.err")"
+tmux kill-session -t "orctest-rbfile-$$" 2>/dev/null || true
+rm -rf "$RB_FILEOVERRIDE_TMP"
+
+RB_DIRTY_TMP="$(rb_mk_repo)"
+(
+  cd "$RB_DIRTY_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: rbcheck-tracked-mod
+integration_branch: uat
+EOF
+  git checkout -q -b uat
+  echo "tracked" > tracked.txt
+  git add tracked.txt orchestrator.yaml
+  git commit -q -m init
+  echo "dirty change" >> tracked.txt
+  ORC_SESSION="orctest-rbdirty-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$RB_DIRTY_TMP/build.err"
+  echo $? > "$RB_DIRTY_TMP/exit.code"
+)
+assert_eq "dirty tracked tree on integration branch: orc_build_session exits 0" "0" "$(cat "$RB_DIRTY_TMP/exit.code")"
+grep -qi "dirty" "$RB_DIRTY_TMP/build.err" && pass "dirty tracked tree: loud warning on stderr" || fail "dirty tracked tree: expected a warning: $(cat "$RB_DIRTY_TMP/build.err")"
+if tmux has-session -t "orctest-rbdirty-$$" 2>/dev/null; then
+  pass "dirty tracked tree: tmux session was still built (warn-only, not blocking)"
+else
+  fail "dirty tracked tree: expected orc_build_session to proceed despite the warning: $(cat "$RB_DIRTY_TMP/build.err")"
+fi
+tmux kill-session -t "orctest-rbdirty-$$" 2>/dev/null || true
+rm -rf "$RB_DIRTY_TMP"
+
+RB_CLEAN_TMP="$(rb_mk_repo)"
+(
+  cd "$RB_CLEAN_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: rb-clean-test
+integration_branch: uat
+EOF
+  git checkout -q -b uat
+  git add orchestrator.yaml
+  git commit -q -m init
+  ORC_SESSION="orctest-rbclean-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$RB_CLEAN_TMP/build.err"
+  echo $? > "$RB_CLEAN_TMP/exit.code"
+)
+assert_eq "clean tree on integration branch: orc_build_session exits 0" "0" "$(cat "$RB_CLEAN_TMP/exit.code")"
+if grep -qi "room branch\|dirty" "$RB_CLEAN_TMP/build.err"; then
+  fail "clean tree on integration branch: no room-branch warning expected: $(cat "$RB_CLEAN_TMP/build.err")"
+else
+  pass "clean tree on integration branch: no room-branch warning"
+fi
+tmux kill-session -t "orctest-rbclean-$$" 2>/dev/null || true
+rm -rf "$RB_CLEAN_TMP"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

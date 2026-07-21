@@ -58,6 +58,9 @@ source "$DIR/auto-resume.sh"
 # board below. Colors and clearing auto-disable outside a tty, so this
 # never changes what a redirected/piped invocation (tests, logs) prints.
 source "$DIR/tui-lib.sh"
+# issue #60 task D: room-branch-lib.sh (task B) backs the ROOM dashboard
+# section + once-per-crossing alert below.
+source "$DIR/room-branch-lib.sh"
 GATEKEEPER_STALE_AFTER="${GATEKEEPER_LIVENESS_STALE_AFTER:-660}"
 
 # issue #105 (T44) Task 2: alerts route through dispatch.sh now -- a durable
@@ -114,6 +117,33 @@ gk_mark_alerted() {
 
 gk_clear_alerted() {
   gk_alert_write --arg p "$1" '.[$p] = {alerted: false}'
+}
+
+# gk_check_room_branch -- issue #60 task D: sets the ROOM_BRANCH_STATE /
+# ROOM_BRANCH_HEAD globals gatekeeper_render reads, and fires (at most) one
+# durable orchestra alert per mismatch CROSSING -- reuses the same
+# gk_is_alerted/gk_mark_alerted persisted-state pattern the quota pools
+# already use, keyed "room_branch", so a gatekeeper restart mid-mismatch
+# doesn't re-alert. Returning to the integration branch clears the
+# alerted flag (re-arm) so the NEXT mismatch crossing alerts again,
+# mirroring the quota pools' own re-arm-below-50% behavior.
+# GATEKEEPER_ROOM_ROOT overrides the room root for tests; defaults to
+# $PWD (gatekeeper.sh always runs from the project root, same assumption
+# _gk_canon_dir already makes).
+gk_check_room_branch() {
+  local root="${GATEKEEPER_ROOM_ROOT:-$PWD}"
+  ROOM_BRANCH_STATE="$(room_branch_state "$root")"
+  ROOM_BRANCH_HEAD="$(git -C "$root" rev-parse --short HEAD 2>/dev/null)"
+
+  if [ "$ROOM_BRANCH_STATE" = "ok" ]; then
+    gk_clear_alerted room_branch
+  elif ! gk_is_alerted room_branch; then
+    local reason=""
+    reason="$(room_branch_override_reason "$root")"
+    echo "$(date) - ALERT: room branch $ROOM_BRANCH_STATE (root: $root)" >> "$BUDGET_LOG"
+    gk_alert_orchestra "room-branch" "room branch $ROOM_BRANCH_STATE (HEAD ${ROOM_BRANCH_HEAD:-?}, root: $root) -- see AGENTS.md's Dispatch Protocol.${reason:+ override reason on file: $reason}"
+    gk_mark_alerted room_branch
+  fi
 }
 
 # issue #105 Task 4: voice is OFF by default -- every restart used to
@@ -202,6 +232,13 @@ gatekeeper_render() {
   local last_alert
   last_alert="$(grep 'ALERT' "$BUDGET_LOG" 2>/dev/null | tail -1)"
   echo "  ${last_alert:-none}"
+  echo ""
+  echo "$(tui_section ROOM)"
+  if [ "${ROOM_BRANCH_STATE:-}" = "ok" ]; then
+    echo "  $(tui_green "${ROOM_BRANCH_HEAD:-?} (integration branch)")"
+  else
+    echo "  $(tui_red "${ROOM_BRANCH_STATE:-unknown} (HEAD ${ROOM_BRANCH_HEAD:-?})")"
+  fi
 }
 
 gatekeeper_main() {
@@ -213,6 +250,8 @@ while true; do
   [ -z "$USAGE_PCT" ] && USAGE_PCT=0
   WEEKLY_PCT=$(echo "$CLAUDE_USAGE_JSON" | jq -r '.seven_day.utilization // 0' 2>/dev/null | cut -d. -f1)
   [ -z "$WEEKLY_PCT" ] && WEEKLY_PCT=0
+
+  gk_check_room_branch
   # T20: only ever used for the 5h pool's auto-resume tracking -- never for
   # seven_day. Weekly crossings intentionally never touch auto-resume.sh.
   FIVE_HOUR_RESETS_AT=$(echo "$CLAUDE_USAGE_JSON" | jq -r '.five_hour.resets_at // empty' 2>/dev/null)

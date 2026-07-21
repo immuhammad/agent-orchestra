@@ -7,3 +7,5 @@ git restore
 git checkout
 git commit
 git reset
+gh pr checkout
+git switch
