@@ -183,7 +183,28 @@ pane_is_idle() {
   if echo "$tail" | grep -Eiq "$markers"; then
     return 1
   fi
-  echo "$tail" | grep -Eq '^[[:space:]]*[>❯][[:space:]]*$'
+  # issue #97 (live-repro'd, SIX stranded nudges): this used to require a
+  # BARE prompt line (nothing after the >/❯, not even whitespace) --
+  # correctly finds an idle prompt with hint/chrome lines rendered BELOW it
+  # (those are separate lines; grep already scans every line of $tail), but
+  # any TEXT ON the prompt line itself (a previous nudge's "check inbox"
+  # still sitting there unsubmitted, or Claude Code's input-box ghost/hint
+  # text appended after the prompt char on the SAME line) made every line
+  # fail to match -- no bare prompt anywhere, so the pane read busy, the
+  # nudge deferred, and the next retry saw the exact same unsubmitted text
+  # and deferred again, forever. Safe to treat as idle: send_submit
+  # (send-lib.sh) already clears the input line with C-u before typing --
+  # added specifically because stray content already on the line silently
+  # merged with a fresh nudge otherwise -- so a pending prompt-line string
+  # is not "someone mid-generation", just leftover text a real nudge safely
+  # clears first. Dropping the trailing `[[:space:]]*$` anchor is the whole
+  # fix: a prompt-shaped line (>/❯ as the first non-whitespace character)
+  # now matches with or without whatever follows it. Still requires the
+  # busy-marker check above to have already passed, so a genuine spinner/
+  # "Thinking..."/mid-generation line still reads busy regardless of
+  # whether some OTHER line in the tail happens to start with >/❯ (e.g. a
+  # markdown blockquote scrolled past in generated output) -- busy wins.
+  echo "$tail" | grep -Eq '^[[:space:]]*[>❯]'
 }
 
 nudge_agent() {

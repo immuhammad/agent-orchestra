@@ -50,7 +50,12 @@ tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 # Pane 0: sits at a plain shell prompt -- idle.
 # Pane 1: simulate a TUI mid-generation -- busy.
 tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter 2>&1
-sleep 1
+# issue #97 (found verifying this file): a FRESH split-window pane's shell
+# needs more than 1s to become ready to receive/execute send-keys input on
+# a loaded machine -- empirically confirmed (pane_current_command still
+# read the shell name, not the dispatched command, at 1s but was correct
+# at 2s) -- 1s was flaky, not this test's actual logic.
+sleep 2
 
 if pane_is_idle "$TEST_SESSION:0.0"; then
   pass "shell-prompt pane detected as idle"
@@ -75,7 +80,7 @@ tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 # words (thinking/generating/compacting/esc to interrupt/running...) match
 # this, so the DEFAULT marker set alone reads it as idle.
 tmux send-keys -t "$TEST_SESSION:0.2" "printf '⣟ Working...\\n> \\n'; sleep 30" Enter 2>&1
-sleep 1
+sleep 2
 if pane_is_idle "$TEST_SESSION:0.2" "agy"; then
   fail "agy's 'Working...' render should be detected busy when checked as agy"
 else
@@ -127,6 +132,103 @@ else
   fail "deferred queue should be empty after retry, got: $(cat "$DEFERRED_FILE")"
 fi
 rm -f "$DEFERRED_TEST_FILE"
+unset -f pane_for_agent
+source "$DISPATCH"
+
+echo "== issue #97: pane_is_idle no longer false-busies on text/hints ON the prompt line =="
+# Live-repro'd this session: SIX stranded nudges where a PREVIOUS nudge's
+# "check inbox" was still sitting unsubmitted on the prompt line, with
+# Claude Code's own hint chrome rendered below it -- the old bare-prompt-
+# only regex found no line that was JUST ">/❯" and read the pane busy
+# forever (each retry saw the identical stuck text and deferred again).
+#
+# `clear` before EVERY fixture below (not just C-c to kill the previous
+# sleep): capture-pane -p has no -S, so it reads the currently VISIBLE
+# screen, and blank-line-filtered "last 10 non-blank lines" happily spans
+# MULTIPLE fixtures' leftover text when a single short fixture doesn't
+# produce 10 new non-blank lines of its own -- found live, dogfooding this
+# very test: an earlier fixture's busy marker ('Generating response...')
+# was still inside the next fixture's "last 10" window and produced a
+# false BUSY read that had nothing to do with the fixture under test.
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf '❯ check inbox\\n──────────\\n  Sonnet 5 | ctx:8%% | 5h:8%%\\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\\n'; sleep 30" Enter 2>&1
+sleep 2
+if pane_is_idle "$TEST_SESSION:0.1"; then
+  pass "issue #97: stuck unsubmitted text on the prompt line + hint chrome below reads idle (send_submit clears it safely with C-u first)"
+else
+  fail "CORRECTNESS REGRESSION (issue #97): a pane with only leftover prompt-line text (no busy marker) still reads busy"
+fi
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+
+echo "-- interaction check: a genuine busy marker still wins even when a prompt-shaped line is ALSO present --"
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Generating response...\\n❯ check inbox\\n'; sleep 30" Enter 2>&1
+sleep 2
+if pane_is_idle "$TEST_SESSION:0.1"; then
+  fail "CORRECTNESS REGRESSION (issue #97): the #97 prompt-line widening should never override a genuine busy marker"
+else
+  pass "issue #97: a genuine busy marker still reads busy even with a prompt-shaped line elsewhere in the tail"
+fi
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+
+echo "-- gemini/agy's idle shape (bare '>' + statusline, no Claude-shaped chrome) reads idle --"
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf '> \\nGemini 2.5 Pro | context left 92%%\\n'; sleep 30" Enter 2>&1
+sleep 2
+if pane_is_idle "$TEST_SESSION:0.1" "agy"; then
+  pass "issue #97: agy's empty-prompt + statusline shape reads idle"
+else
+  fail "expected agy's bare '>' + statusline to read idle"
+fi
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+
+echo "-- mid-output scroll (ordinary generated prose, no prompt line, no marker in the visible tail) stays busy --"
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf 'and that is how the function handles the edge case.\\nLet me also update the tests to cover this scenario.\\nAdding a new test block below the existing one now.\\n'; sleep 30" Enter 2>&1
+sleep 2
+if pane_is_idle "$TEST_SESSION:0.1"; then
+  fail "CORRECTNESS REGRESSION (issue #97): plain scrolled generated prose with no prompt line and no busy marker should stay busy (ambiguous content errs toward busy)"
+else
+  pass "issue #97: mid-output scroll with no prompt-shaped line and no busy marker correctly stays busy"
+fi
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+
+echo "-- deferred-drain end-to-end: a pane that goes from genuinely busy to hint-text-idle gets delivered on the next drain --"
+pane_for_agent() {
+  case "$1" in
+    hinttest) echo "$TEST_SESSION:0.1" ;;
+    *) echo "" ;;
+  esac
+}
+HINT_DEFERRED_FILE="$(mktemp)"
+DEFERRED_FILE="$HINT_DEFERRED_FILE"
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter 2>&1
+sleep 2
+nudge_agent "hinttest" >/dev/null 2>&1
+if grep -qxF "hinttest" "$HINT_DEFERRED_FILE" 2>/dev/null; then
+  pass "issue #97: a genuinely busy pane still defers as before"
+else
+  fail "expected 'hinttest' to be queued while the pane is genuinely busy"
+fi
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.1" "printf '❯ check inbox\\n──────────\\n  bypass permissions hint\\n'; sleep 30" Enter 2>&1
+sleep 2
+retry_deferred_nudges >/dev/null 2>&1
+if [ ! -s "$HINT_DEFERRED_FILE" ]; then
+  pass "issue #97: once the pane shows only stuck prompt-line text + hints (no busy marker), the next drain delivers the nudge"
+else
+  fail "CORRECTNESS REGRESSION (issue #97): deferred nudge to a hint-text-idle pane was not delivered on drain, queue: $(cat "$HINT_DEFERRED_FILE")"
+fi
+rm -f "$HINT_DEFERRED_FILE"
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 # Restore the real pane_for_agent for anything below that relies on it.
 unset -f pane_for_agent
 source "$DISPATCH"
@@ -135,12 +237,17 @@ echo "== issue #33: pane_is_idle trusts a FRESH hook-based state file over a scr
 source "$DIR/../lib/pane-state-lib.sh"
 tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 GHOST_TARGET="$TEST_SESSION:0.3"
-# Simulate Claude Code's input-box hint/ghost text rendering after a bare
-# prompt char -- capture-pane can't tell this apart from real pending
-# input, so the OLD screen-scrape-only heuristic reads this pane as "busy"
-# (prompt has trailing content) even though it is genuinely idle. This is
-# the exact false-busy failure mode issue #33 exists to fix.
-tmux send-keys -t "$GHOST_TARGET" "printf '❯ Try \"fix the auth bug\"\\n'; sleep 30" Enter 2>&1
+# issue #97 follow-up: this used to render prompt+trailing-hint-text
+# ("❯ Try \"fix the auth bug\"") to prove hook-state trumps a screen-scrape
+# misread -- but #97 widened the screen-scrape prompt match to accept text
+# ON the prompt line too (see dispatch.sh's pane_is_idle), so that exact
+# fixture would now read idle from the screen-scrape ALONE and no longer
+# exercise the override at all. Swapped to a fixture with a genuine busy
+# MARKER ("esc to interrupt", checked before -- and independently of --
+# the prompt-line match), which #97's widening does not and should not
+# affect: screen-scrape alone must still read this busy, so the fresh
+# "idle" hook state is the only thing that can flip it.
+tmux send-keys -t "$GHOST_TARGET" "printf 'Thinking... (esc to interrupt)\\n❯ \\n'; sleep 30" Enter 2>&1
 sleep 1
 GHOST_PANE_ID="$(tmux display-message -p -t "$GHOST_TARGET" '#{pane_id}')"
 pane_state_write "$GHOST_PANE_ID" "idle"
