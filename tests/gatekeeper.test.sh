@@ -322,6 +322,72 @@ fi
 kill "$LIVENESS_PID" >/dev/null 2>&1
 LIVENESS_PID=""
 
+echo "== issue #41: gatekeeper-liveness pane-tail rate-limit heuristic =="
+# Deterministic unit-style tests: stub send_meaningful_tail (no real tmux
+# capture, no render-timing race) and the usage-corroboration lookup, then
+# call gkl_check_rate_limit_stuck directly. RATELIMIT_WATCH_PANES resolves
+# to a fake pane name at source time (DISPATCH_SESSION:0.1) but is never
+# actually captured -- the stub intercepts before any tmux call happens.
+GKL_RUN() { # $1 = tail text the pane 'shows', $2 = stubbed five_hour usage pct (empty = unknown)
+  MOCK_TAIL="$1" MOCK_USAGE="$2" bash -c "
+    source '$LIVENESS' 2>/dev/null
+    send_meaningful_tail() { printf '%s\n' \"\$MOCK_TAIL\"; }
+    gkl_five_hour_usage_pct() { printf '%s' \"\$MOCK_USAGE\"; }
+    gkl_check_rate_limit_stuck
+  "
+}
+
+MOTD_TAIL=' ▎ Extended through July 19
+ ▎ We are extending Claude Fable 5 access on all paid plans, as well as keeping Claude Codes weekly
+ ▎ rate limits 50% higher, through July 19.
+
+❯ '
+REAL_BANNER_TAIL='5-hour limit reached
+resets at 3:00 PM
+
+❯ '
+
+echo "-- MOTD false positive: startup promo copy must never alert, regardless of usage --"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+GKL_RUN "$(printf "$MOTD_TAIL")" "0" >/dev/null 2>&1
+MOTD_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+if [ -e "${MOTD_MSGS[0]}" ]; then
+  fail "issue #41: the Anthropic startup MOTD ('...weekly rate limits 50% higher...') falsely triggered a rate-limit-stuck alert: $(cat "${MOTD_MSGS[0]}" 2>/dev/null)"
+else
+  pass "issue #41: startup MOTD promo copy does not trigger a rate-limit-stuck alert"
+fi
+
+echo "-- real banner + corroborating usage (>=80%): alerts --"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+GKL_RUN "$(printf "$REAL_BANNER_TAIL")" "95" >/dev/null 2>&1
+BANNER_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+if [ -e "${BANNER_MSGS[0]}" ]; then
+  pass "issue #41: a real rate-limit banner at the pane tail, corroborated by 95% usage, alerts"
+else
+  fail "expected a rate-limit-stuck alert for a real banner + corroborating high usage"
+fi
+
+echo "-- real banner shape but usage at 0%: does NOT alert (issue #41's own example -- 'a pane at 5h:0% cannot be rate-limited whatever its text says') --"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+GKL_RUN "$(printf "$REAL_BANNER_TAIL")" "0" >/dev/null 2>&1
+ZEROPCT_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+if [ -e "${ZEROPCT_MSGS[0]}" ]; then
+  fail "issue #41: banner-shaped text alerted even though real usage is 0% -- corroboration layer did not suppress it: $(cat "${ZEROPCT_MSGS[0]}" 2>/dev/null)"
+else
+  pass "issue #41: banner-shaped text at 0% real usage is treated as a false positive (no alert)"
+fi
+
+echo "-- real banner shape, usage UNKNOWN (fetch failed): still alerts (fail-open -- no corroborating evidence AGAINST it, backup signal errs toward alerting) --"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+GKL_RUN "$(printf "$REAL_BANNER_TAIL")" "" >/dev/null 2>&1
+UNKNOWN_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+if [ -e "${UNKNOWN_MSGS[0]}" ]; then
+  pass "issue #41: a real banner with usage corroboration unavailable still alerts (fails open, not silently swallowed)"
+else
+  fail "expected a rate-limit-stuck alert when usage corroboration is unavailable but the banner text is a real match"
+fi
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+
 echo "== regression (Ahmad fold-in, PR#17 rework finding 6): an EMPTY heartbeat file (mid-write race) does NOT produce a false death alert =="
 # The confirmed live incident: gatekeeper.sh's non-atomic `date +%s >
 # "$HEARTBEAT"` truncates the file before writing, and a reader that
