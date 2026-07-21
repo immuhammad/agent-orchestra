@@ -10,11 +10,11 @@
           },
           {
             "type": "command",
-            "command": "bash lib/guard-room-branch-agy.sh"
+            "command": "bash lib/guard-agy.sh"
           },
           {
             "type": "command",
-            "command": "bash lib/guard-agy.sh"
+            "command": "bash lib/guard-room-branch-agy.sh"
           }
         ]
       }
