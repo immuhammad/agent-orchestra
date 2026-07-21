@@ -321,6 +321,46 @@ retry_deferred_nudges() {
   done <<< "$agents"
 }
 
+# dispatch_write_msg <base_path_without_ext> <body_file (or empty)> <msg (or empty, used only if body_file is empty)>
+# -- issue #90. Allocates a collision-free "<base>[-N].msg" filename and
+# writes it ATOMICALLY (temp file in the SAME directory, then `mv -n`),
+# so a half-written file is never observable as complete and two
+# concurrent writers can never silently clobber each other. Prints the
+# final path on success.
+#
+# `mv -n` (BSD and GNU) exits 0 whether or not it actually moved anything
+# -- confirmed empirically on macOS: given an existing target, it leaves
+# BOTH files in place (does not overwrite, does not error). Success is
+# therefore detected by the temp file no longer existing afterward, not
+# by mv's exit status -- this is the load-bearing check, not a style
+# choice. mktemp alongside the target (not $TMPDIR) guarantees the mv is
+# same-filesystem, same precedent as gatekeeper.sh's heartbeat write.
+dispatch_write_msg() {
+  local base="$1" body_file="$2" msg="$3" suffix=1 target tmp
+  while :; do
+    if [ "$suffix" -eq 1 ]; then
+      target="${base}.msg"
+    else
+      target="${base}-${suffix}.msg"
+    fi
+    tmp="$(mktemp "${target}.XXXXXX")" || return 1
+    if [ -n "$body_file" ]; then
+      cp "$body_file" "$tmp"
+    else
+      echo "$msg" > "$tmp"
+    fi
+    mv -n "$tmp" "$target" 2>/dev/null
+    if [ ! -e "$tmp" ]; then
+      echo "$target"
+      return 0
+    fi
+    # mv -n refused -- target already existed (a genuine same-second
+    # collision). Clean up our temp file and try the next suffix.
+    rm -f "$tmp"
+    suffix=$((suffix + 1))
+  done
+}
+
 dispatch_main() {
   local USAGE="usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg>|--body-file <path> [timeout_s]"
   local VERB="${1:?$USAGE}"
@@ -363,15 +403,21 @@ dispatch_main() {
     return 1
   fi
 
+  # issue #90 (live incident): two dispatches to the same agent+issue
+  # inside the same wall-clock second used to compute the identical
+  # <ts>-<issue>.msg filename, and a plain `>` write let the second
+  # silently clobber the first (a builder dead-flag was lost this way).
+  # dispatch_write_msg below allocates a collision-free name (the first,
+  # non-colliding writer keeps the plain <ts>-<issue>.msg shape untouched
+  # -- every existing reader/sweeper keeps working unmodified; only an
+  # actual collision appends -2, -3, ... ) and writes atomically.
   local ts file ack
   ts=$(date '+%Y%m%d%H%M%S')
-  file="$INBOX/${ts}-${ISSUE}.msg"
+  file="$(dispatch_write_msg "$INBOX/${ts}-${ISSUE}" "$BODY_FILE" "$MSG")" || {
+    echo "dispatch.sh: could not allocate a unique inbox filename under $INBOX/${ts}-${ISSUE}*.msg" >&2
+    return 1
+  }
   ack="${file%.msg}.ack"
-  if [ -n "$BODY_FILE" ]; then
-    cp "$BODY_FILE" "$file"
-  else
-    echo "$MSG" > "$file"
-  fi
   echo "dispatch.sh: wrote $file"
 
   [ "$VERB" = "message" ] && return 0

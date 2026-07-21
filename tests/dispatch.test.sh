@@ -189,6 +189,80 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
+echo "== issue #90: same-second dispatches to the same agent+issue no longer silently collide =="
+# A live incident: two dispatch_main calls in the same wall-clock second
+# (pane-liveness flagging builder and agy dead in the same loop iteration)
+# both computed the identical <ts>-<issue>.msg filename, and the plain
+# `>` write let the second silently clobber the first -- the builder
+# dead-flag was lost. A PATH-stubbed `date` pins the second-granularity
+# timestamp to a fixed value so this collision is deterministic, not a
+# real-clock race.
+FAKE_DATE_BIN="$(mktemp -d)"
+cat > "$FAKE_DATE_BIN/date" <<'FAKEDATE'
+#!/bin/bash
+if [ "$1" = "+%Y%m%d%H%M%S" ]; then
+  echo "20260101120000"
+else
+  command date "$@"
+fi
+FAKEDATE
+chmod +x "$FAKE_DATE_BIN/date"
+rm -f "$CANON_DIR"/inbox/testagent/*9002*
+
+PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9002 "first message" >/dev/null 2>&1
+PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9002 "second message" >/dev/null 2>&1
+MSGS_9002=("$CANON_DIR"/inbox/testagent/*9002*.msg)
+if [ "${#MSGS_9002[@]}" -eq 2 ] && [ -e "${MSGS_9002[0]}" ] && [ -e "${MSGS_9002[1]}" ]; then
+  pass "issue #90: two same-second dispatches to the same agent+issue produced TWO distinct .msg files"
+else
+  fail "CORRECTNESS REGRESSION (issue #90): expected 2 distinct .msg files for a same-second collision, got: ${MSGS_9002[*]}"
+fi
+CONTENTS_9002="$(cat "${MSGS_9002[@]}" 2>/dev/null)"
+if echo "$CONTENTS_9002" | grep -q "first message" && echo "$CONTENTS_9002" | grep -q "second message"; then
+  pass "issue #90: BOTH message bodies survived -- neither was silently overwritten"
+else
+  fail "CORRECTNESS REGRESSION (issue #90): one message body was lost/overwritten: $CONTENTS_9002"
+fi
+if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9002.msg" ]; then
+  pass "issue #90: the first (non-colliding) dispatch keeps the plain <ts>-<issue>.msg name -- backward compatible"
+else
+  fail "expected the first dispatch to keep the plain <ts>-<issue>.msg name unsuffixed"
+fi
+if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9002-2.msg" ]; then
+  pass "issue #90: the second (colliding) dispatch gets a -2 suffix, keeping the <ts>-<issue> prefix"
+else
+  fail "expected the second dispatch to land at <ts>-<issue>-2.msg"
+fi
+
+PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9002 "third message" >/dev/null 2>&1
+if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9002-3.msg" ] && [ "$(cat "$CANON_DIR/inbox/testagent/20260101120000-9002-3.msg")" = "third message" ]; then
+  pass "issue #90: a third same-second collision gets -3, its own content intact"
+else
+  fail "expected a third collision to land at <ts>-<issue>-3.msg with its own content"
+fi
+
+echo "first ack" > "$CANON_DIR/inbox/testagent/20260101120000-9002.ack"
+echo "second ack" > "$CANON_DIR/inbox/testagent/20260101120000-9002-2.ack"
+echo "third ack" > "$CANON_DIR/inbox/testagent/20260101120000-9002-3.ack"
+POLL_OUT_90="$(INBOX_POLL_CANON_DIR="$CANON_DIR" bash "$DIR/../lib/inbox-poll.sh" testagent 2>&1)"
+if ! echo "$POLL_OUT_90" | grep -q "PENDING"; then
+  pass "issue #90: each colliding .msg acks independently via its own suffixed basename (no false PENDING)"
+else
+  fail "expected no PENDING once all three collision files are acked, got: $POLL_OUT_90"
+fi
+
+rm -f "$CANON_DIR"/inbox/testagent/*9003*.msg "$CANON_DIR"/inbox/testagent/*9004*.msg
+PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9003 "issue 9003 body" >/dev/null 2>&1
+PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9004 "issue 9004 body" >/dev/null 2>&1
+if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9003.msg" ] && [ -e "$CANON_DIR/inbox/testagent/20260101120000-9004.msg" ]; then
+  pass "issue #90: different-issue same-second dispatches land at their normal distinct names, unaffected"
+else
+  fail "expected 20260101120000-9003.msg and -9004.msg to both exist, unsuffixed"
+fi
+
+rm -rf "$FAKE_DATE_BIN"
+rm -f "$CANON_DIR"/inbox/testagent/*9002*.msg "$CANON_DIR"/inbox/testagent/*9002*.ack "$CANON_DIR"/inbox/testagent/*9003*.msg "$CANON_DIR"/inbox/testagent/*9004*.msg
+
 echo "== issue #59: --body-file <path> replaces the positional MSG arg for large bodies =="
 # A real dispatch body is 3-8KB of structured text -- passing that as a
 # POSITIONAL string arg is exactly what forces callers into command
