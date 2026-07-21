@@ -69,7 +69,45 @@ HANDOFF_FILE="${GATEKEEPER_LIVENESS_HANDOFF_FILE:-$(_gkl_canon_dir)/handoff.md}"
 # AR_PARK_MARKER's own wording so this never double-fires on an ordinary,
 # expected "parked at the failsafe question" pane -- that case is already
 # fully handled by auto-resume.sh.
-RATELIMIT_BANNER_RE="${GATEKEEPER_LIVENESS_RATELIMIT_RE:-[Rr]ate.?limit|usage limit reached|try again (later|in)}"
+#
+# issue #41: a bare `[Rr]ate.?limit` alternative here matched Anthropic's
+# startup MOTD ("...keeping Claude Code's weekly rate limits 50% higher,
+# through July 19") on every freshly-started pane, firing a false
+# rate-limit-stuck alert on a completely idle, healthy session. Promotional
+# copy talks ABOUT rate limits; a real banner reports a limit actually being
+# HIT ("5-hour limit reached" / "weekly limit reached") -- narrowed to that
+# shape so vendor-controlled marketing text can't trigger this again.
+RATELIMIT_BANNER_RE="${GATEKEEPER_LIVENESS_RATELIMIT_RE:-(5-hour|weekly) limit reached|usage limit reached|try again (later|in)}"
+# issue #41 layer 1b: the MOTD sits at the TOP of a fresh pane's visible
+# screen; a real banner (if the CLI is actually stuck on one) sits at the
+# BOTTOM, right above the parked prompt. send_meaningful_tail's default of
+# 20 non-blank lines is wide enough to still catch the MOTD on a pane with
+# little else rendered yet -- narrowed so scanning is anchored at the tail,
+# not "anywhere visible".
+#
+# review round 2 (agy, PR #101 finding 1): an initial 5-line window was too
+# narrow -- a real banner can sit behind a few CLI hint lines (e.g. a retry
+# prompt), pushing it past the window and producing a FALSE NEGATIVE on a
+# genuinely stuck pane, which is worse than the false positive this issue
+# started from. Widened to 10: still meaningfully bounded vs. the old
+# unbounded-in-practice 20-on-an-~18-row-pane default (#87) -- a banner
+# quoted deep in mid-scrollback conversation still falls outside it -- while
+# covering banner + several hint lines + the prompt. The usage-corroboration
+# layer below is the real backstop against a wide window catching stray
+# text; this number doesn't have to be exact.
+RATELIMIT_TAIL_LINES="${GATEKEEPER_LIVENESS_RATELIMIT_TAIL_LINES:-10}"
+# issue #41 layer 2: prefer real state over scraping. GATEKEEPER_SH is
+# sourced in a SEPARATE subshell (gkl_usage_pcts below), never inline into
+# this process -- gatekeeper.sh defines its own CHECK_INTERVAL (the
+# unrelated 300s quota-poll cadence) which would silently clobber this
+# file's own CHECK_INTERVAL (the 60s heartbeat-poll cadence) if sourced
+# directly here.
+GATEKEEPER_SH="${GATEKEEPER_LIVENESS_GATEKEEPER_SCRIPT:-$DIR/gatekeeper.sh}"
+# A rate-limit-stuck conclusion from pane text alone is unreliable (that's
+# the MOTD bug above); require real usage to actually be near the cap
+# before trusting it -- "a pane at 5h:0% cannot be rate-limited whatever its
+# text says". Same THRESHOLD gatekeeper.sh itself alerts at (80).
+RATELIMIT_USAGE_MIN="${GATEKEEPER_LIVENESS_RATELIMIT_USAGE_MIN:-80}"
 # Own polling cadence, deliberately DECOUPLED from CHECK_INTERVAL: this
 # check does a real tmux capture-pane per watched pane, meaningfully
 # heavier than the heartbeat file read the main loop does every tick.
@@ -101,6 +139,33 @@ gkl_pane_in_set() {
   esac
 }
 
+# gkl_usage_pcts -- issue #41 corroboration signal. Runs
+# get_claude_token/fetch_claude_usage (defined in gatekeeper.sh) in a
+# subprocess via `bash -c "source ...; ..."`, same idiom this test suite
+# already uses elsewhere to source gatekeeper.sh without its top-level vars
+# leaking into the caller. Prints "<five_hour_pct> <seven_day_pct>" (either
+# half empty on a partial JSON shape); prints nothing at all on total
+# fetch failure (no token, no network, malformed JSON, gatekeeper.sh
+# missing). One fetch covers both -- callers must treat an empty half as
+# UNKNOWN for that quota class, not 0%.
+#
+# review round 2 (agy, PR #101 finding 2): checking five_hour alone wrongly
+# suppressed a genuinely stuck pane hitting the WEEKLY (seven_day) limit --
+# that pane's five_hour reading can easily be low (e.g. 5%) even though it
+# is actually rate-limited. Both quota classes must be confirmed low before
+# treating a banner match as a false positive.
+gkl_usage_pcts() {
+  [ -f "$GATEKEEPER_SH" ] || return 1
+  # review round 2 (claude cross-check, PR #101 finding B): gatekeeper.sh
+  # registers `trap gk_log_exit EXIT` unconditionally at source time, not
+  # gated behind its own BASH_SOURCE guard -- sourcing it here without
+  # disarming that trap fires it on THIS subshell's own exit, appending a
+  # phantom "GATEKEEPER EXIT: exit code 0" line to the REAL, tracked
+  # budget.log on every single corroboration check. `trap - EXIT`
+  # immediately after sourcing clears it before it can fire.
+  bash -c "source '$GATEKEEPER_SH' 2>/dev/null; trap - EXIT; json=\$(fetch_claude_usage 2>/dev/null) || exit 1; fh=\$(echo \"\$json\" | jq -r '.five_hour.utilization // empty' 2>/dev/null | cut -d. -f1); sd=\$(echo \"\$json\" | jq -r '.seven_day.utilization // empty' 2>/dev/null | cut -d. -f1); echo \"\$fh \$sd\""
+}
+
 # gkl_check_rate_limit_stuck -- #11 secondary gap. Two INDEPENDENT signals,
 # either alone is sufficient (per Gate-1 plan):
 #   1. handoff.md gets a fresh "## RATE-LIMITED" section (written by
@@ -130,13 +195,37 @@ gkl_check_rate_limit_stuck() {
   local pane
   for pane in $RATELIMIT_WATCH_PANES; do
     local tail_text
-    tail_text="$(send_meaningful_tail "$pane" 2>/dev/null)"
-    if [ -n "$tail_text" ] && echo "$tail_text" | grep -Eq "$RATELIMIT_BANNER_RE" \
+    tail_text="$(send_meaningful_tail "$pane" "$RATELIMIT_TAIL_LINES" 2>/dev/null)"
+    # review round 2 (claude cross-check, PR #101 finding A): a
+    # case-sensitive match missed real renderings like "Weekly limit
+    # reached" or "Try again in 2 hours." (capitalized mid-sentence/at a
+    # sentence start) -- -i so the specific phrase shape still has to
+    # match, just regardless of case.
+    if [ -n "$tail_text" ] && echo "$tail_text" | grep -Eiq "$RATELIMIT_BANNER_RE" \
       && ! echo "$tail_text" | tr -d '\n' | grep -Eq 'Quota .*Options: \(a\).*Pick one\.'; then
       if ! gkl_pane_in_set "$RATELIMIT_ALERTED_PANES" "$pane"; then
-        RATELIMIT_ALERTED_PANES="${RATELIMIT_ALERTED_PANES}${pane} "
-        echo "$(date) - ALERT: rate-limit-stuck signal (pane tail banner) on $pane" >> "$LOG"
-        dispatch_main assign orchestra "rate-limit-stuck" "gatekeeper-liveness: $pane's scrollback matches a rate-limit banner but never reached the normal parked failsafe question -- CLI alive but stuck, pane-liveness would otherwise miss this. Check and resume/park it per AGENTS.md's Quota Failsafe." >/dev/null 2>&1
+        # issue #41 layer 2: only SUPPRESS on positive contrary evidence --
+        # BOTH quota classes confirmed low. An unfetchable/unknown reading
+        # (either half) is not evidence against a real banner, so this errs
+        # toward alerting on doubt, same bias as pane_is_idle elsewhere in
+        # this harness (a missed alert is worse than one extra false one).
+        local usage_pair five_pct seven_pct suppress
+        usage_pair="$(gkl_usage_pcts)"
+        five_pct="${usage_pair%% *}"
+        seven_pct="${usage_pair#* }"
+        suppress=false
+        if [ -n "$five_pct" ] && [ -n "$seven_pct" ] \
+          && [ "$five_pct" -lt "$RATELIMIT_USAGE_MIN" ] 2>/dev/null \
+          && [ "$seven_pct" -lt "$RATELIMIT_USAGE_MIN" ] 2>/dev/null; then
+          suppress=true
+        fi
+        if [ "$suppress" = true ]; then
+          echo "$(date) - DEBUG: $pane matched the rate-limit banner shape but real usage is only 5h=${five_pct}% weekly=${seven_pct}% (both < ${RATELIMIT_USAGE_MIN}%) -- treating as a false positive, not alerting" >> "$LOG"
+        else
+          RATELIMIT_ALERTED_PANES="${RATELIMIT_ALERTED_PANES}${pane} "
+          echo "$(date) - ALERT: rate-limit-stuck signal (pane tail banner) on $pane (5h=${five_pct:-unknown}% weekly=${seven_pct:-unknown}%)" >> "$LOG"
+          dispatch_main assign orchestra "rate-limit-stuck" "gatekeeper-liveness: $pane's scrollback matches a rate-limit banner but never reached the normal parked failsafe question -- CLI alive but stuck, pane-liveness would otherwise miss this. Check and resume/park it per AGENTS.md's Quota Failsafe." >/dev/null 2>&1
+        fi
       fi
     else
       RATELIMIT_ALERTED_PANES="${RATELIMIT_ALERTED_PANES/ $pane / }"
