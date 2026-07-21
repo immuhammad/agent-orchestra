@@ -11,6 +11,8 @@ ORC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORC_LIB_DIR="$(cd "$ORC_SCRIPT_DIR/../lib" && pwd)"
 # shellcheck source=../lib/orc-config.sh
 source "$ORC_LIB_DIR/orc-config.sh"
+# shellcheck source=../lib/room-branch-lib.sh
+source "$ORC_LIB_DIR/room-branch-lib.sh"
 
 # issue #18 item 7 + issue #19: derive the session name from THIS
 # project's own orchestrator.yaml (orc_session_name, lib/orc-config.sh) so
@@ -33,6 +35,40 @@ orc_build_session() {
   orchestra_model="${orchestra_model:-opus}"
   implementer_model="$(orc_get_role_model implementer)"
   implementer_model="${implementer_model:-sonnet}"
+
+  # issue #60 task C: refuse to build the control room on top of a checkout
+  # that isn't on the integration branch -- the room's whole guard/dispatch
+  # posture assumes panes operate against the shared integration branch, so
+  # an accidental `orc up` from a stray feature-branch checkout would let
+  # every pane quietly work against (and potentially push/PR from) the
+  # wrong branch. "unknown" (detached HEAD, not a git repo, etc.) fails
+  # closed the same as a real mismatch -- see room-branch-lib.sh. Two
+  # escape hatches, both loud: a .harness/state/room-branch-override file
+  # (its content is the human-readable reason, echoed here) or
+  # ORC_ALLOW_UNMERGED_HARNESS=1 (tests/CI). Neither silences anything --
+  # both still print a WARNING before proceeding.
+  local room_state
+  room_state="$(room_branch_state "$PWD")"
+  if [ "$room_state" != "ok" ]; then
+    if room_branch_override_active "$PWD"; then
+      local override_reason
+      override_reason="$(room_branch_override_reason "$PWD")"
+      echo "orc: WARNING -- room branch $room_state (expected $integration_branch) -- override active, proceeding${override_reason:+ ($override_reason)}" >&2
+    else
+      echo "orc: REFUSE -- room branch $room_state (expected $integration_branch) -- no override present." \
+        "Set ORC_ALLOW_UNMERGED_HARNESS=1 or write a reason to .harness/state/room-branch-override to proceed anyway." >&2
+      return 1
+    fi
+  else
+    # Only meaningful once we know we're actually ON the integration
+    # branch -- a dirty tracked tree elsewhere isn't this check's concern.
+    # Warn-only (never blocks): a WIP tracked change on the integration
+    # branch is a footgun worth flagging, not a reason to refuse the room.
+    if ! git -C "$PWD" diff --quiet HEAD -- 2>/dev/null || ! git -C "$PWD" diff --cached --quiet -- 2>/dev/null; then
+      echo "orc: WARNING -- tracked working tree is dirty on integration branch ($integration_branch);" \
+        "commit or stash before building the room." >&2
+    fi
+  fi
 
   # issue #22: assert the inbox dirs dispatch.sh actually writes to exist,
   # rather than trusting a hand-made layout -- a fresh clone-per-project
