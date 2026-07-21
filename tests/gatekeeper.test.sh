@@ -323,16 +323,18 @@ kill "$LIVENESS_PID" >/dev/null 2>&1
 LIVENESS_PID=""
 
 echo "== issue #41: gatekeeper-liveness pane-tail rate-limit heuristic =="
-# Deterministic unit-style tests: stub send_meaningful_tail (no real tmux
-# capture, no render-timing race) and the usage-corroboration lookup, then
-# call gkl_check_rate_limit_stuck directly. RATELIMIT_WATCH_PANES resolves
-# to a fake pane name at source time (DISPATCH_SESSION:0.1) but is never
-# actually captured -- the stub intercepts before any tmux call happens.
-GKL_RUN() { # $1 = tail text the pane 'shows', $2 = stubbed five_hour usage pct (empty = unknown)
-  MOCK_TAIL="$1" MOCK_USAGE="$2" bash -c "
+# Deterministic unit-style tests: stub send_meaningful_tail with a REAL
+# blank-strip+tail (review round 2 finding 3: the original stub ignored its
+# line-count arg entirely, proving nothing about window sizing) and the
+# usage-corroboration lookup, then call gkl_check_rate_limit_stuck directly.
+# RATELIMIT_WATCH_PANES resolves to a fake pane name at source time
+# (DISPATCH_SESSION:0.1) but is never actually captured -- the stub
+# intercepts before any tmux call happens.
+GKL_RUN() { # $1 = tail text the pane 'shows', $2 = five_hour pct, $3 = seven_day pct (either empty = unknown)
+  MOCK_TAIL="$1" MOCK_FIVE="$2" MOCK_SEVEN="$3" bash -c "
     source '$LIVENESS' 2>/dev/null
-    send_meaningful_tail() { printf '%s\n' \"\$MOCK_TAIL\"; }
-    gkl_five_hour_usage_pct() { printf '%s' \"\$MOCK_USAGE\"; }
+    send_meaningful_tail() { printf '%s\n' \"\$MOCK_TAIL\" | grep -v '^[[:space:]]*\$' | tail -\"\${2:-20}\"; }
+    gkl_usage_pcts() { printf '%s %s' \"\$MOCK_FIVE\" \"\$MOCK_SEVEN\"; }
     gkl_check_rate_limit_stuck
   "
 }
@@ -346,10 +348,40 @@ REAL_BANNER_TAIL='5-hour limit reached
 resets at 3:00 PM
 
 ❯ '
+# review round 2 finding 1: banner pushed behind several CLI hint lines --
+# 7 non-blank lines total, banner 7th-from-bottom. The OLD 5-line window
+# missed this (confirmed red before the fix); the new 10-line window covers it.
+FALSE_NEG_BANNER_TAIL='5-hour limit reached
+resets at 3:00 PM
+Press Enter to retry
+Press Enter to retry
+Press Enter to retry
+Press Ctrl+C to exit
 
-echo "-- MOTD false positive: startup promo copy must never alert, regardless of usage --"
+❯ '
+# review round 2 (Orchestra's own concern re: widening the window): a
+# banner-shaped PHRASE quoted deep in ordinary scrollback (e.g. two agents
+# discussing this very bug) must not alert just because the window grew --
+# 13 non-blank lines total, the quote sits 13th-from-bottom, well outside
+# the 10-line window; everything within the window is unrelated/healthy.
+MIDSCROLL_TAIL='Note from earlier: someone had pasted "5-hour limit reached" while discussing this exact bug.
+line 2 of unrelated scrollback
+line 3 of unrelated scrollback
+line 4 of unrelated scrollback
+line 5 of unrelated scrollback
+line 6 of unrelated scrollback
+line 7 of unrelated scrollback
+line 8 of unrelated scrollback
+line 9 of unrelated scrollback
+line 10 of unrelated scrollback
+line 11 of unrelated scrollback
+line 12 of unrelated scrollback
+
+❯ '
+
+echo "-- MOTD false positive: startup promo copy must never alert (usage pinned HIGH so this is a pure regex probe, not masked by the corroboration-suppression branch) --"
 rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
-GKL_RUN "$(printf "$MOTD_TAIL")" "0" >/dev/null 2>&1
+GKL_RUN "$(printf '%s' "$MOTD_TAIL")" "95" "95" >/dev/null 2>&1
 MOTD_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
 if [ -e "${MOTD_MSGS[0]}" ]; then
   fail "issue #41: the Anthropic startup MOTD ('...weekly rate limits 50% higher...') falsely triggered a rate-limit-stuck alert: $(cat "${MOTD_MSGS[0]}" 2>/dev/null)"
@@ -357,36 +389,117 @@ else
   pass "issue #41: startup MOTD promo copy does not trigger a rate-limit-stuck alert"
 fi
 
-echo "-- real banner + corroborating usage (>=80%): alerts --"
+echo "-- real banner + BOTH quota classes confirmed high (>=80%): alerts --"
 rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
-GKL_RUN "$(printf "$REAL_BANNER_TAIL")" "95" >/dev/null 2>&1
+GKL_RUN "$(printf '%s' "$REAL_BANNER_TAIL")" "95" "95" >/dev/null 2>&1
 BANNER_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
 if [ -e "${BANNER_MSGS[0]}" ]; then
-  pass "issue #41: a real rate-limit banner at the pane tail, corroborated by 95% usage, alerts"
+  pass "issue #41: a real rate-limit banner at the pane tail, corroborated by high 5h+weekly usage, alerts"
 else
   fail "expected a rate-limit-stuck alert for a real banner + corroborating high usage"
 fi
 
-echo "-- real banner shape but usage at 0%: does NOT alert (issue #41's own example -- 'a pane at 5h:0% cannot be rate-limited whatever its text says') --"
+echo "-- real banner shape but BOTH quota classes confirmed low (0%): does NOT alert (issue #41's own example -- 'a pane at 5h:0% cannot be rate-limited whatever its text says') --"
 rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
-GKL_RUN "$(printf "$REAL_BANNER_TAIL")" "0" >/dev/null 2>&1
+GKL_RUN "$(printf '%s' "$REAL_BANNER_TAIL")" "0" "0" >/dev/null 2>&1
 ZEROPCT_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
 if [ -e "${ZEROPCT_MSGS[0]}" ]; then
-  fail "issue #41: banner-shaped text alerted even though real usage is 0% -- corroboration layer did not suppress it: $(cat "${ZEROPCT_MSGS[0]}" 2>/dev/null)"
+  fail "issue #41: banner-shaped text alerted even though real usage is 0% on both classes -- corroboration layer did not suppress it: $(cat "${ZEROPCT_MSGS[0]}" 2>/dev/null)"
 else
-  pass "issue #41: banner-shaped text at 0% real usage is treated as a false positive (no alert)"
+  pass "issue #41: banner-shaped text at 0% usage (both classes) is treated as a false positive (no alert)"
+fi
+
+echo "-- review round 2 finding 2: five_hour LOW but weekly (seven_day) HIGH: still alerts -- a weekly-limited pane must not be suppressed by a low 5h reading --"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+GKL_RUN "$(printf '%s' "$REAL_BANNER_TAIL")" "5" "95" >/dev/null 2>&1
+WEEKLY_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+if [ -e "${WEEKLY_MSGS[0]}" ]; then
+  pass "issue #41: a weekly-limited pane (5h=5% weekly=95%) still alerts -- not wrongly suppressed by the low 5h reading"
+else
+  fail "CORRECTNESS REGRESSION (finding 2): a genuinely weekly-limited pane (5h low, weekly high) was suppressed"
 fi
 
 echo "-- real banner shape, usage UNKNOWN (fetch failed): still alerts (fail-open -- no corroborating evidence AGAINST it, backup signal errs toward alerting) --"
 rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
-GKL_RUN "$(printf "$REAL_BANNER_TAIL")" "" >/dev/null 2>&1
+GKL_RUN "$(printf '%s' "$REAL_BANNER_TAIL")" "" "" >/dev/null 2>&1
 UNKNOWN_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
 if [ -e "${UNKNOWN_MSGS[0]}" ]; then
   pass "issue #41: a real banner with usage corroboration unavailable still alerts (fails open, not silently swallowed)"
 else
   fail "expected a rate-limit-stuck alert when usage corroboration is unavailable but the banner text is a real match"
 fi
+
+echo "-- review round 2 finding 1: a real banner pushed behind CLI hint lines (7th non-blank line from the bottom) still alerts under the widened window --"
 rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+GKL_RUN "$(printf '%s' "$FALSE_NEG_BANNER_TAIL")" "95" "95" >/dev/null 2>&1
+FALSENEG_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+if [ -e "${FALSENEG_MSGS[0]}" ]; then
+  pass "issue #41: a real banner behind hint lines (7 non-blank lines deep) still alerts -- the 5-line window's false negative is fixed"
+else
+  fail "CORRECTNESS REGRESSION (finding 1): a real banner pushed behind CLI hint lines was missed by the tail window"
+fi
+
+echo "-- review round 2: a banner-shaped phrase quoted deep in ordinary scrollback (13 non-blank lines back) does NOT alert -- the widened window is still bounded --"
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+GKL_RUN "$(printf '%s' "$MIDSCROLL_TAIL")" "95" "95" >/dev/null 2>&1
+MIDSCROLL_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+if [ -e "${MIDSCROLL_MSGS[0]}" ]; then
+  fail "issue #41: a rate-limit phrase quoted mid-scrollback (outside the tail window) falsely alerted even with corroborating high usage: $(cat "${MIDSCROLL_MSGS[0]}" 2>/dev/null)"
+else
+  pass "issue #41: a banner-shaped phrase quoted deep in scrollback, outside the tail window, does not alert"
+fi
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+
+echo "-- review round 2 finding A: case + dialect coverage -- real renderings the case-sensitive regex missed --"
+DIALECT_WEEKLY_TAIL='Weekly limit reached . resets Jul 24
+
+❯ '
+DIALECT_TRYAGAIN_TAIL='You have reached your usage limit. Try again in 2 hours.
+
+❯ '
+for DIALECT_CASE in "DIALECT_WEEKLY_TAIL:capitalized 'Weekly limit reached'" "DIALECT_TRYAGAIN_TAIL:capitalized 'Try again in'"; do
+  DIALECT_VAR="${DIALECT_CASE%%:*}"
+  DIALECT_DESC="${DIALECT_CASE#*:}"
+  DIALECT_TEXT="${!DIALECT_VAR}"
+  rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+  GKL_RUN "$DIALECT_TEXT" "95" "95" >/dev/null 2>&1
+  DIALECT_MSGS=("$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg)
+  if [ -e "${DIALECT_MSGS[0]}" ]; then
+    pass "issue #41: $DIALECT_DESC alerts (case-insensitive match)"
+  else
+    fail "CORRECTNESS REGRESSION (finding A): $DIALECT_DESC did not alert -- case-sensitive regex miss"
+  fi
+done
+rm -f "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.msg "$DISPATCH_CANON_DIR"/inbox/orchestra/*rate-limit-stuck*.ack
+
+echo "== review round 2 finding B: gkl_usage_pcts's subshell must not leak gatekeeper.sh's own EXIT trap into the real/tracked budget.log =="
+# gatekeeper.sh registers `trap gk_log_exit EXIT` unconditionally at source
+# time (not gated behind its own BASH_SOURCE guard) -- exercised here
+# WITHOUT stubbing gkl_usage_pcts (unlike every test above) so the real
+# subshell-source path actually runs. A PATH-stubbed curl stands in for the
+# network call, same idiom as the issue #105 mocked-crossing tests above.
+GKL_FAKE_BIN="$(mktemp -d)"
+cat > "$GKL_FAKE_BIN/curl" <<'FAKECURL'
+#!/bin/bash
+echo '{"five_hour":{"utilization":42},"seven_day":{"utilization":7}}'
+FAKECURL
+chmod +x "$GKL_FAKE_BIN/curl"
+GKL_FAKE_HOME="$GKL_FAKE_BIN/home"
+mkdir -p "$GKL_FAKE_HOME/.claude"
+echo '{"claudeAiOauth":{"accessToken":"test-token-not-real"}}' > "$GKL_FAKE_HOME/.claude/.credentials.json"
+: > "$GATEKEEPER_BUDGET_LOG"
+GKL_REAL_RESULT="$(PATH="$GKL_FAKE_BIN:$PATH" HOME="$GKL_FAKE_HOME" bash -c "source '$LIVENESS' 2>/dev/null; gkl_usage_pcts")"
+if [ "$GKL_REAL_RESULT" = "42 7" ]; then
+  pass "gkl_usage_pcts returns the real five_hour/seven_day pair from a mocked fetch (42 7)"
+else
+  fail "expected gkl_usage_pcts to return '42 7', got '$GKL_REAL_RESULT'"
+fi
+if grep -q "GATEKEEPER EXIT" "$GATEKEEPER_BUDGET_LOG" 2>/dev/null; then
+  fail "REGRESSION (finding B): gkl_usage_pcts's subshell leaked a phantom 'GATEKEEPER EXIT' line into budget.log: $(cat "$GATEKEEPER_BUDGET_LOG")"
+else
+  pass "gkl_usage_pcts's subshell does not leak a phantom EXIT-trap line into budget.log"
+fi
+rm -rf "$GKL_FAKE_BIN"
 
 echo "== regression (Ahmad fold-in, PR#17 rework finding 6): an EMPTY heartbeat file (mid-write race) does NOT produce a false death alert =="
 # The confirmed live incident: gatekeeper.sh's non-atomic `date +%s >
