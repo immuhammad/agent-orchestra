@@ -1,6 +1,6 @@
 #!/bin/bash
-# .harness/gatekeeper.test.sh — tests for T19 (OAuth usage sensor +
-# gatekeeper liveness) and T26 (hermetic: never touches the real "harness"
+# .harness/gatekeeper.test.sh — tests for the OAuth usage sensor +
+# gatekeeper liveness, and hermetic behavior (never touches the real "harness"
 # session). Run: bash .harness/gatekeeper.test.sh
 #
 # Requires live Claude Code credentials (Keychain or
@@ -10,7 +10,7 @@
 # found the first block is skipped with a clear message rather than
 # failing (a machine with no Claude Code login shouldn't fail this suite).
 #
-# T26 safety fix: gatekeeper.sh's notify() used to hardcode the "harness"
+# Safety fix: gatekeeper.sh's notify() used to hardcode the "harness"
 # tmux session -- at real usage over the 80% threshold, this test running
 # the real gatekeeper_main loop fired REAL alerts into the REAL
 # harness:0.0/0.1 panes (confirmed live: text landed in and was submitted,
@@ -27,7 +27,7 @@
 # test never touches the real .harness/gatekeeper.heartbeat or the tracked
 # .harness/budget.log, even if a real gatekeeper happens to be running on
 # this machine at the same time. Same reasoning for AUTO_RESUME_STATE_FILE
-# (T20) -- gatekeeper.sh's loop always calls ar_poll_all, which touches the
+# -- gatekeeper.sh's loop always calls ar_poll_all, which touches the
 # state file on every single iteration regardless of usage%.
 set -uo pipefail
 
@@ -54,7 +54,7 @@ AUTO_RESUME_STATE_FILE="$(mktemp)"
 GATEKEEPER_NOTIFY_SESSION="$TEST_SESSION"
 # #11 secondary gap: gatekeeper-liveness.sh's rate-limit-stuck heuristic
 # defaults to watching the REAL "harness:0.1" (Builder) pane and reading
-# the caller-cwd-resolved real handoff.md -- same class of leak T26 already
+# the caller-cwd-resolved real handoff.md -- same class of leak already
 # fixed for GATEKEEPER_LIVENESS_TARGET/DISPATCH_SESSION above. Both must
 # point at throwaway locations for the whole run.
 GATEKEEPER_LIVENESS_RATELIMIT_PANES="$TEST_SESSION:0.1"
@@ -143,11 +143,11 @@ cleanup() {
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT TERM HUP
 
-# T26 VERIFY setup: count how many lines already match the leak markers
+# VERIFY setup: count how many lines already match the leak markers
 # (see the final block) in the real harness session BEFORE this run, if it
 # exists on this machine. A pane's scrollback can already contain this
 # text from a real incident before this fix landed (confirmed on this very
-# machine -- the T19/T20 incident this ticket exists to fix left three
+# machine -- the incident this ticket exists to fix left three
 # "quota Claude 5h at 98%..." lines sitting in a live pane) -- so the
 # check below is a before/after COUNT comparison, not "is the marker text
 # present at all", which would false-positive forever on a machine with
@@ -232,7 +232,7 @@ else
 fi
 
 echo "== gatekeeper.sh prints live percentages sourced from the endpoint =="
-# T33 (issue #77): output is now a multi-line cleared-and-redrawn board
+# Output is now a multi-line cleared-and-redrawn board
 # (QUOTA/HEARTBEAT/AUTO-RESUME/LAST ALERT sections), not a single line, so
 # this greps the whole one-iteration capture rather than just the first 2
 # lines.
@@ -926,7 +926,7 @@ echo "== T26 VERIFY: zero traffic reached the real harness session across this e
 #   token/context counter) regardless of anything this test does, so an
 #   exact-match comparison is a guaranteed false positive.
 # - Not bare presence: this machine's panes can already contain this text
-#   from a real PRIOR incident (confirmed -- the T19/T20 incident this
+#   from a real PRIOR incident (confirmed -- the incident this
 #   ticket exists to fix left "quota Claude 5h at 98%..." lines sitting
 #   live in a pane), so "is the marker present at all" would false-positive
 #   forever on a contaminated machine regardless of whether THIS run leaked

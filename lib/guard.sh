@@ -33,7 +33,7 @@ fi
 # can still trip this — accepted rather than loosening the destructive rules.
 DANGEROUS_RE='^(rm -rf|git push --force|push -f|git reset --hard|reset --hard|git clean)'
 
-# T29 (issue #55): guard.sh runs as a PreToolUse hook that fires BEFORE the
+# guard.sh runs as a PreToolUse hook that fires BEFORE the
 # guarded command executes, at the hook process's own CWD -- normally the
 # main checkout. A command like `cd .claude/worktrees/issue-N && git push`
 # actually pushes from the worktree's branch, but a bare `git rev-parse
@@ -299,7 +299,7 @@ while IFS= read -r seg; do
     exit 2
   fi
 
-  # T15 merge-discipline guard: agents open PRs, they never merge (see
+  # Merge-discipline guard: agents open PRs, they never merge (see
   # AGENTS.md Hard Rules: "Never merge to uat or main yourself. Ever.").
   # `git merge` has no destination argument -- it merges INTO whatever is
   # currently checked out -- so the only way to know if it targets a
@@ -351,7 +351,7 @@ while IFS= read -r seg; do
     else
       # No explicit refspec (`git push`, `git push origin`) -- git pushes
       # the current branch, so the destination is whatever HEAD is. Resolve
-      # at guard_cwd (see T29 note above), not the hook's raw $PWD, so a
+      # at guard_cwd (see the note above), not the hook's raw $PWD, so a
       # leading `cd <worktree> &&` in this same command is honored.
       dest_ref="$(git -C "$guard_cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
     fi

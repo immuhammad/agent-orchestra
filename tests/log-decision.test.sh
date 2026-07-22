@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/log-decision.test.sh — TDD tests for log-decision.sh's
-# mkdir-based append locking (T27, issue #50). Run:
+# mkdir-based append locking. Run:
 # bash .harness/log-decision.test.sh
 set -uo pipefail
 

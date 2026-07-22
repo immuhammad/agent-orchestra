@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/gatekeeper-supervisor.sh — issue #105 (T44) Task 3: respawns
+# .harness/gatekeeper-supervisor.sh — respawns
 # gatekeeper.sh with bounded backoff if it ever exits (crash, kill -9,
 # uncaught `set -u` abort) instead of silently leaving the control room
 # without a quota watchdog until a human happens to notice. Launched by

@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/orc-config.sh — minimal orchestrator.yaml v1 reader (T21, issue #26).
+# .harness/orc-config.sh — minimal orchestrator.yaml v1 reader.
 #
 # No yq/PyYAML dependency (neither is guaranteed present) -- this is a
 # purpose-built reader for the small, fixed schema in orchestrator.yaml, not a

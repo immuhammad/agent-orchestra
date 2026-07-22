@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/gatekeeper-liveness.sh — warns pane 0 if gatekeeper.sh's heartbeat
-# goes stale (T19; the 2026-07-04 audit found gatekeeper.sh dead at 78%
+# goes stale (the 2026-07-04 audit found gatekeeper.sh dead at 78%
 # usage with nobody noticing). Runs as its own background process, started
 # by harness-up.sh independently of gatekeeper.sh -- if gatekeeper.sh
 # crashes or hangs, this watchdog is a separate process and keeps running
@@ -180,7 +180,7 @@ gkl_usage_pcts() {
 # Either firing writes ONE durable FLAG to orchestra's inbox (never a
 # silent drop -- that invisibility is exactly the bug being fixed) via
 # dispatch_main assign, matching gatekeeper.sh's own gk_alert_orchestra
-# convention (issue #105: durable .msg + nudge-if-idle, not raw keystrokes).
+# convention (durable .msg + nudge-if-idle, not raw keystrokes).
 gkl_check_rate_limit_stuck() {
   if [ -f "$HANDOFF_FILE" ]; then
     local marker_line

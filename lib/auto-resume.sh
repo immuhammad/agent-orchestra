@@ -1,9 +1,9 @@
 #!/bin/bash
-# .harness/auto-resume.sh — budgeted 5h-window rate-limit auto-resume (T20,
-# Q3b). Sourced by gatekeeper.sh; also directly testable/sourceable on its
+# .harness/auto-resume.sh — budgeted 5h-window rate-limit auto-resume.
+# Sourced by gatekeeper.sh; also directly testable/sourceable on its
 # own (see auto-resume.test.sh).
 #
-# Policy (AGENTS.md Quota Failsafe, Hard Rules, T20 spec):
+# Policy (AGENTS.md Quota Failsafe, Hard Rules):
 # - Only the Claude 5h pool auto-resumes. seven_day (weekly) crossings NEVER
 #   auto-resume -- they always stop for Ahmad, no exceptions.
 # - Max AUTO_RESUME_MAX_PER_DAY (default 2) auto-resumes per UTC day.
@@ -23,7 +23,7 @@
 #   ar_pane_still_owned).
 #
 # State machine per tracked pane (persisted in AUTO_RESUME_STATE_FILE so it
-# survives a gatekeeper.sh restart -- exactly the kind of restart T19's
+# survives a gatekeeper.sh restart -- exactly the kind of restart the
 # liveness watchdog exists to catch):
 #   (not tracked) --[usage >= threshold]--> pending
 #   pending --[scrollback shows the AGENTS.md failsafe question]--> parked

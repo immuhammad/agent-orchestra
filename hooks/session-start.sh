@@ -1,6 +1,6 @@
 #!/bin/bash
 # SessionStart hook: mark session start + surface quota reminder.
-# T22 (issue #27) scope addition: one-line role->skills auto-use reminder,
+# Scope addition: one-line role->skills auto-use reminder,
 # since skills must be auto-used per AGENTS.md's Skills table, not just
 # invocable on request. Kept role-agnostic (this hook fires identically for
 # every session/role) -- full detail lives in AGENTS.md's Skills table.

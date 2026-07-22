@@ -1,10 +1,9 @@
 #!/bin/bash
-# lib/review-protocol-verify.sh — T45 (issue #106) VERIFY, updated for
+# lib/review-protocol-verify.sh — VERIFY, updated for
 # issue #18 item 4: structural checks for the review protocol + agy skill
 # wrapper. The live canary (fresh agy session lists /code-review) was run
-# by hand for T45 -- see that ticket's PR description for the proof; this
-# script makes the reproducible, mechanical part of the check re-runnable,
-# not the live agy interaction itself.
+# by hand; this script makes the reproducible, mechanical part of the check
+# re-runnable, not the live agy interaction itself.
 # Run: bash lib/review-protocol-verify.sh
 set -uo pipefail
 

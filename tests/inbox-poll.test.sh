@@ -1,6 +1,6 @@
 #!/bin/bash
-# .harness/inbox-poll.test.sh — tests for inbox-poll.sh, incl. T30 (issue
-# #56) suspect-empty-ack detection. Run: bash .harness/inbox-poll.test.sh
+# .harness/inbox-poll.test.sh — tests for inbox-poll.sh, incl.
+# suspect-empty-ack detection. Run: bash .harness/inbox-poll.test.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"

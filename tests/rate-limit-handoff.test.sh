@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/rate-limit-handoff.test.sh — TDD tests for the StopFailure
-# rate_limit hook, incl. T31 (issue #68 item A)'s replace-not-append
+# rate_limit hook, incl. its replace-not-append
 # behavior. Run: bash .harness/rate-limit-handoff.test.sh
 set -uo pipefail
 

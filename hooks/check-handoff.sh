@@ -53,7 +53,7 @@ if [ "${ORC_ROLE:-}" = "orchestra" ] && [ "$HANDOFF" -ot "$MARKER" ]; then
   exit 2
 fi
 
-# T31 (issue #68 item A): handoff.md is now a REPLACED ≤80-line
+# handoff.md is now a REPLACED ≤80-line
 # current-state file, not an append log -- git history is the archive. This
 # only WARNS (doesn't block finishing) since a warning-based nudge is
 # enough to catch drift back toward append-forever without risking a false

@@ -5,7 +5,7 @@
 # under --dangerously-skip-permissions a Write/Edit tool call could still
 # land in a protected path unguarded (G4) — this hook covers that gap.
 #
-# T21: protected paths come ONLY from orchestrator.yaml (protected_paths)
+# Protected paths come ONLY from orchestrator.yaml (protected_paths)
 # via orc-config.sh -- EMPTY if the config is missing/malformed (issue #18
 # B-i: no hardcoded project-specific default). This does NOT unprotect
 # .claude/ or .agents/: those are checked separately below via

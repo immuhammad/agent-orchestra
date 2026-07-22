@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/orc-worktree.test.sh — tests for orc-worktree.sh (T18).
+# .harness/orc-worktree.test.sh — tests for orc-worktree.sh.
 # Run: bash .harness/orc-worktree.test.sh
 #
 # Uses a scratch, non-numeric issue id ("t18-scratch") so the branch

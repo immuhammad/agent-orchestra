@@ -3,7 +3,7 @@
 # via .agents/hooks.json. Denies any command matching a line in
 # banned-patterns.txt.
 #
-# T27 (issue #50): banned-patterns.txt now also denies `git restore`, `git
+# banned-patterns.txt now also denies `git restore`, `git
 # checkout`, `git commit`, and `git reset` for agy specifically -- the
 # single-writer rule (see AGENTS.md Dispatch Protocol) makes Reviewer/Scribe
 # output-only to the PR, the inbox .ack, and decisions.log (via

@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/skills-verify.sh — T22 (issue #27) VERIFY: confirm neither
+# .harness/skills-verify.sh — VERIFY: confirm neither
 # claude-md-management nor claude-code-setup's marketplace source ever
 # references AGENTS.md. claude-md-improver's own file-discovery only
 # matches literal "CLAUDE.md"/".claude.local.md" filenames -- this check

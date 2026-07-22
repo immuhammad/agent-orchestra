@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/check-handoff.test.sh — TDD tests for the Stop hook
-# check-handoff.sh, incl. T31 (issue #68 item A)'s >100-line warning.
+# check-handoff.sh, incl. its >100-line warning.
 # Run: bash .harness/check-handoff.test.sh
 set -uo pipefail
 

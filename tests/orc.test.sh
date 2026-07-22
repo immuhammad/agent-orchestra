@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/orc.test.sh — TDD tests for orc-config.sh + orc.sh (T21, issue #26).
+# .harness/orc.test.sh — TDD tests for orc-config.sh + orc.sh.
 # Run: bash .harness/orc.test.sh
 set -uo pipefail
 
