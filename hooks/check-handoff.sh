@@ -31,7 +31,24 @@ HANDOFF=".harness/handoff.md"
 MARKER=".harness/.session-start"
 # If no session marker exists, don't block (first run / manual session)
 [ -f "$MARKER" ] || exit 0
-if [ "$HANDOFF" -ot "$MARKER" ]; then
+
+# issue #50: handoff.md is Orchestra's file -- the room-level state of
+# record, and only Orchestra has the room-level view to write it honestly.
+# This nag used to fire for EVERY agent's Stop, and Builder clobbered the
+# file 3x with stale, ticket-scoped state as a result (worst case: a PR
+# described as "awaiting merge" two hours after Ahmad had merged it).
+# ORC_ROLE is exported by bin/orc when it launches each pane's `claude`
+# process; Claude Code spawns every hook invocation as a child of that
+# SAME process, so the var reaches this hook via ordinary environment
+# inheritance -- unlike an agent's own mid-session `export`s, which never
+# reach a hook subprocess at all (see the ORC_ONESHOT comment above, same
+# reasoning). A session with no ORC_ROLE (started outside the room, or an
+# older pane launched before this fix shipped) is UNKNOWN, not orchestra.
+# Unknown must NEVER nag: a missed nag here just means a session finishes
+# without a nudge, but nagging the WRONG role into writing this file is
+# exactly the clobber this issue exists to stop -- fail toward silence,
+# not toward instructing the wrong agent to do Orchestra's job.
+if [ "${ORC_ROLE:-}" = "orchestra" ] && [ "$HANDOFF" -ot "$MARKER" ]; then
   echo "handoff.md not updated this session. Update .harness/handoff.md (task, branch, done, next, gotchas) before finishing." >&2
   exit 2
 fi

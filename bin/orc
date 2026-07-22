@@ -195,8 +195,17 @@ orc_build_session() {
   tmux select-pane -t "$session:0.4" -T "pr/budget watch"
 
   if [ "${ORC_SKIP_PANE_COMMANDS:-0}" != "1" ]; then
-    tmux send-keys -t "$session:0.0" "claude --model $orchestra_model --dangerously-skip-permissions" C-m
-    tmux send-keys -t "$session:0.1" "claude --model $implementer_model --dangerously-skip-permissions" C-m
+    # issue #50: ORC_ROLE=<role> prefixed on each pane's OWN launch command
+    # (not `tmux send-keys ... export ...` as a separate step -- this must
+    # be in the SAME process `claude` itself is exec'd from, so every hook
+    # subprocess Claude Code spawns inherits it via ordinary environment
+    # inheritance). hooks/check-handoff.sh reads this to gate the
+    # handoff.md nag to Orchestra only -- a pane with no ORC_ROLE (a
+    # session started outside this room) is correctly treated as unknown,
+    # never nagged. agy isn't a Claude Code session (never fires Claude
+    # Code hooks at all), so it gets no ORC_ROLE.
+    tmux send-keys -t "$session:0.0" "ORC_ROLE=orchestra claude --model $orchestra_model --dangerously-skip-permissions" C-m
+    tmux send-keys -t "$session:0.1" "ORC_ROLE=builder claude --model $implementer_model --dangerously-skip-permissions" C-m
     tmux send-keys -t "$session:0.2" 'agy --dangerously-skip-permissions' C-m
     # issue #105 Task 3: the supervisor respawns gatekeeper.sh with bounded
     # backoff if it ever exits, instead of leaving pane 3 with a dead

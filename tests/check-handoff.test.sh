@@ -22,8 +22,20 @@ SANDBOX="$TMP/sandbox"
 mkdir -p "$SANDBOX/.harness"
 cp "$HOOK" "$SANDBOX/.harness/check-handoff.sh"
 
+# issue #50: the hook now gates its nag on ORC_ROLE=orchestra -- every
+# EXISTING call below tests "the nag fires when it should", which under
+# the new role-gated design specifically means "as orchestra". Defaulting
+# to "orchestra" here preserves every pre-existing test's behavior
+# unchanged (bash default-parameter expansion, no call site below needed
+# to change) while letting the new role-specific tests pass an explicit
+# role (including "" for the no-ORC_ROLE-at-all/unknown case).
 run_hook() {
-  ( cd "$SANDBOX" && echo '{}' | bash .harness/check-handoff.sh 2>&1 )
+  local role="${1-orchestra}"
+  if [ -z "$role" ]; then
+    ( cd "$SANDBOX" && echo '{}' | bash .harness/check-handoff.sh 2>&1 )
+  else
+    ( cd "$SANDBOX" && echo '{}' | ORC_ROLE="$role" bash .harness/check-handoff.sh 2>&1 )
+  fi
 }
 
 echo "== no session marker: never blocks =="
@@ -44,14 +56,59 @@ else
   fail "expected exit 0 and no output, got status=$STATUS output: $OUT"
 fi
 
-echo "== handoff.md NOT updated since marker: blocks (exit 2) =="
+echo "== orchestra-role stop without a handoff.md update: nags (exit 2) -- current behavior preserved =="
 touch -d '+1 hour' "$SANDBOX/.harness/.session-start" 2>/dev/null || touch -t 203001010000 "$SANDBOX/.harness/.session-start"
-OUT="$(run_hook)"
+OUT="$(run_hook orchestra)"
 STATUS=$?
 if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q "not updated this session"; then
-  pass "stale handoff.md (older than marker) blocks with exit 2"
+  pass "stale handoff.md (older than marker), ORC_ROLE=orchestra, blocks with exit 2"
 else
   fail "expected exit 2 + 'not updated' message, got status=$STATUS: $OUT"
+fi
+
+echo "== issue #50: builder-role stop with the SAME stale handoff.md does NOT nag -- handoff.md is Orchestra's file, Builder clobbered it 3x =="
+# Same stale-vs-marker state as the orchestra case above -- the only
+# variable is the role. This is the live incident: a Builder stop used to
+# order a rewrite of a file it has no room-level view to write honestly.
+OUT="$(run_hook builder)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ -z "$OUT" ]; then
+  pass "issue #50: builder-role stop with a stale handoff.md is silent -- no nag, no block"
+else
+  fail "CORRECTNESS REGRESSION (issue #50): builder-role stop should never nag about handoff.md (got status=$STATUS): $OUT"
+fi
+
+echo "== issue #50: unknown role (no ORC_ROLE at all -- a session started outside the room) does NOT nag =="
+# Fail-direction matters: a missed nag is minor, but nagging the WRONG
+# role into writing handoff.md is the clobber this issue exists to stop --
+# an unrecognized/absent role must never be treated as orchestra.
+OUT="$(run_hook "")"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ -z "$OUT" ]; then
+  pass "issue #50: no ORC_ROLE at all (session started outside the room) is silent -- treated as unknown, never nagged"
+else
+  fail "CORRECTNESS REGRESSION (issue #50): a session with no ORC_ROLE should never nag about handoff.md (got status=$STATUS): $OUT"
+fi
+
+echo "== issue #50: an unrecognized role string (neither orchestra nor builder) does NOT nag -- unknown, not orchestra =="
+OUT="$(run_hook scribe)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ -z "$OUT" ]; then
+  pass "issue #50: an unrecognized ORC_ROLE value is silent -- only an EXACT 'orchestra' match nags"
+else
+  fail "CORRECTNESS REGRESSION (issue #50): an unrecognized role should never nag about handoff.md (got status=$STATUS): $OUT"
+fi
+
+echo "== issue #50: orchestra WITH handoff.md updated this session: still no nag (role-gating doesn't override the real up-to-date check) =="
+touch "$SANDBOX/.harness/.session-start"
+sleep 1
+printf '# HANDOFF\n\n## Current state\nfresh again\n' > "$SANDBOX/.harness/handoff.md"
+OUT="$(run_hook orchestra)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ -z "$OUT" ]; then
+  pass "issue #50: orchestra with a freshly-updated handoff.md still passes silently"
+else
+  fail "expected exit 0 and no output for orchestra with a fresh handoff.md (got status=$STATUS): $OUT"
 fi
 
 echo "== T31 (issue #68 item A): handoff.md over 100 lines WARNS but does not block =="
