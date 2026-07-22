@@ -19,16 +19,37 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Source watch.sh (pulls in dispatch.sh too) under test-isolated state
-# files so nothing here touches the real merge-watch/deferred-nudge/
-# liveness state or the real "harness" session's inboxes.
+# Source watch.sh (pulls in dispatch.sh + broker.sh too) under
+# test-isolated state files so nothing here touches the real merge-watch/
+# broker/liveness state or the real room's inboxes (issue #125:
+# BROKER_INBOX_ROOT especially -- without it broker_check would iterate,
+# wake, and ARCHIVE the live inboxes).
 MERGE_WATCH_STATE="$TMP/merge-watch-state"
 WATCH_FLAGGED_DEAD_FILE="$TMP/flagged-dead"
-DISPATCH_DEFERRED_FILE="$TMP/deferred-nudges"
 WATCH_EVENTS_LOG="$TMP/events.log"
 REVIEW_WATCH_STATE="$TMP/review-watch-state"
-export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE DISPATCH_DEFERRED_FILE WATCH_EVENTS_LOG REVIEW_WATCH_STATE
+BROKER_STATE_DIR="$TMP/broker"
+BROKER_INBOX_ROOT="$TMP/inbox"
+export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE WATCH_EVENTS_LOG REVIEW_WATCH_STATE BROKER_STATE_DIR BROKER_INBOX_ROOT
 source "$LIB/watch.sh"
+
+# wait_for_pane_cmd <target> <cmd substring> -- polls until the pane's
+# foreground process matches (up to 5s). A fixed `sleep 1` after sending a
+# fixture command raced the shell's startup: a just-created pane whose
+# fixture hasn't started yet still reports its SHELL as the foreground
+# process, which reads as idle to pane_is_idle and dead to
+# pw_pane_is_dead -- both live-observed flakes of the old fixed sleeps.
+wait_for_pane_cmd() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null | grep -q "$2"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "WARN: pane $1 never reached foreground cmd '$2'" >&2
+  return 1
+}
 
 echo "== mw_extract_issue: parses linked issue from title+body text =="
 [ "$(mw_extract_issue 'Closes #34.')" = "34" ] && pass "Closes #N" || fail "Closes #N"
@@ -512,41 +533,97 @@ else
 fi
 rm -f "$TMP/rw-fixture-301.json" "$TMP/rw-fixture-302.json"
 
-echo "== deferred-nudge retry (live, isolated panes) =="
+echo "== issue #125: broker_check -- state-gated wake, ack verification, archive, retention, escalation (isolated) =="
 tmux new-session -d -s "$TEST_SESSION" -n main
 tmux split-window -h -t "$TEST_SESSION:0"
-# Pane 1 starts busy (simulated), pane 0 is a plain idle shell.
-tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 8" Enter
-sleep 1
+# Pane 1 starts busy (simulated heuristic-busy, no hook state).
+tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter
+wait_for_pane_cmd "$TEST_SESSION:0.1" sleep
 pane_for_agent() {
   case "$1" in
     watchtest) echo "$TEST_SESSION:0.1" ;;
     *) echo "" ;;
   esac
 }
-: > "$DISPATCH_DEFERRED_FILE"
-# Force through the real nudge_agent (not the merge-watch override above) --
-# it targets a genuinely busy pane, so this should defer and queue.
-tmux has-session -t harness 2>/dev/null && HAD_REAL_HARNESS=1 || HAD_REAL_HARNESS=0
-# nudge_agent checks `tmux has-session -t harness` unconditionally (this
-# design predates multi-session tests); alias it via a real session named
-# "harness" only if one doesn't already exist, to avoid clobbering it.
-nudge_agent "watchtest" >/dev/null 2>&1 || true
-if grep -qxF "watchtest" "$DISPATCH_DEFERRED_FILE" 2>/dev/null; then
-  pass "busy pane's nudge was queued to the deferred-nudge file"
+BROKER_AGENTS="watchtest"
+BROKER_WAKE_GRACE_S=0
+BROKER_ACK_DEADLINE_S=60
+BROKER_ARCHIVE_MIN_AGE_S=0
+mkdir -p "$BROKER_INBOX_ROOT/watchtest" "$BROKER_STATE_DIR"
+SUBMIT_CALLS="$TMP/submit-calls.log"
+: > "$SUBMIT_CALLS"
+send_submit() { echo "$1 <- $2" >> "$SUBMIT_CALLS"; }
+echo "payload" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-1.msg"
+
+broker_check
+if [ ! -s "$SUBMIT_CALLS" ]; then
+  pass "issue #125: heuristically-busy pane -> broker holds, no wake typed"
 else
-  fail "busy pane's nudge should have been queued (file: $(cat "$DISPATCH_DEFERRED_FILE" 2>/dev/null))"
+  fail "broker should not wake a busy pane: $(cat "$SUBMIT_CALLS")"
+fi
+if grep -q "watchtest 20260101000000-1" "$BROKER_PENDING_LIST" 2>/dev/null; then
+  pass "issue #125: undelivered message is listed in the pending file"
+else
+  fail "expected the pending list to name the undelivered msg: $(cat "$BROKER_PENDING_LIST" 2>/dev/null)"
 fi
 
-# Wait for the simulated "Thinking..." pane to finish and go idle, then
-# confirm a retry actually delivers the nudge and drains the queue.
-sleep 8
-retry_deferred_nudges
-if [ ! -s "$DISPATCH_DEFERRED_FILE" ]; then
-  pass "retry_deferred_nudges drained the queue once the pane went idle"
+# Pane goes idle -> the next pass wakes, exactly once per ack deadline.
+tmux send-keys -t "$TEST_SESSION:0.1" C-c
+sleep 1
+broker_check
+if [ "$(grep -c 'check inbox' "$SUBMIT_CALLS")" = "1" ]; then
+  pass "issue #125: idle pane -> exactly one verified wake"
 else
-  fail "deferred-nudge queue should be empty after retry: $(cat "$DISPATCH_DEFERRED_FILE")"
+  fail "expected exactly one wake, got: $(cat "$SUBMIT_CALLS")"
 fi
+broker_check
+if [ "$(grep -c 'check inbox' "$SUBMIT_CALLS")" = "1" ]; then
+  pass "issue #125: within ack_deadline_s no second wake fires (in-flight wake owns the window)"
+else
+  fail "a second wake fired inside the ack deadline: $(cat "$SUBMIT_CALLS")"
+fi
+
+# Ack lands -> the pair is archived (min-age 0 here) and bookkeeping cleaned.
+echo "ACK: done" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-1.ack"
+broker_check
+if [ ! -e "$BROKER_INBOX_ROOT/watchtest/20260101000000-1.msg" ] \
+  && [ -e "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.msg" ] \
+  && [ -e "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.ack" ]; then
+  pass "issue #125: acked pair archived out of the live inbox"
+else
+  fail "expected msg+ack archived: live=$(ls "$BROKER_INBOX_ROOT/watchtest" 2>/dev/null) archive=$(ls "$BROKER_INBOX_ROOT/watchtest/archive" 2>/dev/null)"
+fi
+
+# Retention: an archived file older than the window is pruned.
+touch -t 202001010000 "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.msg"
+touch -t 202001010000 "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.ack"
+broker_check
+if [ ! -e "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.msg" ]; then
+  pass "issue #125: archive pruned past archive_retention_days"
+else
+  fail "expected the ancient archived pair to be pruned"
+fi
+
+# Escalation: attempts exhausted + deadline passed -> durable FLAG, once.
+FLAG_CALLS="$TMP/broker-flag-calls.log"
+: > "$FLAG_CALLS"
+dispatch_main() { echo "$*" >> "$FLAG_CALLS"; }
+echo "payload2" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-2.msg"
+echo "2 1" > "$BROKER_STATE_DIR/watchtest__20260101000000-2"
+broker_check
+if grep -q "FLAG: undelivered inbox message for 'watchtest'" "$FLAG_CALLS"; then
+  pass "issue #125: exhausted wakes escalate as a durable FLAG to orchestra"
+else
+  fail "expected an escalation FLAG, got: $(cat "$FLAG_CALLS")"
+fi
+read -r ESC_ATTEMPTS _ < "$BROKER_STATE_DIR/watchtest__20260101000000-2"
+if [ "$ESC_ATTEMPTS" = "99" ]; then
+  pass "issue #125: escalation is marked (attempts=99) so it fires once, not every pass"
+else
+  fail "expected attempts=99 after escalation, got: $ESC_ATTEMPTS"
+fi
+rm -f "$BROKER_INBOX_ROOT/watchtest/20260101000000-2.msg" "$BROKER_STATE_DIR/watchtest__20260101000000-2"
+unset -f dispatch_main
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
 echo "== pane-liveness: dead pane (plain shell) gets flagged exactly once =="
@@ -555,7 +632,7 @@ tmux split-window -h -t "$TEST_SESSION:0"
 # Pane 0: plain shell -- "dead" per pw_pane_is_dead. Pane 1: a fake
 # long-running "CLI" (sleep) -- alive.
 tmux send-keys -t "$TEST_SESSION:0.1" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.1" sleep
 pane_for_agent() {
   case "$1" in
     deadtest)  echo "$TEST_SESSION:0.0" ;;
@@ -597,7 +674,7 @@ fi
 
 echo "== pane-liveness: clears the flag once the pane recovers =="
 tmux send-keys -t "$TEST_SESSION:0.0" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.0" sleep
 pane_liveness_check
 if grep -qxF "deadtest" "$WATCH_FLAGGED_DEAD_FILE" 2>/dev/null; then
   fail "recovered pane's flag should have been cleared"
@@ -649,7 +726,7 @@ echo "== T33: pane-liveness FLAG/recovery events are logged to EVENTS_LOG =="
 tmux new-session -d -s "$TEST_SESSION" -n main
 tmux split-window -h -t "$TEST_SESSION:0"
 tmux send-keys -t "$TEST_SESSION:0.1" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.1" sleep
 pane_for_agent() {
   case "$1" in
     deadtest) echo "$TEST_SESSION:0.0" ;;
@@ -667,7 +744,7 @@ else
   fail "expected a FLAGGED event in EVENTS_LOG: $(cat "$WATCH_EVENTS_LOG" 2>/dev/null)"
 fi
 tmux send-keys -t "$TEST_SESSION:0.0" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.0" sleep
 pane_liveness_check
 if grep -q "deadtest pane alive again" "$WATCH_EVENTS_LOG" 2>/dev/null; then
   pass "pane-liveness logged the recovery event"
@@ -676,66 +753,92 @@ else
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== T33 (issue #120): watch_render draws a compact 1-line header + adaptive EVENTS tail; nothing is lost from the backing files =="
+echo "== T33 (issue #120/#125): watch_render -- compact header with states + pending + liveness; nothing lost from the backing files =="
 : > "$WATCH_EVENTS_LOG"
 echo "2026-07-05 00:00:00 - PR #999 merged -> closed issue #1" >> "$WATCH_EVENTS_LOG"
-echo "testagent" > "$DEFERRED_FILE"
+mkdir -p "$BROKER_STATE_DIR"
+echo "testagent 20260101000000-9 45s ?" > "$BROKER_PENDING_LIST"
 echo "deadagent" > "$FLAGGED_DEAD_FILE"
-OUT="$(WATCH_PANE_LINES=20 watch_render)"
-if echo "$OUT" | grep -Eq '^Watch [0-9:]+  60s \| nudges 1 \| 1 dead$'; then
-  pass "issue #120: 1-line header folds interval + nudge count + liveness summary"
+OUT="$(WATCH_PANE_LINES=20 WATCH_EVENTS_SHOWN=999 watch_render)"
+if echo "$OUT" | grep -Eq '^Watch [0-9:]+  60s \| .* \| pending 1 \| 1 dead$'; then
+  pass "issue #125: 1-line header folds interval + agent states + pending count + liveness summary"
 else
-  fail "issue #120: expected a compact 'Watch HH:MM:SS  60s | nudges 1 | 1 dead' header, got: $OUT"
+  fail "issue #125: expected a 'Watch HH:MM:SS  60s | <states> | pending 1 | 1 dead' header, got: $OUT"
 fi
-if echo "$OUT" | grep -q "PR #999" && echo "$OUT" | grep -q "NUDGE: testagent" && echo "$OUT" | grep -q "DEAD: deadagent"; then
-  pass "issue #120: watch_render surfaces the backing files' current contents (nothing silently dropped)"
+if echo "$OUT" | grep -q "PR #999" && echo "$OUT" | grep -q "PENDING: testagent" && echo "$OUT" | grep -q "DEAD: deadagent"; then
+  pass "issue #125: watch_render surfaces the backing files' current contents (nothing silently dropped)"
 else
-  fail "issue #120: watch_render should surface PR #999 / NUDGE: testagent / DEAD: deadagent, got: $OUT"
+  fail "issue #125: watch_render should surface PR #999 / PENDING: testagent / DEAD: deadagent, got: $OUT"
 fi
-: > "$DEFERRED_FILE"
+: > "$BROKER_PENDING_LIST"
 : > "$FLAGGED_DEAD_FILE"
 
-echo "== issue #120: header collapses to 'nudges 0 | all alive' and drops the NUDGE:/DEAD: lines entirely when both backing files are empty =="
-OUT="$(WATCH_PANE_LINES=20 watch_render)"
-if echo "$OUT" | grep -Eq '\| nudges 0 \| all alive$'; then
-  pass "issue #120: zero-case header reads 'nudges 0 | all alive'"
+echo "== issue #120/#125: header collapses to 'pending 0 | all alive' and drops the PENDING:/DEAD: lines when both backing files are empty =="
+OUT="$(WATCH_PANE_LINES=20 WATCH_EVENTS_SHOWN=999 watch_render)"
+if echo "$OUT" | grep -Eq '\| pending 0 \| all alive$'; then
+  pass "issue #125: zero-case header reads 'pending 0 | all alive'"
 else
-  fail "issue #120: expected 'nudges 0 | all alive' in the header, got: $OUT"
+  fail "issue #125: expected 'pending 0 | all alive' in the header, got: $OUT"
 fi
-if echo "$OUT" | grep -q "NUDGE:" || echo "$OUT" | grep -q "DEAD:"; then
-  fail "issue #120: NUDGE:/DEAD: lines should not appear when both backing files are empty, got: $OUT"
+if echo "$OUT" | grep -q "PENDING:" || echo "$OUT" | grep -q "DEAD:"; then
+  fail "issue #125: PENDING:/DEAD: lines should not appear when both backing files are empty, got: $OUT"
 else
-  pass "issue #120: no NUDGE:/DEAD: lines printed when both backing files are empty"
+  pass "issue #125: no PENDING:/DEAD: lines printed when both backing files are empty"
 fi
 
-echo "== issue #120: EVENTS tail is ADAPTIVE to WATCH_PANE_LINES, and truncation is shown explicitly (no silent caps) =="
+echo "== issue #120/#124: EVENTS tail is ADAPTIVE, off-by-one fixed, truncation explicit =="
 : > "$WATCH_EVENTS_LOG"
 for i in $(seq 1 20); do echo "2026-07-05 00:00:00 - event $i" >> "$WATCH_EVENTS_LOG"; done
-OUT="$(WATCH_PANE_LINES=10 watch_render)"
+OUT="$(WATCH_PANE_LINES=10 WATCH_EVENTS_SHOWN=999 watch_render)"
 OUT_LINES="$(echo "$OUT" | wc -l | tr -d ' ')"
-if [ "$OUT_LINES" = "10" ]; then
-  pass "issue #120: rendered output exactly fits the WATCH_PANE_LINES=10 budget"
+if [ "$OUT_LINES" = "9" ]; then
+  pass "issue #124: rendered output leaves the cursor row free (9 output lines for a 10-row pane, header never scrolls off)"
 else
-  fail "issue #120: expected exactly 10 rendered lines for WATCH_PANE_LINES=10, got $OUT_LINES: $OUT"
+  fail "issue #124: expected exactly 9 rendered lines for WATCH_PANE_LINES=10, got $OUT_LINES: $OUT"
 fi
-if echo "$OUT" | grep -qF "(last 7 of 20)"; then
+if echo "$OUT" | grep -qF "(last 6 of 20)"; then
   pass "issue #120: truncated EVENTS tail states '(last N of TOTAL)' explicitly"
 else
-  fail "issue #120: expected an explicit '(last 7 of 20)' truncation note, got: $OUT"
+  fail "issue #120: expected an explicit '(last 6 of 20)' truncation note, got: $OUT"
 fi
 SHOWN_EVENTS="$(echo "$OUT" | grep -c '^  2026-07-05')"
-if [ "$SHOWN_EVENTS" = "7" ]; then
-  pass "issue #120: exactly 7 event lines shown (budget minus the truncation note itself)"
+if [ "$SHOWN_EVENTS" = "6" ]; then
+  pass "issue #120: exactly 6 event lines shown (budget minus the truncation note itself)"
 else
-  fail "issue #120: expected exactly 7 event lines shown, got $SHOWN_EVENTS: $OUT"
+  fail "issue #120: expected exactly 6 event lines shown, got $SHOWN_EVENTS: $OUT"
 fi
 
+echo "== issue #124: dynamic PENDING/DEAD lines are DEDUCTED from the events budget (the live header-scroll incident) =="
+echo "a 1 1s ?" > "$BROKER_PENDING_LIST"
+echo "b 2 2s ?" >> "$BROKER_PENDING_LIST"
+OUT="$(WATCH_PANE_LINES=10 WATCH_EVENTS_SHOWN=999 watch_render)"
+OUT_LINES="$(echo "$OUT" | wc -l | tr -d ' ')"
+if [ "$OUT_LINES" = "9" ]; then
+  pass "issue #124: with 2 PENDING lines the frame still fits the pane (events shrank to make room)"
+else
+  fail "issue #124: expected 9 output lines with 2 PENDING lines present, got $OUT_LINES: $OUT"
+fi
+if echo "$OUT" | grep -qF "(last 4 of 20)"; then
+  pass "issue #124: events tail shrank by exactly the dynamic-line count"
+else
+  fail "issue #124: expected '(last 4 of 20)' with 2 dynamic lines, got: $OUT"
+fi
+: > "$BROKER_PENDING_LIST"
+
 echo "== issue #120: a bigger WATCH_PANE_LINES shows every event with no truncation note once everything fits =="
-OUT="$(WATCH_PANE_LINES=30 watch_render)"
+OUT="$(WATCH_PANE_LINES=30 WATCH_EVENTS_SHOWN=999 watch_render)"
 if echo "$OUT" | grep -q "event 1$" && echo "$OUT" | grep -q "event 20$" && ! echo "$OUT" | grep -q "(last"; then
   pass "issue #120: all 20 events shown with room to spare, no truncation note"
 else
   fail "issue #120: expected all 20 events with no truncation note when the pane has room, got: $OUT"
+fi
+
+echo "== issue #125: events_shown caps the display even when the pane has room (Ahmad's 3-5 ask; orchestrator.yaml watch.events_shown) =="
+OUT="$(WATCH_PANE_LINES=30 WATCH_EVENTS_SHOWN=4 watch_render)"
+if echo "$OUT" | grep -qF "(last 3 of 20)"; then
+  pass "issue #125: WATCH_EVENTS_SHOWN=4 caps the tail to '(last 3 of 20)' despite a 30-row pane"
+else
+  fail "issue #125: expected '(last 3 of 20)' under an explicit events_shown cap, got: $OUT"
 fi
 : > "$WATCH_EVENTS_LOG"
 

@@ -75,11 +75,31 @@ evaluated on adoption, not bulk-imported.
   spawning a background task to watch acks. The `.ack` beside the
   original `.msg` is only ever a passive arrival receipt, never the
   completion signal.
-- Nudge = one-line `tmux send-keys "check inbox"` into the receiver's
-  pane, sent only when idle (`lib/dispatch.sh`'s `pane_is_idle` is the
-  single source of truth — don't reimplement it). On doubt this errs
-  toward "busy": a missed nudge only delays pickup, while nudging a busy
-  pane injects stray keystrokes mid-generation.
+- **An `assign`/`handoff` .msg IS the authorization to start.** The
+  receiving agent begins work immediately on reading it — it never asks
+  the sender, Orchestra, or the human for permission to begin (Gate 1
+  already happened before dispatch; under a full-autonomy grant it is
+  waived entirely). Write the one-line `.ack` at pickup. Mid-work
+  decision points go to Orchestra as `FLAG:` dispatches — they pause
+  the task, not the pickup.
+- Delivery (issue #125) is state-driven, never screen-guessed. Each
+  Claude pane's own hooks write ground truth
+  (`busy|idle|failsafe` + session_id, `hooks/pane-state.sh` →
+  `.harness/state/pane-state/`): a BUSY receiver picks its inbox up at
+  turn end (the check-inbox Stop hook blocks going idle while unacked
+  `.msg` files exist); an IDLE receiver gets one typed `check inbox`
+  wake — safe, because idle is ground truth, not a heuristic; a
+  FAILSAFE (quota-parked) receiver has delivery HELD until the park
+  lifts — and "lifted" is derived from the quota-stop flag, so a stale
+  failsafe state on a pane nobody spoke to after the flag cleared reads
+  as idle again (delivery resumes on its own). `lib/broker.sh` (in the watch loop) owns retries: every wake is
+  verified by the `.ack` appearing within `dispatch.ack_deadline_s`,
+  retried once, then escalated as a durable FLAG — nothing waits
+  forever, and nothing but dispatch/broker ever types into another
+  agent's pane. Acked messages are archived to `inbox/<agent>/archive/`
+  (pruned after `dispatch.archive_retention_days`); "check inbox" means
+  the LIVE dir only — never re-read the archive. Screen heuristics
+  survive ONLY for agy's pane (a TUI with no Claude hooks).
 - Pane map (window index 0, tiled) matches `bin/orc`'s layout:
   0=orchestra 1=builder 2=reviewer 3=gatekeeper 4=watch — Scribe has no
   standing pane; a dispatch spawns it as a one-shot headless run instead
@@ -139,10 +159,12 @@ evaluated on adoption, not bulk-imported.
   iteration: (1) comments+closes the linked issue directly on a merged
   PR — mechanical, no dispatch — parsed from "Closes/Fixes/Resolves #N"
   in the title/body, falling back to a `feature/issue-<N>` head branch;
-  unresolvable = skipped, not retried forever; (2) drains `dispatch.sh`'s
-  deferred-nudge queue so a nudge skipped for a busy pane retries once it
-  goes idle; (3) flags Orchestra via the inbox if an agent pane drops
-  back to a plain shell. `watch.sh` never merges anything itself.
+  unresolvable = skipped, not retried forever; (2) runs the broker
+  (`lib/broker.sh`): ack-verified delivery/retry/escalation, inbox
+  archival + retention, events rotation — the deferred-nudge queue is
+  gone (#118 class); (3) flags Orchestra via the inbox if an agent pane
+  drops back to a plain shell, clearing that pane's stale hook state.
+  `watch.sh` never merges anything itself.
 - **Escalation path.** Builder AND Reviewer (any non-Orchestra agent)
   route every decision point or out-of-ticket defect to Orchestra via
   FLAG — never directly to you, never self-decided:

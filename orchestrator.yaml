@@ -31,3 +31,13 @@ budgets:
     failsafe_pct: 80
   agy:
     failsafe_pct: 80
+
+# issue #125: delivery layer (lib/broker.sh + watch_render). Every key
+# here has a live consumer -- see orc_get_nested callers.
+dispatch:
+  ack_deadline_s: 60
+  wake_grace_s: 10
+  archive_retention_days: 14
+
+watch:
+  events_shown: 5

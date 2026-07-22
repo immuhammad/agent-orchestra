@@ -49,14 +49,12 @@ fi
 # hooks/pane-state.sh writes to.
 PANE_STATE_DIR="$CANON_DIR/state/pane-state"
 
-# Deferred nudges used to be fire-and-forget -- if a nudge
-# was skipped because the target pane was busy, nothing ever retried it, so
-# every busy-pane dispatch (copilot's, in practice) needed a manual
-# re-nudge. This file is a durable queue of agent names whose last nudge
-# was deferred; watch.sh's retry_deferred_nudges() drains it on each loop
-# iteration. DISPATCH_DEFERRED_FILE overrides the path (tests use this to
-# avoid touching the real queue).
-DEFERRED_FILE="${DISPATCH_DEFERRED_FILE:-$CANON_DIR/deferred-nudges}"
+# issue #125: the deferred-nudge queue is GONE. Senders only ever write
+# the durable .msg; a busy receiver picks it up at turn end via the
+# check-inbox Stop hook, and lib/broker.sh (watch loop) owns every retry
+# with .ack verification and bounded escalation. The old queue was the
+# #118 failure class: fire-and-forget keystrokes that stranded unsubmitted
+# and re-deferred forever.
 
 # issue #105: which tmux session pane_for_agent targets. Overridable so a
 # caller that's NOT a human at the real control room (gatekeeper.sh's
@@ -178,10 +176,10 @@ pane_is_idle() {
   # falls through to the screen-scrape heuristic unchanged.
   pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
   if [ -n "$pane_id" ]; then
-    hook_state="$(pane_state_read "$pane_id" 2>/dev/null || echo '')"
+    hook_state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
     case "$hook_state" in
       idle) return 0 ;;
-      busy) return 1 ;;
+      busy|failsafe) return 1 ;;
     esac
   fi
   cmd="$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null || echo '')"
@@ -257,19 +255,39 @@ nudge_agent() {
     echo "dispatch.sh: no tmux '${target%%:*}' session running, skipping nudge" >&2
     return 0
   fi
-  if pane_is_idle "$target" "$agent"; then
-    # issue #86 finding 1: nudge_agent is the HIGHEST-frequency send path of
-    # the three (dispatch/gatekeeper/auto-resume) but was the only one still
-    # on a bare send-keys burst with no confirm/retry -- routed through the
-    # same shared send_submit (send-lib.sh) as the other two now.
-    send_submit "$target" "check inbox"
-    echo "dispatch.sh: nudged $agent ($target)"
-  else
-    echo "dispatch.sh: $agent ($target) is busy, deferred nudge"
-    if ! grep -qxF "$agent" "$DEFERRED_FILE" 2>/dev/null; then
-      echo "$agent" >> "$DEFERRED_FILE"
-    fi
-  fi
+  # issue #125: state-driven, no deferred queue. The pane's own hook state
+  # (ground truth for Claude panes) decides: idle -> one immediate typed
+  # wake (safe -- idle is not a guess); busy -> nothing, the check-inbox
+  # Stop hook delivers at turn end; failsafe -> nothing, the broker holds
+  # delivery until the park lifts. No/unknown state (agy -- a TUI that
+  # fires no Claude hooks) falls back to the screen heuristic for this one
+  # immediate-wake decision. Either way lib/broker.sh owns retries with
+  # .ack verification, so a skipped wake here is a delay, never a loss.
+  # (send_submit itself keeps the #86 confirm/retry typing discipline.)
+  local pane_id hook_state
+  pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
+  hook_state=""
+  [ -n "$pane_id" ] && hook_state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
+  case "$hook_state" in
+    busy)
+      echo "dispatch.sh: $agent ($target) busy (hook state) -- Stop-hook pickup delivers at turn end"
+      ;;
+    failsafe)
+      echo "dispatch.sh: $agent ($target) parked on quota failsafe -- broker holds delivery"
+      ;;
+    idle)
+      send_submit "$target" "check inbox"
+      echo "dispatch.sh: nudged $agent ($target)"
+      ;;
+    *)
+      if pane_is_idle "$target" "$agent"; then
+        send_submit "$target" "check inbox"
+        echo "dispatch.sh: nudged $agent ($target) (heuristic idle -- no hook state)"
+      else
+        echo "dispatch.sh: $agent ($target) looks busy (heuristic) -- broker will retry"
+      fi
+      ;;
+  esac
 }
 
 # scribe_spawn_headless <msg_file> <ack_file> -- issue #89: scribe has
@@ -358,22 +376,6 @@ Do nothing else outside the scope of this message."
       echo "SPAWN-FAILED: headless scribe exited without writing an ack -- see $log_file" > "$ack_file"
     fi
   ) &
-}
-
-# retry_deferred_nudges -- drains DEFERRED_FILE, re-attempting a nudge
-# for each queued agent. An agent whose pane is idle now gets nudged (and
-# drops out of the queue); one still busy gets re-queued by the same
-# nudge_agent() call above, so nothing is lost across iterations.
-retry_deferred_nudges() {
-  [ -s "$DEFERRED_FILE" ] || return 0
-  local agents
-  agents="$(sort -u "$DEFERRED_FILE")"
-  : > "$DEFERRED_FILE"
-  local agent
-  while IFS= read -r agent; do
-    [ -z "$agent" ] && continue
-    nudge_agent "$agent"
-  done <<< "$agents"
 }
 
 # dispatch_write_msg <base_path_without_ext> <body_file (or empty)> <msg (or empty, used only if body_file is empty)>

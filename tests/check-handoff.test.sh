@@ -32,7 +32,11 @@ cp "$HOOK" "$SANDBOX/.harness/check-handoff.sh"
 run_hook() {
   local role="${1-orchestra}"
   if [ -z "$role" ]; then
-    ( cd "$SANDBOX" && echo '{}' | bash .harness/check-handoff.sh 2>&1 )
+    # env -u: the no-role case must actually have NO ORC_ROLE -- when this
+    # suite runs inside a room pane, the pane's own ORC_ROLE would leak in
+    # and turn this into whatever role the pane happens to be (issue #125,
+    # found running the suite from the orchestra pane).
+    ( cd "$SANDBOX" && echo '{}' | env -u ORC_ROLE bash .harness/check-handoff.sh 2>&1 )
   else
     ( cd "$SANDBOX" && echo '{}' | ORC_ROLE="$role" bash .harness/check-handoff.sh 2>&1 )
   fi

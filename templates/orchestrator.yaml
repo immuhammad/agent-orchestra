@@ -38,3 +38,14 @@ budgets:
     failsafe_pct: 80
   agy:
     failsafe_pct: 80
+
+# Delivery layer (lib/broker.sh + watch.sh's events display). Seconds /
+# days; raise ack_deadline_s if your agents routinely take longer than a
+# minute to notice a wake.
+dispatch:
+  ack_deadline_s: 60
+  wake_grace_s: 10
+  archive_retention_days: 14
+
+watch:
+  events_shown: 5

@@ -82,13 +82,76 @@ else
   pass "pane_state_read fails cleanly for an unknown pane_id"
 fi
 
-echo "== pane_state_read: stale entry (older than max_age) is rejected =="
+echo "== issue #125: entries PERSIST by default (states are transitions, no age-out); explicit max_age still enforces freshness =="
 mkdir -p "$PANE_STATE_DIR"
 echo "busy 1000000000" > "$PANE_STATE_DIR/99"
-if pane_state_read "%99" >/dev/null 2>&1; then
-  fail "expected a stale (epoch 1000000000) entry to be rejected"
+if [ "$(pane_state_read "%99" 2>/dev/null)" = "busy" ]; then
+  pass "issue #125: an ancient entry is still returned by default -- crash coverage is pane_state_clear (watch liveness), not an expiry"
 else
-  pass "stale entry correctly rejected by the default max_age"
+  fail "issue #125: default read should trust the last-written state regardless of age"
+fi
+if pane_state_read "%99" 30 >/dev/null 2>&1; then
+  fail "an explicit max_age=30 should reject an epoch-1000000000 entry"
+else
+  pass "explicit max_age still rejects a stale entry for callers that want freshness"
+fi
+
+echo "== issue #125: failsafe state + session_id round-trip =="
+pane_state_write "%97" failsafe "sess-abc123"
+if [ "$(pane_state_read "%97" 2>/dev/null)" = "failsafe" ]; then
+  pass "failsafe is a first-class state"
+else
+  fail "expected pane_state_read to return 'failsafe'"
+fi
+if [ "$(pane_state_session "%97" 2>/dev/null)" = "sess-abc123" ]; then
+  pass "session_id round-trips through write/read"
+else
+  fail "expected pane_state_session to return 'sess-abc123'"
+fi
+
+echo "== issue #125: unknown state string is rejected, not passed through =="
+echo "weird 1234567890" > "$PANE_STATE_DIR/96"
+if pane_state_read "%96" >/dev/null 2>&1; then
+  fail "an unknown state string should be rejected"
+else
+  pass "unknown state string correctly rejected"
+fi
+
+echo "== issue #125: entry with no session_id -- pane_state_session fails cleanly =="
+pane_state_write "%95" idle
+if pane_state_session "%95" >/dev/null 2>&1; then
+  fail "pane_state_session should fail when no session_id was recorded"
+else
+  pass "pane_state_session fails cleanly with no recorded session_id"
+fi
+
+echo "== issue #125 follow-up: failsafe is EFFECTIVE only while the quota flag exists =="
+pane_state_write "%94" failsafe "sid-eff"
+EFF_FLAG="$(mktemp)"
+if [ "$(PANE_STATE_QUOTA_FLAG="$EFF_FLAG" pane_state_effective "%94" 2>/dev/null)" = "failsafe" ]; then
+  pass "flag present -> effective state is failsafe (delivery held)"
+else
+  fail "expected effective failsafe while the quota flag exists"
+fi
+rm -f "$EFF_FLAG"
+if [ "$(PANE_STATE_QUOTA_FLAG="$EFF_FLAG" pane_state_effective "%94" 2>/dev/null)" = "idle" ]; then
+  pass "flag lifted -> stale failsafe reads as idle (breaks the nothing-can-wake-it chicken-and-egg)"
+else
+  fail "expected effective idle once the quota flag is gone"
+fi
+if [ "$(pane_state_read "%94" 2>/dev/null)" = "failsafe" ]; then
+  pass "raw read still reports failsafe (auto-resume ownership stays truthful)"
+else
+  fail "raw pane_state_read should be untouched by the effective derivation"
+fi
+pane_state_clear "%94"
+
+echo "== issue #125: pane_state_clear removes the entry =="
+pane_state_clear "%97"
+if pane_state_read "%97" >/dev/null 2>&1; then
+  fail "expected no state after pane_state_clear"
+else
+  pass "pane_state_clear removes the pane's state file"
 fi
 
 echo "== pane_state_read: malformed entry (no timestamp) is rejected, not misread =="
