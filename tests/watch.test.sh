@@ -26,7 +26,8 @@ MERGE_WATCH_STATE="$TMP/merge-watch-state"
 WATCH_FLAGGED_DEAD_FILE="$TMP/flagged-dead"
 DISPATCH_DEFERRED_FILE="$TMP/deferred-nudges"
 WATCH_EVENTS_LOG="$TMP/events.log"
-export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE DISPATCH_DEFERRED_FILE WATCH_EVENTS_LOG
+REVIEW_WATCH_STATE="$TMP/review-watch-state"
+export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE DISPATCH_DEFERRED_FILE WATCH_EVENTS_LOG REVIEW_WATCH_STATE
 source "$LIB/watch.sh"
 
 echo "== mw_extract_issue: parses linked issue from title+body text =="
@@ -292,6 +293,224 @@ if grep -q 'PICK next per handoff.md / decisions.log' "$LIB/watch.sh"; then
 else
   fail "expected the updated 'PICK next per handoff.md / decisions.log' wording in mw_notify_pick"
 fi
+
+echo "== review_watch_check: APPROVE on a draft PR flips it ready + delivers ONE durable msg to builder+orchestra =="
+RW_GH_CALLS="$TMP/rw-gh-calls.log"
+RW_NOTIFY_CALLS="$TMP/rw-notify-calls.log"
+: > "$RW_GH_CALLS"
+: > "$RW_NOTIFY_CALLS"
+gh() { echo "$*" >> "$RW_GH_CALLS"; }
+rw_notify() { echo "$*" >> "$RW_NOTIFY_CALLS"; }
+rw_fetch_open_draft_prs() {
+  printf '201\tIssue 70 fix\tCloses #70\tfeature/issue-70\n'
+}
+rw_fetch_pr_comments() {
+  printf '2026-07-21T10:00:00Z\tAPPROVE: looks good\n'
+}
+review_watch_check
+if grep -q 'pr ready 201' "$RW_GH_CALLS"; then
+  pass "issue #96: review_watch_check flipped PR #201 to ready via gh pr ready"
+else
+  fail "expected 'gh pr ready 201', got: $(cat "$RW_GH_CALLS")"
+fi
+if grep -q 'builder 70' "$RW_NOTIFY_CALLS" && grep -q 'orchestra 70' "$RW_NOTIFY_CALLS"; then
+  pass "issue #96: review_watch_check notified BOTH builder and orchestra on APPROVE"
+else
+  fail "expected notifications to both builder and orchestra: $(cat "$RW_NOTIFY_CALLS")"
+fi
+NOTIFY_COUNT="$(wc -l < "$RW_NOTIFY_CALLS" | tr -d ' ')"
+if [ "$NOTIFY_COUNT" -eq 2 ]; then
+  pass "issue #96: exactly 2 notify calls on APPROVE (builder + orchestra), not more"
+else
+  fail "expected exactly 2 notify calls, got $NOTIFY_COUNT: $(cat "$RW_NOTIFY_CALLS")"
+fi
+
+echo "== review_watch_check: REQUEST-CHANGES delivers a msg to builder only, does NOT flip ready =="
+: > "$RW_GH_CALLS"
+: > "$RW_NOTIFY_CALLS"
+rw_fetch_open_draft_prs() {
+  printf '202\tIssue 71 fix\tCloses #71\tfeature/issue-71\n'
+}
+rw_fetch_pr_comments() {
+  printf '2026-07-21T10:00:00Z\tREQUEST-CHANGES: needs work\n'
+}
+review_watch_check
+if grep -q 'pr ready 202' "$RW_GH_CALLS"; then
+  fail "CORRECTNESS REGRESSION (issue #96): REQUEST-CHANGES should NOT flip the PR to ready: $(cat "$RW_GH_CALLS")"
+else
+  pass "issue #96: REQUEST-CHANGES does not flip the PR to ready"
+fi
+if grep -q 'builder 71' "$RW_NOTIFY_CALLS"; then
+  pass "issue #96: REQUEST-CHANGES notifies builder"
+else
+  fail "expected a builder notification: $(cat "$RW_NOTIFY_CALLS")"
+fi
+if grep -q 'orchestra' "$RW_NOTIFY_CALLS"; then
+  fail "CORRECTNESS REGRESSION (issue #96): REQUEST-CHANGES should not notify orchestra: $(cat "$RW_NOTIFY_CALLS")"
+else
+  pass "issue #96: REQUEST-CHANGES does not notify orchestra"
+fi
+
+echo "== review_watch_check: re-tick with the SAME already-delivered verdict does not re-deliver (idempotent) =="
+: > "$RW_GH_CALLS"
+: > "$RW_NOTIFY_CALLS"
+# same PR #201, same APPROVE verdict as the first test above -- already
+# recorded in REVIEW_WATCH_STATE from that run.
+rw_fetch_open_draft_prs() {
+  printf '201\tIssue 70 fix\tCloses #70\tfeature/issue-70\n'
+}
+rw_fetch_pr_comments() {
+  printf '2026-07-21T10:00:00Z\tAPPROVE: looks good\n'
+}
+review_watch_check
+if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
+  fail "CORRECTNESS REGRESSION (issue #96): re-tick with the same already-delivered verdict should not re-deliver: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
+else
+  pass "issue #96: re-tick with the same verdict already delivered is a no-op"
+fi
+
+echo "== review_watch_check: a PR that moves from REQUEST-CHANGES to a LATER APPROVE delivers the new APPROVE (latest verdict wins, not first) =="
+: > "$RW_GH_CALLS"
+: > "$RW_NOTIFY_CALLS"
+# PR #202 already had REQUEST-CHANGES delivered (second test above); the
+# fix-loop's re-review now adds a LATER APPROVE comment.
+rw_fetch_open_draft_prs() {
+  printf '202\tIssue 71 fix\tCloses #71\tfeature/issue-71\n'
+}
+rw_fetch_pr_comments() {
+  printf '2026-07-21T10:00:00Z\tREQUEST-CHANGES: needs work\n2026-07-21T12:00:00Z\tAPPROVE: fixed now, approved\n'
+}
+review_watch_check
+if grep -q 'pr ready 202' "$RW_GH_CALLS"; then
+  pass "issue #96: the later APPROVE is delivered even though PR #202 already had REQUEST-CHANGES delivered earlier (latest verdict wins)"
+else
+  fail "CORRECTNESS REGRESSION (issue #96): expected the new APPROVE to be delivered: $(cat "$RW_GH_CALLS")"
+fi
+if grep -q 'orchestra 71' "$RW_NOTIFY_CALLS"; then
+  pass "issue #96: the new APPROVE notifies orchestra too (the REQUEST-CHANGES round never did)"
+else
+  fail "expected an orchestra notification for the new APPROVE: $(cat "$RW_NOTIFY_CALLS")"
+fi
+
+echo "== review_watch_check: a comment that looks verdict-ish but isn't ANCHORED is skipped, never guessed at =="
+: > "$RW_GH_CALLS"
+: > "$RW_NOTIFY_CALLS"
+rw_fetch_open_draft_prs() {
+  printf '203\tIssue 72 fix\tCloses #72\tfeature/issue-72\n'
+}
+rw_fetch_pr_comments() {
+  printf '2026-07-21T10:00:00Z\tI think we should approve this once CI passes\n2026-07-21T10:05:00Z\tapprove: lowercase, not the protocol format\n'
+}
+review_watch_check
+if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
+  fail "CORRECTNESS REGRESSION (issue #96): an unanchored/malformed verdict-ish comment should never be delivered: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
+else
+  pass "issue #96: malformed/unanchored verdict-ish comments are skipped, never guessed at"
+fi
+
+echo "== review_watch_check: a PR no longer open+draft (already ready, or already merged) is a structural no-op =="
+: > "$RW_GH_CALLS"
+: > "$RW_NOTIFY_CALLS"
+# Simulates Orchestra having already flipped this PR ready (or merged it)
+# between ticks -- rw_fetch_open_draft_prs is scoped to open+draft, so a
+# PR in either state simply no longer appears; review_watch_check has
+# nothing to iterate and makes zero calls.
+rw_fetch_open_draft_prs() {
+  :
+}
+review_watch_check
+if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
+  fail "CORRECTNESS REGRESSION (issue #96): a PR no longer open+draft should produce zero calls: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
+else
+  pass "issue #96: a PR no longer open+draft (already ready/merged) is a structural no-op"
+fi
+
+echo "== review_watch_check: a draft PR with no resolvable issue (no Closes/Fixes/Resolves, no feature/issue-N branch) is skipped, not guessed at =="
+: > "$RW_GH_CALLS"
+: > "$RW_NOTIFY_CALLS"
+rw_fetch_open_draft_prs() {
+  printf '204\tSome PR\tno linked issue here\tsome-random-branch\n'
+}
+rw_fetch_pr_comments() {
+  printf '2026-07-21T10:00:00Z\tAPPROVE: looks good\n'
+}
+review_watch_check
+if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
+  fail "a draft PR with no resolvable issue should never be delivered: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
+else
+  pass "issue #96: a draft PR with no resolvable issue is skipped"
+fi
+
+echo "== review round 2 (agy finding 1): rw_latest_verdict against the REAL (unmocked) rw_fetch_pr_comments -- every test above mocked rw_fetch_pr_comments directly and never actually exercised the real jq newline-sentinel pipeline at all =="
+# CI fix round: a declare-f/eval restore-dance was tried here first -- it
+# broke a LATER test (T33 merge_watch_check) in a way that only reproduced
+# on the CI runner's bash (5.2), not this machine's (3.2), confirmed by
+# reproducing in a matching Docker container before touching anything.
+# Replaced with the sturdier pattern: each assertion below runs inside its
+# OWN command-substitution subshell. A subshell's source/function-
+# overrides/unset -f all die with it -- the parent script (and every test
+# after this block, on any bash version) never observes them at all.
+# Nothing to restore afterward, nothing to get wrong.
+cat > "$TMP/rw-fixture-301.json" <<'EOF'
+{"comments": [{"createdAt": "2026-01-01T00:00:00Z", "body": "APPROVE:\n\nProbe 1: verified input handling.\nProbe 2: verified the guard rule.\nLooks good."}]}
+EOF
+RW_VERDICT_301="$(
+  source "$LIB/watch.sh"
+  # gh own --jq flag runs jq inside the gh binary -- overriding the gh
+  # shell function loses that entirely unless the mock replicates it.
+  # This mock forwards the REAL --jq expression rw_fetch_pr_comments
+  # actually passes to a REAL local jq run against a canned fixture file,
+  # so this is genuine coverage of the sentinel gsub/implode + tr restore
+  # logic, not a re-mock of the thing under test. Confined to THIS
+  # subshell only. No backticks or apostrophes in comments inside this
+  # subshell body -- confirmed live that bash can break its own syntax
+  # check on that combination specifically inside a command substitution,
+  # even though the identical text is fine as a top-level comment.
+  gh() {
+    if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+      local pr="$3" jqexpr="" fixture="$TMP/rw-fixture-$3.json"
+      shift 3
+      while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--jq" ]; then jqexpr="$2"; break; fi
+        shift
+      done
+      [ -n "$jqexpr" ] && [ -f "$fixture" ] && jq -r "$jqexpr" "$fixture" 2>/dev/null
+      return 0
+    fi
+  }
+  rw_latest_verdict 301
+)"
+if [ "$RW_VERDICT_301" = "APPROVE" ]; then
+  pass "issue #96 review round 2: a genuine multi-line APPROVE comment (verdict line + probe list on later lines) restores correctly through the real jq pipeline and start-anchors as APPROVE"
+else
+  fail "CORRECTNESS REGRESSION (issue #96 review round 2): expected APPROVE from a multi-line verdict comment via the real jq pipeline, got '$RW_VERDICT_301'"
+fi
+
+cat > "$TMP/rw-fixture-302.json" <<'EOF'
+{"comments": [{"createdAt": "2026-01-01T00:00:00Z", "body": "REQUEST-CHANGES:\n\nProbe 1: found an issue with error handling.\nA quoted example in the finding: \"> APPROVE: not yet\" -- do not treat this as a real verdict.\nPlease fix and re-request review."}]}
+EOF
+RW_VERDICT_302="$(
+  source "$LIB/watch.sh"
+  gh() {
+    if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+      local pr="$3" jqexpr="" fixture="$TMP/rw-fixture-$3.json"
+      shift 3
+      while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--jq" ]; then jqexpr="$2"; break; fi
+        shift
+      done
+      [ -n "$jqexpr" ] && [ -f "$fixture" ] && jq -r "$jqexpr" "$fixture" 2>/dev/null
+      return 0
+    fi
+  }
+  rw_latest_verdict 302
+)"
+if [ "$RW_VERDICT_302" = "REQUEST-CHANGES" ]; then
+  pass "issue #96 review round 2: a comment whose LATER line contains 'APPROVE:' (quoted/prose) does NOT match -- the anchor applies to the true first line only, via the real jq pipeline"
+else
+  fail "CORRECTNESS REGRESSION (issue #96 review round 2): a later-line 'APPROVE:' mention should never override the comment's true first-line verdict, got '$RW_VERDICT_302' (expected REQUEST-CHANGES)"
+fi
+rm -f "$TMP/rw-fixture-301.json" "$TMP/rw-fixture-302.json"
 
 echo "== deferred-nudge retry (live, isolated panes) =="
 tmux new-session -d -s "$TEST_SESSION" -n main
