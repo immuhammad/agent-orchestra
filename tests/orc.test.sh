@@ -337,9 +337,16 @@ TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119OV_SESSION" 2>/dev/null 
 
 echo "== issue #119: \$TMUX set but no attached client (empty display-message) falls through to the loud tiled fallback, not a crash =="
 T119EMPTY_STUB_DIR="$(mktemp -d)"
+# agy review round 1 (PR #123): a real client-less tmux server does NOT
+# print nothing for #{client_width}/#{client_height} -- confirmed live, it
+# prints a single space + newline. Echoing genuinely nothing here was a
+# dishonest mock that masked the bin/orc bug this fix addresses (a bare
+# `[ -n "$client_size" ]` treated " " as valid, then parsed empty
+# term_cols/term_lines out of it).
 cat > "$T119EMPTY_STUB_DIR/tmux" <<STUB
 #!/bin/bash
 if [ "\$1" = "display-message" ] && [ "\$2" = "-p" ] && [ "\$3" = "#{client_width} #{client_height}" ]; then
+  echo " "
   exit 0
 fi
 exec "$REAL_TMUX" "\$@"

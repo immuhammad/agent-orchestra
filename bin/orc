@@ -144,7 +144,7 @@ orc_build_session() {
   if [ -n "${ORC_TERM_COLS:-}" ] && [ -n "${ORC_TERM_LINES:-}" ]; then
     term_cols="$ORC_TERM_COLS"
     term_lines="$ORC_TERM_LINES"
-  elif [ -n "${TMUX:-}" ] && client_size="$(tmux display-message -p '#{client_width} #{client_height}' 2>/dev/null)" && [ -n "$client_size" ]; then
+  elif [ -n "${TMUX:-}" ] && client_size="$(tmux display-message -p '#{client_width} #{client_height}' 2>/dev/null)" && [[ "$client_size" =~ ^[0-9]+\ [0-9]+$ ]]; then
     # issue #119: `orc up` run from INSIDE an already-attached tmux client
     # (a human's outer terminal is itself a tmux pane) measures the
     # CALLING PANE's own geometry via tput below, not the actual physical
@@ -152,8 +152,19 @@ orc_build_session() {
     # where the calling pane was narrower than the real attached client,
     # tripping the loud tiled fallback for no real reason. Size from the
     # attached CLIENT instead whenever $TMUX is set (ORC_TERM_COLS/LINES
-    # above still wins outright). No attached client (empty output) falls
-    # through to the tput/none chain below unchanged.
+    # above still wins outright).
+    #
+    # agy review round 1 (PR #123): a session with NO attached client (the
+    # exact case this fallthrough needs to handle) doesn't make
+    # `#{client_width} #{client_height}` print nothing -- confirmed live,
+    # tmux prints a single space + newline instead. A bare `[ -n
+    # "$client_size" ]` treated that as success, then `${client_size%%
+    # *}`/`${client_size##* }` on " " both yield EMPTY strings, and the
+    # numeric comparisons below then threw a raw "integer expression
+    # expected" to stderr instead of falling through cleanly. Anchored
+    # regex requires two actual positive integers -- a lone space (or any
+    # other non-numeric noise) now falls through to the tput/none chain
+    # below, same as genuinely empty output.
     term_cols="${client_size%% *}"
     term_lines="${client_size##* }"
     echo "orc: sizing room at ${term_cols}x${term_lines} (source: attached tmux client)"
