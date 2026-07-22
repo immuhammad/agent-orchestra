@@ -330,7 +330,7 @@ while true; do
       gk_alert_orchestra "quota-both" "quota critical — BOTH pools over threshold (claude>=${CLAUDE_THRESHOLD}% agy>=${AGY_THRESHOLD}%). Follow AGENTS.md failsafe: update handoff, then HOLD. No fallback available."
       gk_say "Both quota pools exhausted"
       gk_mark_alerted claude_5h; gk_mark_alerted agy
-      ar_mark_pending "$NOTIFY_SESSION:0.0"
+      ar_mark_pending "$NOTIFY_SESSION:0.0" "driver"
       # #10 (rework finding 5): carry the 5h resets_at even for "both" --
       # agy's pool still has no epoch to auto-clear against, so this alone
       # can't fully lift the gate, but ar_clear_quota_stop_flag_if_reset
@@ -347,7 +347,7 @@ while true; do
       gk_alert_orchestra "quota-5h" "quota Claude 5h at ${USAGE_PCT}% — follow AGENTS.md failsafe. Fallback available: agy."
       gk_say "Claude quota threshold"
       gk_mark_alerted claude_5h
-      ar_mark_pending "$NOTIFY_SESSION:0.0"
+      ar_mark_pending "$NOTIFY_SESSION:0.0" "driver"
       # #10: 5h is the one pool with a resets_at we can epoch-compare, so
       # this flag auto-clears on the real window reset (see
       # ar_clear_quota_stop_flag_if_reset, called below every iteration).

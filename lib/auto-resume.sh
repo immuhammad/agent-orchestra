@@ -12,6 +12,15 @@
 #   it in. If anything about that pane changed since parking -- Ahmad
 #   answered it, it crashed, it moved on some other way -- auto-resume backs
 #   off silently (well, loudly in the log) rather than guessing.
+# - Each tracked pane carries a role ("driver" for the Orchestra pane,
+#   "worker" otherwise -- see ar_mark_pending). The parked-state ownership
+#   test differs by role (issue #73): workers use exact raw-fingerprint
+#   equality; the driver instead re-checks whether the AGENTS.md failsafe
+#   question is STILL present in its tail, since the driver pane keeps
+#   accumulating passive output (gatekeeper alerts, watch nudges) while
+#   parked -- that would otherwise always drift its raw fingerprint even
+#   though it never actually moved past the question (see
+#   ar_pane_still_owned).
 #
 # State machine per tracked pane (persisted in AUTO_RESUME_STATE_FILE so it
 # survives a gatekeeper.sh restart -- exactly the kind of restart T19's
@@ -20,8 +29,8 @@
 #   pending --[scrollback shows the AGENTS.md failsafe question]--> parked
 #     (fingerprint + the five_hour resets_at at the moment of parking are
 #     recorded)
-#   parked --[scrollback fingerprint changed]--> dropped (touched, not ours
-#     to resume anymore)
+#   parked --[ownership test fails, see ar_pane_still_owned]--> dropped
+#     (touched or moved on, not ours to resume anymore)
 #   parked --[five_hour resets_at has advanced past the parked value]-->
 #     re-check the fingerprint one more time, then either resume (if budget
 #     remains) or skip (budget exhausted) -- either way the pane's tracking
@@ -152,6 +161,71 @@ ar_fingerprint() { # $1 = tmux pane target
   ar_meaningful_tail "$1" | ar_normalize | shasum -a 256 | awk '{print $1}'
 }
 
+# ar_still_at_failsafe_question <pane target> -- true if the AGENTS.md
+# failsafe question is STILL the thing the driver pane is sitting at,
+# right now. Issue #73 fix round (agy REQUEST-CHANGES): an earlier
+# version searched the WHOLE flattened tail as one unanchored substring,
+# which wrongly matched (a) while a human was mid-answering on the input
+# line right below the question, and (b) when the question text was
+# merely quoted/referenced in later prose -- either would let
+# auto-continue inject over live human input or a long-settled pane.
+# Now: the marker must END-anchor its OWN line (rejects a quoted mention
+# embedded in a longer sentence -- prose almost never happens to end a
+# line exactly on "Pick one." with nothing after); the tail-most matching
+# line must then have nothing but bare, empty prompt lines after it
+# (>/❯ for a real Claude Code TUI, same bare-prompt shape dispatch.sh's
+# pane_is_idle already uses; a line simply ENDING in $ for this test
+# suite's plain-shell fixture, whose default prompt carries a leading
+# shell/version prefix like "sh-3.2$" -- see
+# tests/auto-resume.test.sh's simulate_parked_pane). Any
+# real content there (an answer being typed, anything else) means the
+# pane has moved on and this returns false, not a guess. Known limit:
+# unlike the pending->parked transition, this does NOT flatten newlines
+# to undo tmux's mid-word hard-wrap, so an unusually narrow pane could
+# occasionally fail to re-match a genuinely still-pending question --
+# accepted deliberately, since that fails toward "drop tracking, no
+# auto-continue" (safe) rather than toward injecting over a live pane
+# (unsafe), matching dispatch.sh's own "on doubt, treat as busy" posture.
+ar_still_at_failsafe_question() { # $1 = pane target
+  local pane="$1" tail line last_q_idx=-1 idx=0
+  local -a lines
+  tail="$(ar_meaningful_tail "$pane")"
+  [ -z "$tail" ] && return 1
+  while IFS= read -r line; do
+    lines+=("$line")
+    if echo "$line" | grep -Eq "${AR_PARK_MARKER}[[:space:]]*\$"; then
+      last_q_idx=$idx
+    fi
+    idx=$((idx + 1))
+  done <<< "$tail"
+  [ "$last_q_idx" -lt 0 ] && return 1
+  local n="${#lines[@]}"
+  for ((idx = last_q_idx + 1; idx < n; idx++)); do
+    if ! echo "${lines[idx]}" | grep -Eq '^[[:space:]]*[>❯][[:space:]]*$|\$[[:space:]]*$'; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+# ar_pane_still_owned <pane> <role> <stored fingerprint> <current tail
+# fingerprint> -- the parked-state ownership test ("amux: only unblock
+# what you parked"). Workers: exact raw-fingerprint equality, unchanged
+# since #80. Driver (issue #73): anchored to whether the failsafe question
+# is still visible instead, since the driver's raw fingerprint never
+# stays stable while parked (gatekeeper alerts/watch nudges land in the
+# same pane) even when it never moved past the question. Shared by both
+# the initial ownership check and the pre-resume re-check below so the two
+# can't drift apart.
+ar_pane_still_owned() { # $1 = pane, $2 = role, $3 = stored fp, $4 = current fp
+  local pane="$1" role="$2" stored_fp="$3" current_fp="$4"
+  if [ "$role" = "driver" ]; then
+    ar_still_at_failsafe_question "$pane"
+  else
+    [ "$current_fp" = "$stored_fp" ]
+  fi
+}
+
 ar_ensure_state_file() {
   if [ ! -f "$AR_STATE_FILE" ]; then
     jq -n --arg today "$(ar_today)" \
@@ -194,11 +268,11 @@ ar_log() { # $1 = message
 # Start (or no-op if already) tracking a pane as a threshold-crossing
 # candidate. Idempotent: never clobbers an existing pending/parked entry,
 # so calling this every gatekeeper iteration while over threshold is safe.
-ar_mark_pending() { # $1 = pane target
-  local pane="$1" existing
+ar_mark_pending() { # $1 = pane target, $2 = role ("driver" for the Orchestra pane -- see ar_pane_still_owned; omitted/anything else keeps today's worker semantics)
+  local pane="$1" role="${2:-worker}" existing
   existing="$(ar_read --arg p "$pane" '.panes[$p].state // empty')"
   if [ -z "$existing" ]; then
-    ar_write --arg p "$pane" '.panes[$p] = {state: "pending", fingerprint: null, resets_at: null}'
+    ar_write --arg p "$pane" --arg role "$role" '.panes[$p] = {state: "pending", fingerprint: null, resets_at: null, role: $role}'
     ar_log "watching $pane (usage over threshold, waiting for the failsafe question to appear before treating it as parked)"
   fi
 }
@@ -227,19 +301,22 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
     # reconstructs the original unbroken text.
     tail_text="$(ar_meaningful_tail "$pane" | tr -d '\n')"
     if echo "$tail_text" | grep -Eq "$AR_PARK_MARKER"; then
-      ar_write --arg p "$pane" --arg fp "$tail_fp" --arg r "$current_resets_at" \
-        '.panes[$p] = {state: "parked", fingerprint: $fp, resets_at: $r}'
+      local role
+      role="$(ar_read --arg p "$pane" '.panes[$p].role // "worker"')"
+      ar_write --arg p "$pane" --arg fp "$tail_fp" --arg r "$current_resets_at" --arg role "$role" \
+        '.panes[$p] = {state: "parked", fingerprint: $fp, resets_at: $r, role: $role}'
       ar_log "parked $pane (failsafe question detected, 5h window resets at $current_resets_at)"
     fi
     return 0
   fi
 
   if [ "$state" = "parked" ]; then
-    local stored_fp stored_resets_at
+    local stored_fp stored_resets_at role
     stored_fp="$(ar_read --arg p "$pane" '.panes[$p].fingerprint')"
     stored_resets_at="$(ar_read --arg p "$pane" '.panes[$p].resets_at')"
+    role="$(ar_read --arg p "$pane" '.panes[$p].role // "worker"')"
 
-    if [ "$tail_fp" != "$stored_fp" ]; then
+    if ! ar_pane_still_owned "$pane" "$role" "$stored_fp" "$tail_fp"; then
       ar_log "$pane changed since parking -- not ours to resume anymore (amux: only unblock what you parked), dropping tracking"
       ar_write --arg p "$pane" 'del(.panes[$p])'
       return 0
@@ -270,7 +347,7 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
       # possible read, not a value computed earlier in this function).
       local recheck_fp
       recheck_fp="$(ar_fingerprint "$pane")"
-      if [ "$recheck_fp" != "$stored_fp" ]; then
+      if ! ar_pane_still_owned "$pane" "$role" "$stored_fp" "$recheck_fp"; then
         ar_log "$pane changed between reset-detection and re-check -- skipping resume, dropping tracking"
         ar_write --arg p "$pane" 'del(.panes[$p])'
         return 0

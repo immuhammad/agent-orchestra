@@ -85,10 +85,20 @@ new_test_pane() {
 # scrollback, simulating a Claude session that received gatekeeper's nudge
 # and (per AGENTS.md) responded with the fixed failsafe question. Verifies
 # and retries a couple of times rather than trusting a single fixed sleep.
+# Issue #73 fix round: prefixed with a shell comment marker ("# ") -- a
+# plain `sh` pane treats raw text as an attempted command and prints a
+# "not found" error line right after it, which the driver's new
+# line-position-sensitive ownership test (ar_still_at_failsafe_question)
+# would see as real trailing content and wrongly read as moved-on. "# "
+# makes `sh` treat the line as a no-op comment (still echoed to the pane
+# by tty echo, so "Pick one." is still visible, matching the retry check
+# below), leaving a bare prompt as the true next line -- a much closer
+# simulation of a real TUI's own output (no interpreted-command error
+# noise) than the raw text this used before.
 simulate_parked_pane() { # $1 = pane
   local attempt waited
   for attempt in 1 2 3; do
-    write_to_pane "$1" "Quota 5h at 82%. Options: (a) switch to agy (b) throttle models (c) continue. Pick one."
+    write_to_pane "$1" "# Quota 5h at 82%. Options: (a) switch to agy (b) throttle models (c) continue. Pick one."
     waited=0
     while [ "$waited" -lt 5 ]; do
       if tmux capture-pane -p -t "$1" 2>/dev/null | grep -qF "Pick one."; then
@@ -265,6 +275,211 @@ if [ "$(ar_read '.budget.count')" = "2" ]; then
   pass "touched-pane skip did not consume any budget"
 else
   fail "touched-pane skip must not spend budget, got count=$(ar_read '.budget.count')"
+fi
+
+echo "== #73: parked DRIVER pane + interleaved passive output + window reset -> auto-continues =="
+# Prior fix (#80) normalizes away KNOWN volatile TUI chrome (counters/
+# timers), but the driver pane accumulates genuinely NEW passive content
+# while parked too -- gatekeeper alerts and watch nudges landing in the
+# SAME pane the failsafe question is sitting in. That's real, distinct
+# text, not a repaint, so #80's normalization does not (and should not)
+# hide it -- the raw fingerprint genuinely changes. Pre-#73, the driver's
+# parked-state ownership test was still plain fingerprint equality, so
+# that alone dropped tracking and the room stayed parked forever even
+# after the window reset (the live 2026-07-13 budget.log incident).
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+ar_write '.budget.count = 0' # isolate this section's budget assertions
+PANE5="$(new_test_pane)"
+simulate_parked_pane "$PANE5"
+ar_mark_pending "$PANE5" "driver"
+ar_poll_pane "$PANE5" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE5" '.panes[$p].state')" = "parked" ] && [ "$(ar_read --arg p "$PANE5" '.panes[$p].role')" = "driver" ]; then
+  pass "#73: driver pane parks with role=driver recorded"
+else
+  fail "#73: driver pane should park with role=driver in the state file"
+fi
+
+FP_AT_PARK="$(ar_fingerprint "$PANE5")"
+# Interleaved passive output: a gatekeeper alert / watch nudge lands in
+# the driver pane, gets submitted (nudge_agent only fires on an idle
+# pane, and a pane sitting at an empty failsafe prompt reads as idle to
+# dispatch.sh's pane_is_idle), and per AGENTS.md's own quota-failsafe
+# discipline Claude re-states the SAME fixed question again at the end of
+# its reply if still blocked -- so the tail-most occurrence keeps moving
+# forward each cycle while nothing ever follows it. That re-statement is
+# what the fix-round's line-position-sensitive check actually keys off of
+# (see ar_still_at_failsafe_question); the fingerprint drift is real and
+# unavoidable regardless.
+write_to_pane "$PANE5" "# gatekeeper: FYI -- PR #200 opened, auto-merge armed"
+sleep 0.3
+write_to_pane "$PANE5" "# Quota 5h at 82%. Options: (a) switch to agy (b) throttle models (c) continue. Pick one."
+sleep 0.5
+if [ "$(ar_fingerprint "$PANE5")" != "$FP_AT_PARK" ]; then
+  pass "#73 setup check: the interleaved passive output genuinely changed the raw fingerprint (confirms this exercises the fix, not a no-op)"
+else
+  fail "#73 setup check: interleaved write did not change the raw fingerprint -- test would not actually exercise the fix"
+fi
+
+ar_poll_pane "$PANE5" "2026-07-11T14:00:00Z" "85" # no reset yet
+if [ "$(ar_read --arg p "$PANE5" '.panes[$p].state')" = "parked" ]; then
+  pass "#73: driver pane stays parked despite interleaved passive output (question still visible, no reset yet)"
+else
+  fail "#73 REGRESSION: driver pane's tracking was dropped by passive output alone, before any reset"
+fi
+
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
+ar_poll_pane "$PANE5" "2026-07-11T19:00:00Z" "10" # window reset + low usage
+if [ "$(ar_read --arg p "$PANE5" '.panes[$p] // empty')" = "" ]; then
+  pass "#73: driver pane's tracking cleared after the reset was handled"
+else
+  fail "#73 REGRESSION: driver pane never auto-continued -- tracking still present after a genuine reset"
+fi
+if tmux capture-pane -p -t "$PANE5" 2>&1 | grep -q "auto-resuming"; then
+  pass "#73: driver pane received the auto-resume message despite interleaved passive output while parked"
+else
+  fail "#73 REGRESSION (the live incident): driver pane never got auto-continued after the window reset"
+fi
+if [ "$(ar_read '.budget.count')" = "1" ]; then
+  pass "#73: driver auto-resume consumed budget normally"
+else
+  fail "#73: expected budget count 1 after the driver auto-resume, got $(ar_read '.budget.count')"
+fi
+
+echo "== #73: parked DRIVER pane where the question was ANSWERED (pane moved on) -> no injection, tracking dropped =="
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+PANE6="$(new_test_pane)"
+simulate_parked_pane "$PANE6"
+ar_mark_pending "$PANE6" "driver"
+ar_poll_pane "$PANE6" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE6" '.panes[$p].state')" != "parked" ]; then
+  fail "#73 setup failed: pane6 should be parked before the answered-question test"
+fi
+# Simulate Ahmad answering: enough new content that the pane's visible
+# screen genuinely scrolls the original failsafe question off -- a real
+# TUI redraw on an actual answer looks like this, not like a line quietly
+# appended below an otherwise-still-visible question.
+write_to_pane "$PANE6" "$(seq 1 60)
+Ahmad: (c) continue"
+sleep 0.5
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
+ar_poll_pane "$PANE6" "2026-07-11T19:00:00Z" "10" # window reset + low usage, but the question is gone
+if [ "$(ar_read --arg p "$PANE6" '.panes[$p] // empty')" = "" ]; then
+  pass "#73: answered driver pane's tracking was dropped"
+else
+  fail "#73: answered driver pane should have its tracking dropped, not left parked"
+fi
+if tmux capture-pane -p -t "$PANE6" 2>&1 | grep -q "auto-resuming"; then
+  fail "#73 REGRESSION: auto-resume injected into a driver pane where the question had already been answered"
+else
+  pass "#73: no auto-resume injected once the driver pane moved past the question"
+fi
+if grep -q "not ours to resume anymore" "$AUTO_RESUME_LOG"; then
+  pass "#73: answered-driver skip was logged with the amux rationale"
+else
+  fail "#73: expected a 'not ours to resume anymore' log line for the answered driver pane"
+fi
+
+echo "== #73: parked WORKER pane semantics unchanged (role=worker explicit) =="
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+PANE7="$(new_test_pane)"
+simulate_parked_pane "$PANE7"
+ar_mark_pending "$PANE7" "worker"
+ar_poll_pane "$PANE7" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE7" '.panes[$p].state')" = "parked" ] && [ "$(ar_read --arg p "$PANE7" '.panes[$p].role')" = "worker" ]; then
+  pass "#73: explicit role=worker pane parks normally"
+else
+  fail "#73: explicit role=worker pane should park with role=worker recorded"
+fi
+# The SAME interleaved passive output a driver pane must tolerate should
+# still drop a worker's tracking -- worker semantics are exact fingerprint
+# equality, unchanged by #73.
+write_to_pane "$PANE7" "gatekeeper: FYI -- PR #200 opened, auto-merge armed"
+sleep 0.5
+ar_poll_pane "$PANE7" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE7" '.panes[$p] // empty')" = "" ]; then
+  pass "#73: worker pane's tracking still drops on ANY change, unlike the driver (semantics unchanged)"
+else
+  fail "#73 REGRESSION: worker pane ownership test should still be exact-fingerprint equality, not the driver's question-presence test"
+fi
+
+echo "== #73: window NOT reset -> no action regardless (driver) =="
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+PANE8="$(new_test_pane)"
+simulate_parked_pane "$PANE8"
+ar_mark_pending "$PANE8" "driver"
+ar_poll_pane "$PANE8" "2026-07-11T14:00:00Z" "85"
+ar_poll_pane "$PANE8" "2026-07-11T14:00:00Z" "85" # unchanged resets_at, now still before it
+if [ "$(ar_read --arg p "$PANE8" '.panes[$p].state')" = "parked" ]; then
+  pass "#73: driver pane with no window reset yet stays parked, no action taken"
+else
+  fail "#73: driver pane should stay parked when the window has not actually reset"
+fi
+if tmux capture-pane -p -t "$PANE8" 2>&1 | grep -q "auto-resuming"; then
+  fail "#73 REGRESSION: driver pane was auto-resumed despite no window reset"
+else
+  pass "#73: no premature auto-resume for the driver without a real window reset"
+fi
+
+echo "== #73 fix round (agy REQUEST-CHANGES probe 1): parked DRIVER + human mid-typing an unsubmitted answer -> NO injection, tracking dropped =="
+# agy: an earlier version's flattened, unanchored substring search would
+# still match the question even with a human's real, in-progress answer
+# sitting on the very next line -- auto-continue would then clobber that
+# input. The fixed ownership test requires nothing but a bare/empty
+# prompt line after the tail-most question match; any real content there
+# (this line) must read as moved-on.
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+ar_write '.budget.count = 0' # isolate from budget exhaustion in earlier sections
+PANE9="$(new_test_pane)"
+simulate_parked_pane "$PANE9"
+ar_mark_pending "$PANE9" "driver"
+ar_poll_pane "$PANE9" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE9" '.panes[$p].state')" != "parked" ]; then
+  fail "#73 fix round setup failed: pane9 should be parked before the mid-typing test"
+fi
+write_to_pane "$PANE9" "> (c) "
+sleep 0.5
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
+ar_poll_pane "$PANE9" "2026-07-11T19:00:00Z" "10" # window reset + low usage, but a human is mid-answering
+if [ "$(ar_read --arg p "$PANE9" '.panes[$p] // empty')" = "" ]; then
+  pass "#73 fix round: driver pane with a human mid-typing its tracking was dropped"
+else
+  fail "#73 fix round REGRESSION: driver pane kept tracking a human's in-progress answer instead of dropping it"
+fi
+if tmux capture-pane -p -t "$PANE9" 2>&1 | grep -q "auto-resuming"; then
+  fail "#73 fix round REGRESSION (agy probe 1): auto-continue clobbered a human's in-progress answer to the failsafe question"
+else
+  pass "#73 fix round: no injection over a human's in-progress answer"
+fi
+
+echo "== #73 fix round (agy REQUEST-CHANGES probe 1): parked DRIVER + question text merely QUOTED in later prose -> NO injection, tracking dropped =="
+# agy: the same unanchored substring search would also match a later
+# line that merely QUOTES or references the question in passing (e.g. a
+# status recap), even though the real occurrence was answered/resolved
+# long ago. The line-anchored, end-anchored match rejects this: prose
+# wrapped around the quote means that line never end-anchors on "Pick
+# one." the way the real, standalone question line does.
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+ar_write '.budget.count = 0' # isolate from budget exhaustion in earlier sections
+PANE10="$(new_test_pane)"
+simulate_parked_pane "$PANE10"
+ar_mark_pending "$PANE10" "driver"
+ar_poll_pane "$PANE10" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE10" '.panes[$p].state')" != "parked" ]; then
+  fail "#73 fix round setup failed: pane10 should be parked before the quoted-mention test"
+fi
+write_to_pane "$PANE10" "Orchestra note: earlier the driver asked -- quoting -- Quota 5h at 82%. Options: (a) switch to agy (b) throttle models (c) continue. Pick one. -- already resolved 20 min ago"
+sleep 0.5
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
+ar_poll_pane "$PANE10" "2026-07-11T19:00:00Z" "10" # window reset + low usage, but only a quoted mention remains
+if [ "$(ar_read --arg p "$PANE10" '.panes[$p] // empty')" = "" ]; then
+  pass "#73 fix round: driver pane with only a quoted mention of the question had its tracking dropped"
+else
+  fail "#73 fix round REGRESSION: driver pane treated a quoted mention as still parked"
+fi
+if tmux capture-pane -p -t "$PANE10" 2>&1 | grep -q "auto-resuming"; then
+  fail "#73 fix round REGRESSION (agy probe 1): auto-continue fired off a quoted mention of the question, not the real thing"
+else
+  pass "#73 fix round: no injection off a quoted mention of the question"
 fi
 
 echo "== #80: a benign in-place repaint (counter/timer) normalizes identically =="
