@@ -300,7 +300,7 @@ ORC_TEMPLATES_DIR="$ORC_SCRIPT_DIR/../templates"
 # ordinary shell-assignment semantics.
 orc_init_read_answer() {
   local file="$1" key="$2" default="${3:-}" val
-  val="$(awk -F'=' -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); v = $0 } END { print v }' "$file" 2>/dev/null)"
+  val="$(awk -F'=' -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); v = $0 } END { print v }' < "$file" 2>/dev/null)"
   echo "${val:-$default}"
 }
 
@@ -457,10 +457,30 @@ orc_init_core() {
     echo "orc init: no such answers file: $answers_file" >&2
     return 1
   fi
-  mkdir -p "$target"
-  target="$(cd "$target" && pwd)"
+  # agy PR #117 finding 1: `cd "$target"` with target="-" is bash's own
+  # "cd to $OLDPWD" shorthand, matched on the LITERAL value regardless of
+  # quoting -- silently redirecting every write to the wrong directory.
+  # Verified `cd -- "-"` does NOT actually suppress this (bash's cd
+  # builtin special-cases a bare "-" even after `--`); a relative target
+  # forced through "./" does, since it's then no longer the exact string
+  # "-". An absolute target is left alone -- prefixing an absolute path
+  # with "./" produces a leading "..//" that this bash's cd fails to
+  # resolve, confirmed live.
+  case "$target" in
+    /*) : ;;
+    *) target="./$target" ;;
+  esac
+  mkdir -p -- "$target"
+  target="$(cd -- "$target" && pwd)"
 
-  if [ -f "$target/orchestrator.yaml" ]; then
+  # agy PR #117 finding 2: `-f` is false for a broken symlink (its target
+  # doesn't exist), so a stale/broken orchestrator.yaml symlink at the
+  # target would sail past this refusal check, and the write below would
+  # then follow the symlink and land wherever it points. `-e` (follows
+  # and requires the resolved target to exist) OR `-L` (true for ANY
+  # symlink, broken or not) together catch every case: a real file, a
+  # working symlink, and a broken one.
+  if [ -e "$target/orchestrator.yaml" ] || [ -L "$target/orchestrator.yaml" ]; then
     echo "orc init: REFUSE -- $target/orchestrator.yaml already exists. orc init never overwrites an already-initialized project (no --force in this version)." >&2
     return 1
   fi
@@ -476,7 +496,13 @@ orc_init_core() {
   paths="$(orc_init_read_answer "$answers_file" PROTECTED_PATHS)"
   gate="$(orc_init_read_answer "$answers_file" GATE_APPROVER "the human running this harness")"
 
-  {
+  # agy PR #117 finding 3: TOCTOU between the -e/-L refusal check above
+  # and this write -- noclobber makes the write itself an atomic
+  # create-only operation at the filesystem level, so a file that
+  # appears in that window (a second orc init racing the same target)
+  # fails the write instead of silently overwriting it.
+  set -o noclobber
+  if ! {
     echo "project: $project"
     echo "integration_branch: $branch"
     echo ""
@@ -504,7 +530,12 @@ orc_init_core() {
     echo "    failsafe_pct: $(orc_init_read_answer "$answers_file" BUDGET_CLAUDE_PCT 80)"
     echo "  agy:"
     echo "    failsafe_pct: $(orc_init_read_answer "$answers_file" BUDGET_AGY_PCT 80)"
-  } > "$target/orchestrator.yaml"
+  } > "$target/orchestrator.yaml" 2>/dev/null; then
+    set +o noclobber
+    echo "orc init: REFUSE -- $target/orchestrator.yaml appeared between the check above and this write (race with another orc init?). orc init never overwrites an already-initialized project." >&2
+    return 1
+  fi
+  set +o noclobber
 
   orc_init_render_agents_md "$answers_file" "$ORC_TEMPLATES_DIR/AGENTS.md" "$target/AGENTS.md"
   orc_init_render_project_doc "$ORC_TEMPLATES_DIR/CLAUDE.md" "$target/CLAUDE.md" "$project"

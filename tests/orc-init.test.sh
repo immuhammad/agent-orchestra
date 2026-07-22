@@ -159,6 +159,78 @@ else
   fail "expected integration_branch default 'main', got '$MIN_BRANCH'"
 fi
 
+echo "== agy PR #117 finding 1: target '-' does not silently redirect writes to \$OLDPWD =="
+# Verified live: bash's cd builtin special-cases a bare "-" as "go to
+# \$OLDPWD" even with a preceding "--" (agy's first suggested fix alone
+# does not actually work on this bash) -- only forcing a RELATIVE target
+# through "./" defeats it, since it's then no longer the exact string
+# "-". Set up a real \$OLDPWD (cd A, then cd B) so a regression would
+# have somewhere wrong to land.
+DASH_A="$TMP/dash-cwd-a"
+DASH_B="$TMP/dash-cwd-b"
+mkdir -p "$DASH_A" "$DASH_B"
+ANSWERS_DASH="$TMP/answers-dash.txt"
+full_answers "$ANSWERS_DASH"
+DASH_OUT="$(
+  cd "$DASH_A" || exit 1
+  cd "$DASH_B" || exit 1
+  bash "$ORC" init --answers "$ANSWERS_DASH" - 2>&1
+)"
+if [ -f "$DASH_B/-/orchestrator.yaml" ]; then
+  pass "target '-' creates a literal '-' directory under cwd, not \$OLDPWD"
+elif [ -f "$DASH_A/orchestrator.yaml" ]; then
+  fail "SECURITY REGRESSION (agy finding 1): target '-' silently wrote into \$OLDPWD ($DASH_A) instead of a literal '-' dir"
+else
+  fail "target '-' produced neither the expected '-' dir nor anything in \$OLDPWD: $DASH_OUT"
+fi
+
+echo "== agy PR #117 finding 2: a broken orchestrator.yaml symlink at the target is refused, never followed =="
+TARGET_SYMLINK="$TMP/room-symlink"
+mkdir -p "$TARGET_SYMLINK"
+BROKEN_LINK_DEST="$TMP/nonexistent-symlink-target"
+ln -s "$BROKEN_LINK_DEST" "$TARGET_SYMLINK/orchestrator.yaml"
+OUT="$(bash "$ORC" init --answers "$ANSWERS1" "$TARGET_SYMLINK" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -qi "REFUSE"; then
+  pass "a broken orchestrator.yaml symlink at the target is refused (exit non-zero, explicit REFUSE)"
+else
+  fail "SECURITY REGRESSION (agy finding 2): a broken symlink at the target should be refused, got status=$STATUS: $OUT"
+fi
+if [ ! -e "$BROKEN_LINK_DEST" ]; then
+  pass "the broken symlink's target was never created -- init never followed it to write there"
+else
+  fail "SECURITY REGRESSION (agy finding 2): init wrote through the broken symlink to $BROKEN_LINK_DEST"
+fi
+
+echo "== agy PR #117 finding 3: orchestrator.yaml is written with noclobber (TOCTOU hardening) =="
+# The refusal check above (finding 2) already covers the realistic
+# pre-existing-file/symlink cases; a genuine concurrent-process race is
+# impractical to reproduce deterministically in a single-threaded test
+# suite. This confirms the noclobber guard is actually present around
+# the orchestrator.yaml write, which is the mechanism the fix relies on.
+if awk '
+  /set -o noclobber/ { on = NR }
+  /} > "\$target\/orchestrator\.yaml"/ { if (on && NR - on < 40) found = 1 }
+  /set \+o noclobber/ { if (on && NR > on) off = 1 }
+  END { exit !(found && off) }
+' "$DIR/../bin/orc"; then
+  pass "orchestrator.yaml's write is wrapped in set -o noclobber / set +o noclobber"
+else
+  fail "expected the orchestrator.yaml write to be wrapped in noclobber on/off"
+fi
+
+echo "== agy PR #117 finding 4: an answers file literally named -v is read correctly (not parsed as an awk flag) =="
+ANSWERS_DASHV="$TMP/-v"
+full_answers "$ANSWERS_DASHV"
+TARGET_DASHV="$TMP/room-dashv"
+OUT="$(bash "$ORC" init --answers "$ANSWERS_DASHV" "$TARGET_DASHV" 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && grep -q 'project: smoke-test-project' "$TARGET_DASHV/orchestrator.yaml" 2>/dev/null; then
+  pass "an answers file named -v is read correctly, not misparsed as an awk option"
+else
+  fail "REGRESSION (agy finding 4): an answers file named -v broke the read, status=$STATUS: $OUT"
+fi
+
 echo "== FLAG ruling: TICKET_TRACKER shapes the PICK line's prose, GATE_APPROVER is not baked into AGENTS.md =="
 # issue #5 FLAG ruling: tickets-location/human-gates answers shape
 # GENERATED AGENTS.md prose only, never new orchestrator.yaml keys
