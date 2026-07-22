@@ -1,9 +1,9 @@
 #!/bin/bash
 # .harness/orc-worktree.sh {start|pause|resume|finish} <issue> [base-commit]
 #
-# Worktree-per-issue layer (T18, Q5c). Serial use for now -- one worktree
+# Worktree-per-issue layer. Serial use for now -- one worktree
 # active at a time is a convention, not an enforced lock; parallel Builders
-# is a later flag-flip (T18's plan note), not this script's job.
+# is a later flag-flip, not this script's job.
 #
 # The BRANCH is the durable unit; the worktree is disposable. git itself is
 # the source of truth for both (no separate state file to drift out of
@@ -32,7 +32,7 @@
 #   finish <issue> [extra-issue ...]
 #     Push feature/issue-<N> to origin and open a PR to uat (draft, per the
 #     current review-gated flow -- see AGENTS.md Dispatch Protocol). Body
-#     always includes "Closes #<issue>." (T30, issue #56 -- standardized so
+#     always includes "Closes #<issue>." (standardized so
 #     merge-watch can always find it); any extra issue numbers (bundled
 #     tickets sharing one branch/PR) each get their own "Closes #N." line
 #     too. Does NOT remove the worktree: a review may come back
@@ -48,7 +48,7 @@
 #     something this script should silently discard. Then deletes the local
 #     branch with `git branch -d` (never `-D`, matching the "this script
 #     never deletes a branch" rule below in spirit -- an unmerged branch
-#     must survive and get flagged too, per the T31 lesson that a merged PR
+#     must survive and get flagged too, since a merged PR
 #     doesn't necessarily absorb every commit that was ever pushed to its
 #     branch), and finally deletes the REMOTE branch too (#47 -- this never
 #     existed before; "GitHub's delete_branch_on_merge didn't fire" was
@@ -246,8 +246,8 @@ Closes #$extra."
 cmd_finish() {
   local issue="$1"
   shift
-  # T30 (issue #56): a ticket bundling more than one GitHub issue onto the
-  # same branch/PR (e.g. T24+T25 on #34+#40) used to get a PR body written
+  # A ticket bundling more than one GitHub issue onto the
+  # same branch/PR used to get a PR body written
   # by hand that sometimes dropped the "Closes #N" line entirely -- merge-
   # watch then silently skipped it. Any EXTRA issue numbers passed here get
   # their own "Closes #N" line too, so the standard template covers bundles

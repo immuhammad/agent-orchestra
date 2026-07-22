@@ -2,7 +2,7 @@
 # .harness/dispatch.sh <verb> <agent> <issue> <msg> [timeout_s]
 #
 # Three-verb file-inbox dispatch for ALL agents (orchestra, builder, agy,
-# copilot) -- replaces tmux-team/tmt (T17, Q1). A message is always a
+# copilot) -- replaces tmux-team/tmt. A message is always a
 # durable file (.harness/inbox/<agent>/<ts>-<issue>.msg); a receiver
 # acknowledges by writing the matching .ack next to it.
 #
@@ -49,7 +49,7 @@ fi
 # hooks/pane-state.sh writes to.
 PANE_STATE_DIR="$CANON_DIR/state/pane-state"
 
-# T24 (issue #34): deferred nudges used to be fire-and-forget -- if a nudge
+# Deferred nudges used to be fire-and-forget -- if a nudge
 # was skipped because the target pane was busy, nothing ever retried it, so
 # every busy-pane dispatch (copilot's, in practice) needed a manual
 # re-nudge. This file is a durable queue of agent names whose last nudge
@@ -146,7 +146,7 @@ pane_busy_markers() {
   echo '^[[:space:]]*(⣟|✢|✳|✻|✵|⏺|✶|✦|\*)|\([0-9]+[ms][^)]*tokens?\)|esc to interrupt|^[[:space:]]*(thinking|working|compacting|generating|running)\.\.\.[[:space:]]*$'
 }
 
-# Idle heuristic (T17 VERIFY: must be documented, not just implemented):
+# Idle heuristic:
 # - pane_current_command is a plain shell (bash/zsh/sh/fish, or empty) ->
 #   idle, nothing running in it. NOTE: Claude Code panes report
 #   pane_current_command as a version string (e.g. "2.1.206"), not
@@ -248,7 +248,7 @@ nudge_agent() {
     echo "dispatch.sh: no pane mapping for agent '$agent', skipping nudge" >&2
     return 0
   fi
-  # T24: check the session the TARGET pane actually lives in, not a
+  # Check the session the TARGET pane actually lives in, not a
   # hardcoded "harness" -- lets tests point pane_for_agent at a throwaway
   # session and exercise the busy/idle branches for real instead of only
   # ever hitting this early "no session" return (production targets are
@@ -272,7 +272,7 @@ nudge_agent() {
   fi
 }
 
-# scribe_spawn_headless <msg_file> <ack_file> -- issue #89 (T38): scribe has
+# scribe_spawn_headless <msg_file> <ack_file> -- issue #89: scribe has
 # no standing pane anymore (pane 3 retired -- no recurring scribe job
 # remained after #85's mechanical issue-close). A dispatch to scribe/copilot
 # spawns a ONE-SHOT headless run instead of nudging a pane: `claude -p
@@ -360,7 +360,7 @@ Do nothing else outside the scope of this message."
   ) &
 }
 
-# retry_deferred_nudges (T24) -- drains DEFERRED_FILE, re-attempting a nudge
+# retry_deferred_nudges -- drains DEFERRED_FILE, re-attempting a nudge
 # for each queued agent. An agent whose pane is idle now gets nudged (and
 # drops out of the queue); one still busy gets re-queued by the same
 # nudge_agent() call above, so nothing is lost across iterations.
@@ -492,7 +492,7 @@ dispatch_main() {
 
   [ "$VERB" = "assign" ] && return 0
 
-  # T30 (issue #56): an .ack is meant to be a RECEIPT -- a one-line "what was
+  # An .ack is meant to be a RECEIPT -- a one-line "what was
   # done / SKIPPED because X" -- not just a marker file. An empty (or
   # whitespace-only) .ack has been seen in the wild (15 stale backfill acks
   # found across agy/copilot's real inboxes, from before this rule

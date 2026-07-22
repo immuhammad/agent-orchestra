@@ -1,5 +1,5 @@
 #!/bin/bash
-# bin/orc — `orc up` (T21, issue #26): builds the tmux control room from
+# bin/orc — `orc up` builds the tmux control room from
 # orchestrator.yaml. Extracted from career-ops-harness's .harness/orc.sh
 # (epic #91a, issue #116) — ORC_SCRIPT_DIR now resolves to THIS repo's
 # bin/, so pane commands and the liveness watchdog are anchored to
@@ -83,7 +83,7 @@ orc_build_session() {
   mkdir -p ./.harness/inbox/orchestra ./.harness/inbox/builder \
     ./.harness/inbox/agy ./.harness/inbox/scribe
 
-  # issue #89 (T38): pane 3 (copilot/scribe) retired -- no recurring scribe
+  # issue #89: pane 3 (copilot/scribe) retired -- no recurring scribe
   # job remains after #85 (Builder writes PR bodies, watch.sh closes issues
   # mechanically), so scribe becomes an on-demand headless spawn
   # (dispatch.sh's assign/handoff to 'scribe', see nudge_agent) instead of a
@@ -214,7 +214,7 @@ orc_build_session() {
     tmux send-keys -t "$session:0.4" "$ORC_LIB_DIR/watch.sh" C-m
   fi
 
-  # Gatekeeper liveness watchdog (T19): independent process, not a pane in
+  # Gatekeeper liveness watchdog: independent process, not a pane in
   # the main session, so a gatekeeper crash/hang can't also silence its own
   # warning. Log lands in THIS clone's own state dir (./.harness/state,
   # cwd-relative -- clone-per-project means there's no shared install to

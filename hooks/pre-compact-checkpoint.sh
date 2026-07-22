@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/pre-compact-checkpoint.sh — PreCompact hook (T25, issue #40).
+# .harness/pre-compact-checkpoint.sh — PreCompact hook.
 #
 # Gap this closes: auto-compact is lossy (it distills the conversation into
 # a summary and drops the rest), and nothing forced a disk write before
@@ -46,7 +46,7 @@ if [ -n "$(git status --porcelain 2>/dev/null || true)" ]; then
   DIRTY_NOTE=" (uncommitted changes present)"
 fi
 
-# T31 (issue #68 item A): replace this hook's own section instead of
+# Replace this hook's own section instead of
 # appending a new dated one on every compaction -- handoff.md is a
 # ≤80-line current-state file now, not an append log.
 handoff_replace_section "$HANDOFF" "## COMPACT CHECKPOINT"

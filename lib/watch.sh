@@ -1,9 +1,8 @@
 #!/bin/bash
-# .harness/watch.sh — pane-5 watch loop (T24, issue #34). Replaces the old
+# .harness/watch.sh — pane-5 watch loop. Replaces the old
 # ad-hoc `watch -n 60 "gh pr list ...; tail budget.log"` command in
 # orc.sh's control room build. Keeps that same human-facing display, and
-# adds three background housekeeping jobs Ahmad asked for (see issue #34
-# comments):
+# adds three background housekeeping jobs Ahmad asked for:
 #
 #   1. merge-watch: poll gh for newly-merged PRs and comment+close the
 #      linked issue directly (mechanical `gh issue comment`+`gh issue
@@ -12,23 +11,23 @@
 #      doesn't act on dispatched housekeeping), then tear down that PR's
 #      worktree + merged branch via `orc-worktree.sh teardown` (issue #85,
 #      Task 5), then dispatch a durable "PICK next" nudge to Orchestra
-#      (issue #105, Task 5 -- closes the loop-continuity gap where nothing
+#      (closes the loop-continuity gap where nothing
 #      told Orchestra to move on after a merge). Guard rules unchanged
 #      elsewhere: this script never merges.
 #   2. deferred-nudge retry: drain dispatch.sh's deferred-nudge queue so a
 #      nudge that was skipped because the target pane was busy actually
 #      gets retried once that pane goes idle, instead of requiring a
 #      manual re-nudge (this was happening on every single copilot
-#      dispatch before T24).
+#      dispatch before this was fixed).
 #   3. pane-liveness: detect an agent pane that has dropped back to a bare
-#      shell (its CLI process crashed/exited without anyone noticing --
-#      the T21 case) and FLAG orchestra via the inbox.
+#      shell (its CLI process crashed/exited without anyone noticing)
+#      and FLAG orchestra via the inbox.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./dispatch.sh
 source "$DIR/dispatch.sh"
-# T33 (issue #77): shared color/clear-screen helpers for the dashboard
+# Shared color/clear-screen helpers for the dashboard
 # board below. Colors and clearing auto-disable outside a tty, so this
 # never changes what a redirected/piped invocation (tests, logs) prints.
 # shellcheck source=./tui-lib.sh
@@ -41,14 +40,14 @@ WATCH_INTERVAL="${WATCH_INTERVAL:-60}"
 # whether watch.sh happens to be running from inside a worktree.
 MERGE_WATCH_STATE="${MERGE_WATCH_STATE:-$CANON_DIR/merge-watch-state}"
 FLAGGED_DEAD_FILE="${WATCH_FLAGGED_DEAD_FILE:-$CANON_DIR/watch-flagged-dead}"
-# T33: durable event log so the dashboard's EVENTS section can be cleared
+# Durable event log so the dashboard's EVENTS section can be cleared
 # and redrawn every tick without losing history -- gitignored like
 # budget.log, this is the "screen clears, file remembers" record.
 EVENTS_LOG="${WATCH_EVENTS_LOG:-$CANON_DIR/events.log}"
 # Agents expected to have a live CLI running in their pane per the control
 # room layout (orc.sh). gatekeeper/watch itself are plain scripts, not
 # interactive agents, so they're deliberately not liveness-checked here.
-# scribe dropped (issue #89, T38): pane 3 is retired -- scribe is now an
+# scribe dropped: pane 3 is retired -- scribe is now an
 # on-demand headless spawn (dispatch.sh assign/handoff), not a standing
 # pane, so there's no persistent scribe pane left to flag as dead.
 LIVENESS_AGENTS="${WATCH_LIVENESS_AGENTS:-orchestra builder agy}"
@@ -76,8 +75,8 @@ mw_fetch_merged_prs() {
 }
 
 # mw_extract_issue <title+body text> -- prints the issue number from the
-# first "Closes/Fixes/Resolves #N" match, or nothing if none found. T30
-# (issue #56): PRs #49/#53 were silently skipped by merge-watch because
+# first "Closes/Fixes/Resolves #N" match, or nothing if none found. PRs
+# #49/#53 were silently skipped by merge-watch because
 # their bodies referenced the issue only in the TITLE ("Issue #34" / no
 # Closes verb at all) -- broadened to search title+body combined here
 # rather than body alone. Retained for anything that only wants the first
@@ -88,7 +87,7 @@ mw_extract_issue() {
 
 # mw_extract_all_issues <title+body text> -- prints EVERY distinct issue
 # number referenced by a "Closes/Fixes/Resolves #N", one per line, in the
-# order first seen. T31 (issue #68 item B): PR #66 had both "Closes #55"
+# order first seen. PR #66 had both "Closes #55"
 # and "Closes #56" -- merge-watch only ever closed the first match (#55),
 # leaving #56 for Ahmad to close by hand. No match at all still falls
 # through to the branch-name fallback in merge_watch_check, same as before.
@@ -167,7 +166,7 @@ mw_teardown_branch() {
   fi
 }
 
-# mw_notify_pick <pr> -- issue #105 (T44) Task 5: after merge-watch finishes
+# mw_notify_pick <pr> -- after merge-watch finishes
 # processing a merged PR (close + teardown), NOTHING previously told
 # Orchestra to PICK the next ticket -- the loop stalled until a human
 # prodded pane 0 (observed live after both #102 and #103's merges). A
@@ -212,7 +211,7 @@ merge_watch_check() {
           echo "watch.sh: merge-watch commented+closed issue #$issue (PR #$pr)"
           # Honest wording: we actually closed it ourselves here, unlike the
           # old "-> dispatched scribe" text which only ever recorded intent
-          # (T23/#28: the dispatch went nowhere and the issue stayed open).
+          # (the dispatch went nowhere and the issue stayed open).
           we_log_event "PR #$pr merged -> commented+closed issue #$issue"
         else
           echo "watch.sh: merge-watch failed to close issue #$issue (PR #$pr), gh call failed -- check manually" >&2
@@ -408,7 +407,7 @@ review_watch_check() {
 # a real, mechanically-checkable signal: orc.sh starts each agent pane with
 # `claude ...`/`agy ...`/`copilot` directly, so if that process exits
 # (crash, `exit`, an unhandled restart) the pane reverts to the underlying
-# shell -- exactly the T21 case (a builder session died mid-ticket with no
+# shell -- exactly this case (a builder session died mid-ticket with no
 # automated detection). It's deliberately NOT trying to distinguish a
 # "fresh CLI splash with no task" from a genuinely idle CLI -- splash-screen
 # text is tool/version-specific and fragile to match; "reverted to a shell"
@@ -462,7 +461,7 @@ pane_liveness_check() {
 
 # -- main loop ----------------------------------------------------------
 
-# watch_render (T33, issue #77) -- clears the pane and redraws the fixed
+# watch_render -- clears the pane and redraws the fixed
 # board: PRs / DEFERRED NUDGES / PANE LIVENESS / EVENTS. Display-layer
 # only -- every section reads from a file that already persists the data
 # (merge-watch's own EVENTS_LOG, the deferred-nudge queue, the flagged-dead

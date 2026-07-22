@@ -27,7 +27,7 @@ send_meaningful_tail() {
 # send_submit <pane target> <text> -- type text into a pane and submit it.
 #
 # Claude Code's TUI drops an Enter that arrives in the same send-keys burst
-# as pasted text (T31/#68-E), so text and Enter are always separate events
+# as pasted text, so text and Enter are always separate events
 # with a beat between them. `-l --` sends the text literally (issue #86
 # finding 4) so a message starting with '-' or matching a tmux key name
 # can't be misinterpreted as a flag/key.

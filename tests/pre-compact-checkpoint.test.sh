@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/pre-compact-checkpoint.test.sh — TDD tests for the PreCompact
-# hook (T25, issue #40). Simulates the hook payload (no real /compact
+# hook. Simulates the hook payload (no real /compact
 # trigger available from a non-interactive test) and asserts on the
 # checkpoint block appended to an isolated handoff file.
 # Run: bash .harness/pre-compact-checkpoint.test.sh

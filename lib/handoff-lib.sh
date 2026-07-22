@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/handoff-lib.sh — shared helper (T31, issue #68 item A).
+# .harness/handoff-lib.sh — shared helper.
 #
 # handoff.md is now a REPLACED current-state file, not an append log (git
 # history is the archive: `git log -p .harness/handoff.md`). Hook scripts

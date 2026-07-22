@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/tui-lib.test.sh — tests for T33 (issue #77) shared TUI helpers.
+# .harness/tui-lib.test.sh — tests for shared TUI helpers.
 # Run: bash .harness/tui-lib.test.sh
 set -uo pipefail
 

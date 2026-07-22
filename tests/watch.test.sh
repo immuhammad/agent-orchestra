@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/watch.test.sh — TDD tests for watch.sh (T24, issue #34):
+# .harness/watch.test.sh — TDD tests for watch.sh:
 # merge-watch, deferred-nudge retry, pane-liveness. Run: bash watch.test.sh
 set -uo pipefail
 
@@ -443,7 +443,7 @@ fi
 
 echo "== review round 2 (agy finding 1): rw_latest_verdict against the REAL (unmocked) rw_fetch_pr_comments -- every test above mocked rw_fetch_pr_comments directly and never actually exercised the real jq newline-sentinel pipeline at all =="
 # CI fix round: a declare-f/eval restore-dance was tried here first -- it
-# broke a LATER test (T33 merge_watch_check) in a way that only reproduced
+# broke a LATER test (merge_watch_check) in a way that only reproduced
 # on the CI runner's bash (5.2), not this machine's (3.2), confirmed by
 # reproducing in a matching Docker container before touching anything.
 # Replaced with the sturdier pattern: each assertion below runs inside its
@@ -528,7 +528,7 @@ pane_for_agent() {
 # Force through the real nudge_agent (not the merge-watch override above) --
 # it targets a genuinely busy pane, so this should defer and queue.
 tmux has-session -t harness 2>/dev/null && HAD_REAL_HARNESS=1 || HAD_REAL_HARNESS=0
-# nudge_agent checks `tmux has-session -t harness` unconditionally (T17
+# nudge_agent checks `tmux has-session -t harness` unconditionally (this
 # design predates multi-session tests); alias it via a real session named
 # "harness" only if one doesn't already exist, to avoid clobbering it.
 nudge_agent "watchtest" >/dev/null 2>&1 || true

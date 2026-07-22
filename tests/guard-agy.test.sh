@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/guard-agy.test.sh — TDD tests for guard-agy.sh's single-writer
-# denials (T27, issue #50). Simulates the agy PreToolUse hook payload shape
+# denials. Simulates the agy PreToolUse hook payload shape
 # (.toolCall.args.CommandLine -> {"decision": "allow"|"deny", ...}).
 # Run: bash .harness/guard-agy.test.sh
 set -uo pipefail

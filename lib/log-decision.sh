@@ -2,7 +2,7 @@
 # .harness/log-decision.sh "role|model|decision"
 # Appends a dated line to decisions.log so logging a decision is one command.
 #
-# T27 (issue #50): decisions.log is the ONE place every agent (Builder,
+# decisions.log is the ONE place every agent (Builder,
 # Reviewer, Scribe, Orchestra) is allowed to write in the shared checkout --
 # see AGENTS.md's single-writer rule. Multiple agents append concurrently in
 # practice, so this is locked: a plain `>>` is atomic per-write on POSIX for
@@ -19,8 +19,8 @@ ARG="${1:?usage: log-decision.sh \"role|model|decision\"}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./harness-root.sh
 source "$DIR/harness-root.sh"
-# issue #99: decisions.log is per-repo state, not per-checkout -- a T33 case
-# already hit this exact bug (an entry got written worktree-local and had
+# issue #99: decisions.log is per-repo state, not per-checkout -- this exact
+# bug was already hit in practice (an entry got written worktree-local and had
 # to be re-logged by hand). Resolves off the CALLER's cwd (issue #116:
 # this script no longer lives inside the project it serves), lazily --
 # only if LOG_FILE or LOCK_DIR is left to its default -- so a caller

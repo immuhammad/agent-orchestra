@@ -32,7 +32,7 @@ for msg in "$INBOX"/*.msg; do
   if [ ! -e "$ack" ]; then
     echo "PENDING: $msg"
     PENDING=$((PENDING + 1))
-  # T30 (issue #56): an .ack should be a one-line receipt (what was done /
+  # An .ack should be a one-line receipt (what was done /
   # SKIPPED because X), not just a marker file -- an empty or
   # whitespace-only .ack tells the sender nothing and is suspect, not a
   # real acknowledgement, even though a .msg/.ack pairing exists.

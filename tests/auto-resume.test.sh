@@ -1,6 +1,6 @@
 #!/bin/bash
-# .harness/auto-resume.test.sh — tests for T20 (budgeted 5h-window
-# rate-limit auto-resume). Run: bash .harness/auto-resume.test.sh
+# .harness/auto-resume.test.sh — tests for budgeted 5h-window
+# rate-limit auto-resume. Run: bash .harness/auto-resume.test.sh
 #
 # Exercises auto-resume.sh directly against an isolated tmux test session
 # (never the real "harness" session) with its state file pointed at a

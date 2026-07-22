@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/tui-lib.sh — shared color/clear-screen helpers for gatekeeper.sh
-# and watch.sh dashboard panes (T33, issue #77). Colors and screen-clearing
+# and watch.sh dashboard panes. Colors and screen-clearing
 # auto-disable when stdout is not a tty or NO_COLOR is set, so redirected
 # output (tests, `| head`, log capture) stays plain text -- nothing here
 # should ever change what a test greps for, only how a live tmux pane looks.

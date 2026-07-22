@@ -28,7 +28,7 @@ HEARTBEAT="${GATEKEEPER_HEARTBEAT_FILE:-$(_gk_canon_dir)/gatekeeper.heartbeat}"
 # .harness/budget.log (or a worktree's own copy of it).
 BUDGET_LOG="${GATEKEEPER_BUDGET_LOG:-$(_gk_canon_dir)/budget.log}"
 
-# issue #105 (T44) Task 3: diagnostics for WHY gatekeeper stopped, not just
+# Diagnostics for WHY gatekeeper stopped, not just
 # THAT it did (the liveness watchdog already covers detection). Logs to
 # budget.log so it's visible on the same dashboard operators already check.
 # EXIT (not ERR): this script has no `set -e`, so ERR would also fire on
@@ -43,17 +43,17 @@ gk_log_exit() {
 }
 trap gk_log_exit EXIT
 # agy still reports via its own statusline scratch file -- only the Claude
-# sensor moved off statusline in T19 (see fetch_claude_usage below).
+# sensor moved off statusline (see fetch_claude_usage below).
 AGY_STATUSLINE="$HOME/.gemini/antigravity-cli/scratch/agy-statusline.json"
 
-# T20: budgeted 5h-window rate-limit auto-resume. See auto-resume.sh for the
+# Budgeted 5h-window rate-limit auto-resume. See auto-resume.sh for the
 # full state machine and policy (weekly never auto-resumes, max N/day,
 # "only unblock what you parked"). auto-resume.sh resolves its own root
 # lazily the same way (same $PWD), so this can't diverge from the
 # resolution above without also needing to be forced.
 source "$DIR/auto-resume.sh"
 
-# T33 (issue #77): shared color/clear-screen helpers for the dashboard
+# Shared color/clear-screen helpers for the dashboard
 # board below. Colors and clearing auto-disable outside a tty, so this
 # never changes what a redirected/piped invocation (tests, logs) prints.
 source "$DIR/tui-lib.sh"
@@ -62,18 +62,18 @@ source "$DIR/tui-lib.sh"
 source "$DIR/room-branch-lib.sh"
 GATEKEEPER_STALE_AFTER="${GATEKEEPER_LIVENESS_STALE_AFTER:-660}"
 
-# issue #105 (T44) Task 2: alerts route through dispatch.sh now -- a durable
+# Alerts route through dispatch.sh now -- a durable
 # inbox .msg to Orchestra (pane 0) plus a nudge, never a raw keystroke burst
 # into Builder's (or anyone else's) live input. Orchestra owns parking/
 # relaying to Builder per AGENTS.md's failsafe wording; gatekeeper itself
 # no longer types the failsafe text into anyone's pane directly.
 source "$DIR/dispatch.sh"
 
-# T26: which tmux session gk_alert_orchestra's nudge targets. Overridable so
+# Which tmux session gk_alert_orchestra's nudge targets. Overridable so
 # tests can point every alert at a throwaway session instead of the real
 # session -- a test that types into a live agent pane at real quota
 # thresholds reads as a genuine user prompt, which is a safety bug, not just
-# noise (confirmed live during T19/T20 testing).
+# noise (confirmed live during testing).
 #
 # issue #19 follow-up: used to hardcode "harness" -- reuse $DISPATCH_SESSION
 # (already derived above via dispatch.sh's own orc_session_name-based
@@ -82,7 +82,7 @@ source "$DIR/dispatch.sh"
 # rooms never collide here either.
 NOTIFY_SESSION="${GATEKEEPER_NOTIFY_SESSION:-$DISPATCH_SESSION}"
 
-# issue #105 Task 1: alert state persisted to a JSON file (mirrors
+# Alert state persisted to a JSON file (mirrors
 # auto-resume-state.json's pattern) -- an in-memory-only CLAUDE_ALERTED/
 # AGY_ALERTED bool forgets everything on restart, so a crash-respawn
 # (Task 3) re-sent already-delivered alerts and re-spoke `say` for
@@ -145,7 +145,7 @@ gk_check_room_branch() {
   fi
 }
 
-# issue #105 Task 4: voice is OFF by default -- every restart used to
+# Voice is OFF by default -- every restart used to
 # re-speak every already-alerted pool with no way to silence it ("keeps on
 # saying 80% something" was Ahmad's literal complaint). `voice: on` in
 # orchestrator.yaml opts in; persisted alert state (Task 1) means "once per
@@ -195,7 +195,7 @@ gk_say() {
   return 0
 }
 
-# gk_alert_orchestra <tag> <message> -- issue #105 Task 2: the ONLY alert
+# gk_alert_orchestra <tag> <message> -- the ONLY alert
 # delivery path now. Writes a durable inbox .msg to orchestra (via
 # dispatch_main's `assign` verb -- write + nudge-if-idle, return
 # immediately) instead of typing the alert text into any pane directly.
@@ -206,7 +206,7 @@ gk_alert_orchestra() {
   dispatch_main assign orchestra "$1" "$2" >/dev/null
 }
 
-# T19: Claude sensor now reads the OAuth usage endpoint directly instead of
+# Claude sensor now reads the OAuth usage endpoint directly instead of
 # Claude Code's statusLine scratch file (that file only updates while a
 # Claude Code session is actively rendering a statusline -- dead time
 # between sessions meant stale/missing numbers). Credentials come from the
@@ -232,7 +232,7 @@ fetch_claude_usage() {
     https://api.anthropic.com/api/oauth/usage 2>/dev/null
 }
 
-# gatekeeper_render (T33, issue #77) -- clears the pane and redraws the
+# gatekeeper_render -- clears the pane and redraws the
 # fixed board: QUOTA / HEARTBEAT / AUTO-RESUME / LAST ALERT. Display-layer
 # only -- reads USAGE_PCT/WEEKLY_PCT/AGY_PCT/HEARTBEAT_AGE from the caller's
 # scope, doesn't compute or persist anything itself. Every alert this loop
@@ -289,18 +289,18 @@ while true; do
   [ -z "$WEEKLY_PCT" ] && WEEKLY_PCT=0
 
   gk_check_room_branch
-  # T20: only ever used for the 5h pool's auto-resume tracking -- never for
+  # Only ever used for the 5h pool's auto-resume tracking -- never for
   # seven_day. Weekly crossings intentionally never touch auto-resume.sh.
   FIVE_HOUR_RESETS_AT=$(echo "$CLAUDE_USAGE_JSON" | jq -r '.five_hour.resets_at // empty' 2>/dev/null)
 
-  # --- agy 5h pools (VERIFIED T10 keys: cat "$AGY_STATUSLINE" | jq '.quota') ---
+  # --- agy 5h pools (VERIFIED keys: cat "$AGY_STATUSLINE" | jq '.quota') ---
   AGY_PCT=$(jq 'if type=="object" and .quota then
       [ (1-(.quota."gemini-5h".remaining_fraction // 1)),
         (1-(.quota."3p-5h".remaining_fraction // 1)) ] | max*100
     else 0 end' "$AGY_STATUSLINE" 2>/dev/null | cut -d. -f1)
   [ -z "$AGY_PCT" ] && AGY_PCT=0
 
-  # T33: heartbeat age computed from the PREVIOUS tick's file, before it's
+  # Heartbeat age computed from the PREVIOUS tick's file, before it's
   # overwritten further down -- "how long since gatekeeper last confirmed
   # it was alive", same signal gatekeeper-liveness.sh watches externally.
   #
@@ -374,7 +374,7 @@ while true; do
     ar_write_quota_stop_flag "weekly" "$WEEKLY_PCT" "none"
   fi
 
-  # T20: advance every currently-tracked pane's auto-resume state machine.
+  # Advance every currently-tracked pane's auto-resume state machine.
   # Deliberately unconditional (not gated on USAGE_PCT still being over
   # threshold) -- the reset we're watching for only shows up AFTER usage
   # has already dropped back down, and weekly (seven_day) never reaches
@@ -394,7 +394,7 @@ while true; do
   [ "$WEEKLY_PCT" -lt 50 ] && gk_clear_alerted claude_weekly
   [ "$AGY_PCT" -lt 50 ] && gk_clear_alerted agy
 
-  # T19 liveness: heartbeat every iteration so gatekeeper-liveness.sh (a
+  # Liveness: heartbeat every iteration so gatekeeper-liveness.sh (a
   # separate process, so a gatekeeper crash can't also silence its own
   # watchdog) can detect a dead/hung gatekeeper and warn pane 0.
   #

@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/dispatch.test.sh — tests for dispatch.sh (T17 3-verb inbox).
+# .harness/dispatch.test.sh — tests for dispatch.sh (3-verb inbox).
 # Run: bash .harness/dispatch.test.sh
 #
 # Uses a throwaway tmux session ("harness-dispatch-test") with panes it
@@ -70,10 +70,10 @@ else
 fi
 
 echo "== issue #86 Task 3 / #97 review round 2: busy markers are shape-anchored and agent-agnostic (agy's live-observed 'Working...' render) =="
-# A DEDICATED third pane (0.2), not the shared 0.1 pane the T24 section
-# below depends on staying busy -- reusing 0.1 here would both leave stale
-# 'Thinking...' scrollback contaminating this check AND interrupt the
-# sleep the T24 section expects to still be running.
+# A DEDICATED third pane (0.2), not the shared 0.1 pane the deferred-nudge
+# section below depends on staying busy -- reusing 0.1 here would both leave
+# stale 'Thinking...' scrollback contaminating this check AND interrupt the
+# sleep the deferred-nudge section expects to still be running.
 tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 # agy's real busy rendering (live-confirmed 2026-07-10): a spinner glyph
 # (⣟) prefixing "Working...", with a bare '>' prompt still visible
@@ -463,7 +463,7 @@ rm -f "$CANON_DIR"/inbox/testagent/*.msg
 echo "== handoff verb: round-trip -- ack appears before timeout =="
 (
   # Simulate the receiver: wait briefly, then ack the newest .msg with a
-  # real one-line status (T30, issue #56: acks must be non-empty receipts).
+  # real one-line status (acks must be non-empty receipts).
   sleep 2
   msg="$(ls -t "$CANON_DIR"/inbox/testagent/*-9003.msg 2>/dev/null | head -1)"
   [ -n "$msg" ] && echo "done" > "${msg%.msg}.ack"

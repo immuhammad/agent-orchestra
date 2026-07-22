@@ -1,5 +1,5 @@
 #!/bin/bash
-# .harness/guard.test.sh — TDD tests for guard.sh (T15 merge-discipline guard,
+# .harness/guard.test.sh — TDD tests for guard.sh (merge-discipline guard,
 # plus regression coverage for pre-existing G-series behaviors).
 # Run: bash .harness/guard.test.sh
 set -uo pipefail
@@ -14,7 +14,7 @@ FAIL=0
 # Simulates the PreToolUse hook payload and runs guard.sh with HEAD checked
 # out on <cwd-branch> in a throwaway repo, so the current-branch checks
 # (git merge, bare git push) have something real to read. If a third arg is
-# given, it's written as orchestrator.yaml in that throwaway repo so T21's
+# given, it's written as orchestrator.yaml in that throwaway repo so the
 # config-driven protected_paths has something to read; otherwise the repo
 # has no orchestrator.yaml, exercising the fail-closed default.
 run_guard() {

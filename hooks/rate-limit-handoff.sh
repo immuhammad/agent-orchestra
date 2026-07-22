@@ -16,7 +16,7 @@ source "$DIR/../lib/handoff-lib.sh"
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"')
 HANDOFF=".harness/handoff.md"
 
-# T31 (issue #68 item A): replace this hook's own section instead of
+# Replace this hook's own section instead of
 # appending a new dated one every time -- handoff.md is a ≤80-line
 # current-state file now, not an append log.
 handoff_replace_section "$HANDOFF" "## RATE-LIMITED"

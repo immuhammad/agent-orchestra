@@ -1,7 +1,7 @@
 #!/bin/bash
-# .harness/guard-write.test.sh — TDD tests for guard-write.sh, including T21's
-# config-driven protected_paths (issue #26). No prior test file existed for
-# this hook; added alongside the T21 config-loading change.
+# .harness/guard-write.test.sh — TDD tests for guard-write.sh, including its
+# config-driven protected_paths. No prior test file existed for
+# this hook; added alongside the config-loading change.
 # Run: bash .harness/guard-write.test.sh
 set -uo pipefail
 
