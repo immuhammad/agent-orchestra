@@ -1,8 +1,9 @@
 # AGENTS.md — Harness Rules (single source of truth)
 
 > Template shipped by [agent-orchestra](https://github.com/immuhammad/agent-orchestra).
-> Copy this into your project root, fill in the `<PROJECT>` placeholders,
-> and delete this blockquote. Keep this file as your single source of
+> Copy this into your project root, fill in the Roles table's model
+> placeholders, and delete this blockquote (`orc init` does this for
+> you). Keep this file as your single source of
 > truth — tool-specific files (CLAUDE.md, GEMINI.md,
 > .github/copilot-instructions.md) only add tool-specific lanes and must
 > never contradict it.
