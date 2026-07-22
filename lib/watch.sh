@@ -238,6 +238,145 @@ merge_watch_check() {
   done <<< "$(mw_fetch_merged_prs)"
 }
 
+# -- review-watch ----------------------------------------------------------
+# issue #96: a reviewer's PR comment must not be the ONLY delivery path for
+# its verdict. Live-confirmed: agy posted a proper APPROVE on PR #95 (full
+# security pass, probe list, the works) but never ran the push-back
+# dispatch the review template tells it to -- Builder never learned the
+# verdict, never ran `gh pr ready`, and the PR sat draft for two hours
+# until Ahmad noticed by hand. Same #85 lesson: don't depend on an agent
+# to relay a mechanical step; have the harness observe and act.
+REVIEW_WATCH_STATE="${REVIEW_WATCH_STATE:-$CANON_DIR/review-watch-state}"
+
+# rw_fetch_open_draft_prs -- prints "<number>\t<title>\t<body>\t<headRefName>"
+# for every OPEN, DRAFT PR, one per line. Filtered in jq (`select(.isDraft)`)
+# rather than relying solely on gh's own `--draft` CLI flag, so the filter
+# is exercised the same way whether real `gh` or a test's canned JSON is
+# behind it. Split out so tests can mock `gh` instead of hitting the real
+# API -- same pattern as mw_fetch_merged_prs. Scoping the fetch to OPEN+
+# DRAFT is also the race-safety mechanism for "already ready" / "already
+# merged" (issue #96's own no-op requirement): a PR Orchestra has already
+# flipped ready (Gate-2-waived sessions do this directly) or merged simply
+# stops appearing here on the next tick -- no separate state check needed,
+# the same structural guarantee merge_watch_check relies on for "already
+# merged".
+rw_fetch_open_draft_prs() {
+  gh pr list --state open --json number,title,body,headRefName,isDraft \
+    --jq '.[] | select(.isDraft) | [.number, (.title // "" | gsub("\n";" ")), (.body // "" | gsub("\n";" ")), .headRefName] | @tsv' 2>/dev/null
+}
+
+# rw_fetch_pr_comments <pr> -- prints "<createdAt>\t<body, newlines -> \x01>"
+# per comment, one per line, in gh's own (chronological, oldest-first)
+# order -- verified empirically against a real reviewed PR before writing
+# this. \x01 stands in for a real newline so a multi-line comment body
+# still survives the TSV/line-based pipeline intact; rw_latest_verdict
+# restores it before anchoring the match. Split out for the same reason as
+# mw_fetch_merged_prs.
+rw_fetch_pr_comments() {
+  gh pr view "$1" --json comments \
+    --jq '.comments[] | [.createdAt, (.body | gsub("\n"; ""))] | @tsv' 2>/dev/null
+}
+
+# rw_latest_verdict <pr> -- prints "APPROVE" or "REQUEST-CHANGES" for the
+# MOST RECENT comment whose body starts with that literal word, colon,
+# ANCHORED (review-protocol.md's own format) -- never a substring match
+# anywhere in prose, so "I approve of this approach" or a verdict word
+# buried mid-sentence never counts. Iterates ALL comments in order and
+# keeps overwriting the result on each match, so the LAST (most recent)
+# match naturally wins with no separate sort needed. Prints nothing if no
+# comment matches at all -- still under review, or every comment is
+# prose/ambiguous -- the caller treats that as "nothing to deliver yet",
+# never guessing at an unanchored comment.
+rw_latest_verdict() {
+  local pr="$1" created body verdict=""
+  while IFS=$'\t' read -r created body; do
+    [ -z "$body" ] && continue
+    body="$(printf '%s' "$body" | tr '\001' '\n')"
+    case "$body" in
+      "APPROVE:"*) verdict="APPROVE" ;;
+      "REQUEST-CHANGES:"*) verdict="REQUEST-CHANGES" ;;
+    esac
+  done <<< "$(rw_fetch_pr_comments "$pr")"
+  echo "$verdict"
+}
+
+# rw_already_delivered <pr> -- prints the LAST verdict delivered for this
+# PR ("APPROVE"/"REQUEST-CHANGES"), or nothing if never delivered.
+# Append-only state file (same file discipline as MERGE_WATCH_STATE) --
+# `tail -1` on the matching lines means a later rw_mark_delivered call for
+# the same PR naturally supersedes an earlier one with no rewrite/prune
+# needed.
+rw_already_delivered() {
+  [ -f "$REVIEW_WATCH_STATE" ] && grep "^$1 " "$REVIEW_WATCH_STATE" 2>/dev/null | tail -1 | cut -d' ' -f2
+}
+
+rw_mark_delivered() {
+  echo "$1 $2" >> "$REVIEW_WATCH_STATE"
+}
+
+# rw_notify <agent> <issue> <message> -- split out so tests can override
+# this ONE function instead of the real dispatch_main (which would attempt
+# a real inbox write + pane nudge) -- same pattern as mw_notify_pick.
+rw_notify() {
+  dispatch_main assign "$1" "$2" "$3" >/dev/null
+}
+
+# review_watch_check -- one pass over every OPEN DRAFT PR: find its latest
+# anchored verdict comment (if any), and if it DIFFERS from what was last
+# delivered for that PR, deliver it. "Differs", not "has never been
+# delivered": idempotent per DISTINCT verdict, not merely per PR -- a
+# re-tick with the SAME verdict already delivered is silently skipped, but
+# a PR that moves from an earlier REQUEST-CHANGES to a LATER APPROVE (the
+# normal fix-loop shape) delivers that new APPROVE too. "Latest verdict
+# wins", not "first verdict wins".
+#   APPROVE: `gh pr ready` -- the ONLY state flip this script may ever
+#     make (guard rule, same as merge_watch_check never merging) -- plus a
+#     durable dispatch to BOTH builder and orchestra so AGENTS.md's
+#     APPROVE branch proceeds without either of them polling for it.
+#   REQUEST-CHANGES: a durable dispatch to builder only, no ready flip --
+#     the PR stays draft through the fix loop.
+# A PR with comments but no anchored match at all is logged once per tick
+# (not per comment) as ambiguous/malformed and skipped -- never guessed at.
+review_watch_check() {
+  local pr title body branch issue verdict delivered
+  while IFS=$'\t' read -r pr title body branch; do
+    [ -z "$pr" ] && continue
+    issue="$(mw_extract_all_issues "$title $body" | head -1)"
+    [ -z "$issue" ] && issue="$(mw_extract_issue_from_branch "$branch")"
+    if [ -z "$issue" ]; then
+      echo "watch.sh: review-watch PR #$pr is draft but has no resolvable issue (no Closes/Fixes/Resolves, no feature/issue-N branch) -- skipping" >&2
+      continue
+    fi
+
+    verdict="$(rw_latest_verdict "$pr")"
+    if [ -z "$verdict" ]; then
+      if [ -n "$(rw_fetch_pr_comments "$pr")" ]; then
+        echo "watch.sh: review-watch PR #$pr (issue #$issue) has comments but none match the APPROVE:/REQUEST-CHANGES: format -- skipping, not guessing" >&2
+      fi
+      continue
+    fi
+
+    delivered="$(rw_already_delivered "$pr")"
+    [ "$verdict" = "$delivered" ] && continue
+
+    case "$verdict" in
+      APPROVE)
+        gh pr ready "$pr" >/dev/null 2>&1
+        rw_notify builder "$issue" "PR #$pr APPROVED by reviewer -- marked ready; proceed with Gate-2 handoff."
+        rw_notify orchestra "$issue" "PR #$pr (issue #$issue) APPROVED by reviewer and marked ready."
+        echo "watch.sh: review-watch delivered APPROVE for PR #$pr (issue #$issue) -- marked ready, notified builder+orchestra"
+        we_log_event "PR #$pr (issue #$issue) APPROVED -> marked ready, notified builder+orchestra"
+        ;;
+      REQUEST-CHANGES)
+        rw_notify builder "$issue" "PR #$pr (issue #$issue): reviewer requested changes -- see the PR comment for details, fix in the same worktree and re-assign the reviewer when done."
+        echo "watch.sh: review-watch delivered REQUEST-CHANGES for PR #$pr (issue #$issue) -- notified builder"
+        we_log_event "PR #$pr (issue #$issue) REQUEST-CHANGES -> notified builder"
+        ;;
+    esac
+    rw_mark_delivered "$pr" "$verdict"
+  done <<< "$(rw_fetch_open_draft_prs)"
+}
+
 # -- pane liveness ----------------------------------------------------------
 
 # pw_pane_is_dead <target> -- true if the pane has dropped back to a plain
@@ -341,6 +480,7 @@ watch_main() {
   echo "watch.sh active (interval ${WATCH_INTERVAL}s)"
   while true; do
     merge_watch_check
+    review_watch_check
     retry_deferred_nudges
     pane_liveness_check
 
