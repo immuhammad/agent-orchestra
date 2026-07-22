@@ -119,9 +119,38 @@ orc_build_session() {
   # MIN_AGENT_ROWS -- an `-l`/`-p` split size that would be non-positive is
   # a hard tmux error, not a soft clamp, so this must be decided BEFORE
   # issuing any split, not discovered from a failed command.
+  # review round 2 (agy, CI-only failure on the Linux runner, reproduced
+  # locally via Docker + Ubuntu 24.04's tmux 3.4): `-p <percent>` on
+  # split-window fails outright ("size missing") on tmux 3.4, even though
+  # it works fine on this dev machine's tmux 3.7b -- a real cross-version
+  # behavior gap, not a typo. `-l <percent>%` and plain absolute `-l
+  # <cells>` both work on every tmux version tested; switched to absolute
+  # cell counts computed in shell (portable everywhere, no version-
+  # dependent flag syntax at all).
+  #
+  # Also (round 2): `tput cols`/`tput lines` does NOT reliably fail when
+  # stdout isn't a real terminal -- reproduced live, with TERM set (even
+  # TERM=dumb) but no controlling tty, tput happily returns a plausible-
+  # looking "80"/"24" fallback instead of erroring, which would otherwise
+  # be trusted as "the actual client size" (this specific 80x24 case is
+  # already caught by the row-count floor below, but that's incidental --
+  # any other non-tty default that happened to number-check would not be
+  # caught the same way). Gated explicitly: tput's numbers are only
+  # trusted when stdout is a REAL tty; otherwise (and with no
+  # ORC_TERM_COLS/LINES override) this always falls through to the loud
+  # tiled fallback rather than gambling on what a non-tty default means.
   local term_cols term_lines monitor_rows=12 min_agent_rows=15 agent_rows
-  term_cols="${ORC_TERM_COLS:-$(tput cols 2>/dev/null || echo 0)}"
-  term_lines="${ORC_TERM_LINES:-$(tput lines 2>/dev/null || echo 0)}"
+  local col_width half_width
+  if [ -n "${ORC_TERM_COLS:-}" ] && [ -n "${ORC_TERM_LINES:-}" ]; then
+    term_cols="$ORC_TERM_COLS"
+    term_lines="$ORC_TERM_LINES"
+  elif [ -t 1 ]; then
+    term_cols="$(tput cols 2>/dev/null || echo 0)"
+    term_lines="$(tput lines 2>/dev/null || echo 0)"
+  else
+    term_cols=0
+    term_lines=0
+  fi
   agent_rows=$(( term_lines - monitor_rows - 1 ))  # -1: the divider row between the agent row and the monitor row
 
   if [ "$term_cols" -gt 0 ] && [ "$term_lines" -gt 0 ] && [ "$agent_rows" -ge "$min_agent_rows" ]; then
@@ -129,14 +158,25 @@ orc_build_session() {
     tmux rename-window -t "$session:main" "control-room"
     tmux set -t "$session:0" pane-border-status top
 
+    col_width=$(( term_cols / 3 ))
+    half_width=$(( term_cols / 2 ))
     tmux split-window -v -l "$monitor_rows" -t "$session:0"
-    tmux split-window -h -p 33 -t "$session:0.0"
-    tmux split-window -h -p 50 -t "$session:0.0"
-    tmux split-window -h -p 50 -t "$session:0.3"
+    tmux split-window -h -l "$col_width" -t "$session:0.0"
+    tmux split-window -h -l "$col_width" -t "$session:0.0"
+    tmux split-window -h -l "$half_width" -t "$session:0.3"
   else
-    if [ "$term_lines" -gt 0 ]; then
-      echo "orc: WARNING -- terminal too small (${term_cols}x${term_lines}) for the weighted agent-panes layout (need >= ${min_agent_rows} rows for the agent panes after reserving ${monitor_rows} for the monitor row) -- falling back to the even tiled layout. Agent panes will be short; resize your terminal and restart the room ('orc up' again after killing the session) for more headroom." >&2
+    # review round 2: ALWAYS warn on this branch, even when the size is
+    # totally unknown (0x0 -- no tty, no override) rather than merely
+    # measured-too-small. An earlier draft only warned when term_lines was
+    # a real positive number, silently skipping the message for the
+    # unknown-size case -- exactly backwards from "loud, never silent"
+    # (found live: no-tty + no-override took this branch with NO warning
+    # at all).
+    local size_desc="${term_cols}x${term_lines}"
+    if [ "$term_cols" -le 0 ] || [ "$term_lines" -le 0 ]; then
+      size_desc="unknown (no tty, no ORC_TERM_COLS/LINES override)"
     fi
+    echo "orc: WARNING -- terminal size ${size_desc} -- too small (or undetectable) for the weighted agent-panes layout (need >= ${min_agent_rows} rows for the agent panes after reserving ${monitor_rows} for the monitor row) -- falling back to the even tiled layout. Agent panes will be short; resize your terminal and restart the room ('orc up' again after killing the session) for more headroom." >&2
     tmux new-session -d -s "$session" -n main
     tmux rename-window -t "$session:main" "control-room"
     tmux set -t "$session:0" pane-border-status top

@@ -235,6 +235,33 @@ SMALL_ZERO_HEIGHT="$(tmux list-panes -t "$SMALL_SESSION" -F '#{pane_height}' 2>/
 assert_eq "issue #87: fallback layout never produces a zero-height pane" "0" "$SMALL_ZERO_HEIGHT"
 tmux kill-session -t "$SMALL_SESSION" 2>/dev/null || true
 
+echo "== issue #87 review round 2: no ORC_TERM_COLS/LINES override AND no real controlling tty -- falls back loudly, never trusts a non-tty tput default as if it were the real client size =="
+# CI-reproduced: `tput cols`/`tput lines` do NOT reliably fail when stdout
+# isn't a real terminal -- with TERM set (even TERM=dumb) but no tty, tput
+# happily returns a plausible-looking "80"/"24" fallback default instead of
+# erroring. Trusting that as "the actual client size" is exactly the
+# "garbage math" this test guards against. stdout is redirected to a
+# regular FILE (not inherited) so `[ -t 1 ]` is reliably false here
+# regardless of how this test suite itself happens to be invoked.
+NOTTY_SESSION="orctest-notty-$$"
+NOTTY_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  env -u ORC_TERM_COLS -u ORC_TERM_LINES TERM=dumb \
+    ORC_SESSION="$NOTTY_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$NOTTY_TMP/build.out" 2> "$NOTTY_TMP/build.err" < /dev/null
+)
+NOTTY_PANE_COUNT="$(tmux list-panes -t "$NOTTY_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "issue #87: no override + no tty still builds all 5 panes (graceful fallback)" "5" "$NOTTY_PANE_COUNT"
+if grep -qi 'WARNING.*too small' "$NOTTY_TMP/build.err" 2>/dev/null; then
+  pass "issue #87: no override + no tty falls back to tiled with a loud warning, not a silent guess at the real size"
+else
+  fail "CORRECTNESS REGRESSION (issue #87): no override + no tty should fall back loudly, not trust a non-tty tput default -- got: $(cat "$NOTTY_TMP/build.err" 2>/dev/null)"
+fi
+NOTTY_ZERO_HEIGHT="$(tmux list-panes -t "$NOTTY_SESSION" -F '#{pane_height}' 2>/dev/null | awk '$1<=0' | wc -l | tr -d ' ')"
+assert_eq "issue #87: no-tty fallback never produces a zero-height pane" "0" "$NOTTY_ZERO_HEIGHT"
+tmux kill-session -t "$NOTTY_SESSION" 2>/dev/null || true
+
 echo "== issue #59: liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
 if grep -v '^[[:space:]]*#' "$DIR/../bin/orc" | grep -q 'nohup'; then
   fail "bin/orc should no longer launch gatekeeper-liveness.sh via nohup (a comment MAY still mention nohup to explain why -- only a live invocation fails this) -- the harness's own restart drill needs an inspectable path, same as the other three loops"
