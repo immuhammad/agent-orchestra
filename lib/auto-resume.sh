@@ -12,6 +12,15 @@
 #   it in. If anything about that pane changed since parking -- Ahmad
 #   answered it, it crashed, it moved on some other way -- auto-resume backs
 #   off silently (well, loudly in the log) rather than guessing.
+# - Each tracked pane carries a role ("driver" for the Orchestra pane,
+#   "worker" otherwise -- see ar_mark_pending). The parked-state ownership
+#   test differs by role (issue #73): workers use exact raw-fingerprint
+#   equality; the driver instead re-checks whether the AGENTS.md failsafe
+#   question is STILL present in its tail, since the driver pane keeps
+#   accumulating passive output (gatekeeper alerts, watch nudges) while
+#   parked -- that would otherwise always drift its raw fingerprint even
+#   though it never actually moved past the question (see
+#   ar_pane_still_owned).
 #
 # State machine per tracked pane (persisted in AUTO_RESUME_STATE_FILE so it
 # survives a gatekeeper.sh restart -- exactly the kind of restart T19's
@@ -20,8 +29,8 @@
 #   pending --[scrollback shows the AGENTS.md failsafe question]--> parked
 #     (fingerprint + the five_hour resets_at at the moment of parking are
 #     recorded)
-#   parked --[scrollback fingerprint changed]--> dropped (touched, not ours
-#     to resume anymore)
+#   parked --[ownership test fails, see ar_pane_still_owned]--> dropped
+#     (touched or moved on, not ours to resume anymore)
 #   parked --[five_hour resets_at has advanced past the parked value]-->
 #     re-check the fingerprint one more time, then either resume (if budget
 #     remains) or skip (budget exhausted) -- either way the pane's tracking
@@ -152,6 +161,39 @@ ar_fingerprint() { # $1 = tmux pane target
   ar_meaningful_tail "$1" | ar_normalize | shasum -a 256 | awk '{print $1}'
 }
 
+# ar_still_at_failsafe_question <pane target> -- true if the AGENTS.md
+# failsafe question is STILL present in the pane's meaningful tail right
+# now. Same flatten-then-match as the pending->parked transition below
+# (tmux hard-wraps mid-word, so newlines are deleted rather than replaced
+# with a space to undo that). Issue #73: this is the driver pane's
+# parked-state ownership test -- a substring search means interleaved
+# passive output above/around the question doesn't count as "changed",
+# while a human actually answering (question no longer in the tail at
+# all) still correctly reads as moved-on.
+ar_still_at_failsafe_question() { # $1 = pane target
+  local tail_text
+  tail_text="$(ar_meaningful_tail "$1" | tr -d '\n')"
+  echo "$tail_text" | grep -Eq "$AR_PARK_MARKER"
+}
+
+# ar_pane_still_owned <pane> <role> <stored fingerprint> <current tail
+# fingerprint> -- the parked-state ownership test ("amux: only unblock
+# what you parked"). Workers: exact raw-fingerprint equality, unchanged
+# since #80. Driver (issue #73): anchored to whether the failsafe question
+# is still visible instead, since the driver's raw fingerprint never
+# stays stable while parked (gatekeeper alerts/watch nudges land in the
+# same pane) even when it never moved past the question. Shared by both
+# the initial ownership check and the pre-resume re-check below so the two
+# can't drift apart.
+ar_pane_still_owned() { # $1 = pane, $2 = role, $3 = stored fp, $4 = current fp
+  local pane="$1" role="$2" stored_fp="$3" current_fp="$4"
+  if [ "$role" = "driver" ]; then
+    ar_still_at_failsafe_question "$pane"
+  else
+    [ "$current_fp" = "$stored_fp" ]
+  fi
+}
+
 ar_ensure_state_file() {
   if [ ! -f "$AR_STATE_FILE" ]; then
     jq -n --arg today "$(ar_today)" \
@@ -194,11 +236,11 @@ ar_log() { # $1 = message
 # Start (or no-op if already) tracking a pane as a threshold-crossing
 # candidate. Idempotent: never clobbers an existing pending/parked entry,
 # so calling this every gatekeeper iteration while over threshold is safe.
-ar_mark_pending() { # $1 = pane target
-  local pane="$1" existing
+ar_mark_pending() { # $1 = pane target, $2 = role ("driver" for the Orchestra pane -- see ar_pane_still_owned; omitted/anything else keeps today's worker semantics)
+  local pane="$1" role="${2:-worker}" existing
   existing="$(ar_read --arg p "$pane" '.panes[$p].state // empty')"
   if [ -z "$existing" ]; then
-    ar_write --arg p "$pane" '.panes[$p] = {state: "pending", fingerprint: null, resets_at: null}'
+    ar_write --arg p "$pane" --arg role "$role" '.panes[$p] = {state: "pending", fingerprint: null, resets_at: null, role: $role}'
     ar_log "watching $pane (usage over threshold, waiting for the failsafe question to appear before treating it as parked)"
   fi
 }
@@ -227,19 +269,22 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
     # reconstructs the original unbroken text.
     tail_text="$(ar_meaningful_tail "$pane" | tr -d '\n')"
     if echo "$tail_text" | grep -Eq "$AR_PARK_MARKER"; then
-      ar_write --arg p "$pane" --arg fp "$tail_fp" --arg r "$current_resets_at" \
-        '.panes[$p] = {state: "parked", fingerprint: $fp, resets_at: $r}'
+      local role
+      role="$(ar_read --arg p "$pane" '.panes[$p].role // "worker"')"
+      ar_write --arg p "$pane" --arg fp "$tail_fp" --arg r "$current_resets_at" --arg role "$role" \
+        '.panes[$p] = {state: "parked", fingerprint: $fp, resets_at: $r, role: $role}'
       ar_log "parked $pane (failsafe question detected, 5h window resets at $current_resets_at)"
     fi
     return 0
   fi
 
   if [ "$state" = "parked" ]; then
-    local stored_fp stored_resets_at
+    local stored_fp stored_resets_at role
     stored_fp="$(ar_read --arg p "$pane" '.panes[$p].fingerprint')"
     stored_resets_at="$(ar_read --arg p "$pane" '.panes[$p].resets_at')"
+    role="$(ar_read --arg p "$pane" '.panes[$p].role // "worker"')"
 
-    if [ "$tail_fp" != "$stored_fp" ]; then
+    if ! ar_pane_still_owned "$pane" "$role" "$stored_fp" "$tail_fp"; then
       ar_log "$pane changed since parking -- not ours to resume anymore (amux: only unblock what you parked), dropping tracking"
       ar_write --arg p "$pane" 'del(.panes[$p])'
       return 0
@@ -270,7 +315,7 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
       # possible read, not a value computed earlier in this function).
       local recheck_fp
       recheck_fp="$(ar_fingerprint "$pane")"
-      if [ "$recheck_fp" != "$stored_fp" ]; then
+      if ! ar_pane_still_owned "$pane" "$role" "$stored_fp" "$recheck_fp"; then
         ar_log "$pane changed between reset-detection and re-check -- skipping resume, dropping tracking"
         ar_write --arg p "$pane" 'del(.panes[$p])'
         return 0

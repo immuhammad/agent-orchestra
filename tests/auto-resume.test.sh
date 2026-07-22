@@ -267,6 +267,139 @@ else
   fail "touched-pane skip must not spend budget, got count=$(ar_read '.budget.count')"
 fi
 
+echo "== #73: parked DRIVER pane + interleaved passive output + window reset -> auto-continues =="
+# Prior fix (#80) normalizes away KNOWN volatile TUI chrome (counters/
+# timers), but the driver pane accumulates genuinely NEW passive content
+# while parked too -- gatekeeper alerts and watch nudges landing in the
+# SAME pane the failsafe question is sitting in. That's real, distinct
+# text, not a repaint, so #80's normalization does not (and should not)
+# hide it -- the raw fingerprint genuinely changes. Pre-#73, the driver's
+# parked-state ownership test was still plain fingerprint equality, so
+# that alone dropped tracking and the room stayed parked forever even
+# after the window reset (the live 2026-07-13 budget.log incident).
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+ar_write '.budget.count = 0' # isolate this section's budget assertions
+PANE5="$(new_test_pane)"
+simulate_parked_pane "$PANE5"
+ar_mark_pending "$PANE5" "driver"
+ar_poll_pane "$PANE5" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE5" '.panes[$p].state')" = "parked" ] && [ "$(ar_read --arg p "$PANE5" '.panes[$p].role')" = "driver" ]; then
+  pass "#73: driver pane parks with role=driver recorded"
+else
+  fail "#73: driver pane should park with role=driver in the state file"
+fi
+
+FP_AT_PARK="$(ar_fingerprint "$PANE5")"
+# Interleaved passive output: a gatekeeper alert / watch nudge landing in
+# the driver pane while the failsafe question is still unanswered.
+write_to_pane "$PANE5" "gatekeeper: FYI -- PR #200 opened, auto-merge armed"
+sleep 0.5
+if [ "$(ar_fingerprint "$PANE5")" != "$FP_AT_PARK" ]; then
+  pass "#73 setup check: the interleaved passive output genuinely changed the raw fingerprint (confirms this exercises the fix, not a no-op)"
+else
+  fail "#73 setup check: interleaved write did not change the raw fingerprint -- test would not actually exercise the fix"
+fi
+
+ar_poll_pane "$PANE5" "2026-07-11T14:00:00Z" "85" # no reset yet
+if [ "$(ar_read --arg p "$PANE5" '.panes[$p].state')" = "parked" ]; then
+  pass "#73: driver pane stays parked despite interleaved passive output (question still visible, no reset yet)"
+else
+  fail "#73 REGRESSION: driver pane's tracking was dropped by passive output alone, before any reset"
+fi
+
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
+ar_poll_pane "$PANE5" "2026-07-11T19:00:00Z" "10" # window reset + low usage
+if [ "$(ar_read --arg p "$PANE5" '.panes[$p] // empty')" = "" ]; then
+  pass "#73: driver pane's tracking cleared after the reset was handled"
+else
+  fail "#73 REGRESSION: driver pane never auto-continued -- tracking still present after a genuine reset"
+fi
+if tmux capture-pane -p -t "$PANE5" 2>&1 | grep -q "auto-resuming"; then
+  pass "#73: driver pane received the auto-resume message despite interleaved passive output while parked"
+else
+  fail "#73 REGRESSION (the live incident): driver pane never got auto-continued after the window reset"
+fi
+if [ "$(ar_read '.budget.count')" = "1" ]; then
+  pass "#73: driver auto-resume consumed budget normally"
+else
+  fail "#73: expected budget count 1 after the driver auto-resume, got $(ar_read '.budget.count')"
+fi
+
+echo "== #73: parked DRIVER pane where the question was ANSWERED (pane moved on) -> no injection, tracking dropped =="
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+PANE6="$(new_test_pane)"
+simulate_parked_pane "$PANE6"
+ar_mark_pending "$PANE6" "driver"
+ar_poll_pane "$PANE6" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE6" '.panes[$p].state')" != "parked" ]; then
+  fail "#73 setup failed: pane6 should be parked before the answered-question test"
+fi
+# Simulate Ahmad answering: enough new content that the pane's visible
+# screen genuinely scrolls the original failsafe question off -- a real
+# TUI redraw on an actual answer looks like this, not like a line quietly
+# appended below an otherwise-still-visible question.
+write_to_pane "$PANE6" "$(seq 1 60)
+Ahmad: (c) continue"
+sleep 0.5
+AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
+ar_poll_pane "$PANE6" "2026-07-11T19:00:00Z" "10" # window reset + low usage, but the question is gone
+if [ "$(ar_read --arg p "$PANE6" '.panes[$p] // empty')" = "" ]; then
+  pass "#73: answered driver pane's tracking was dropped"
+else
+  fail "#73: answered driver pane should have its tracking dropped, not left parked"
+fi
+if tmux capture-pane -p -t "$PANE6" 2>&1 | grep -q "auto-resuming"; then
+  fail "#73 REGRESSION: auto-resume injected into a driver pane where the question had already been answered"
+else
+  pass "#73: no auto-resume injected once the driver pane moved past the question"
+fi
+if grep -q "not ours to resume anymore" "$AUTO_RESUME_LOG"; then
+  pass "#73: answered-driver skip was logged with the amux rationale"
+else
+  fail "#73: expected a 'not ours to resume anymore' log line for the answered driver pane"
+fi
+
+echo "== #73: parked WORKER pane semantics unchanged (role=worker explicit) =="
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+PANE7="$(new_test_pane)"
+simulate_parked_pane "$PANE7"
+ar_mark_pending "$PANE7" "worker"
+ar_poll_pane "$PANE7" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE7" '.panes[$p].state')" = "parked" ] && [ "$(ar_read --arg p "$PANE7" '.panes[$p].role')" = "worker" ]; then
+  pass "#73: explicit role=worker pane parks normally"
+else
+  fail "#73: explicit role=worker pane should park with role=worker recorded"
+fi
+# The SAME interleaved passive output a driver pane must tolerate should
+# still drop a worker's tracking -- worker semantics are exact fingerprint
+# equality, unchanged by #73.
+write_to_pane "$PANE7" "gatekeeper: FYI -- PR #200 opened, auto-merge armed"
+sleep 0.5
+ar_poll_pane "$PANE7" "2026-07-11T14:00:00Z" "85"
+if [ "$(ar_read --arg p "$PANE7" '.panes[$p] // empty')" = "" ]; then
+  pass "#73: worker pane's tracking still drops on ANY change, unlike the driver (semantics unchanged)"
+else
+  fail "#73 REGRESSION: worker pane ownership test should still be exact-fingerprint equality, not the driver's question-presence test"
+fi
+
+echo "== #73: window NOT reset -> no action regardless (driver) =="
+AUTO_RESUME_NOW_EPOCH="$NOW0"
+PANE8="$(new_test_pane)"
+simulate_parked_pane "$PANE8"
+ar_mark_pending "$PANE8" "driver"
+ar_poll_pane "$PANE8" "2026-07-11T14:00:00Z" "85"
+ar_poll_pane "$PANE8" "2026-07-11T14:00:00Z" "85" # unchanged resets_at, now still before it
+if [ "$(ar_read --arg p "$PANE8" '.panes[$p].state')" = "parked" ]; then
+  pass "#73: driver pane with no window reset yet stays parked, no action taken"
+else
+  fail "#73: driver pane should stay parked when the window has not actually reset"
+fi
+if tmux capture-pane -p -t "$PANE8" 2>&1 | grep -q "auto-resuming"; then
+  fail "#73 REGRESSION: driver pane was auto-resumed despite no window reset"
+else
+  pass "#73: no premature auto-resume for the driver without a real window reset"
+fi
+
 echo "== #80: a benign in-place repaint (counter/timer) normalizes identically =="
 # Unit-test the normalization directly (a plain `sh` test pane can't simulate
 # an in-place TUI repaint -- it would execute the text as a command). This is
