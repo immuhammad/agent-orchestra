@@ -118,6 +118,29 @@ pane_state_session() {
   echo "$sid"
 }
 
+# pane_state_effective <pane_id> -- pane_state_read with ONE derivation
+# (issue #125, Ahmad's post-park question): "failsafe" is only meaningful
+# while the quota-stop flag exists. The state file records "this session
+# last stopped while the room was gated"; once the gate lifts, a pane
+# that hasn't spoken since is simply idle -- and nothing would ever
+# rewrite the file, because hooks only fire when the session moves and
+# nothing wakes a pane that reads parked (the chicken-and-egg this
+# helper breaks). DELIVERY consumers (broker, nudge gating, dashboards)
+# use this; auto-resume deliberately keeps the RAW pane_state_read -- its
+# ownership test asks "was it parked and untouched", which the raw file
+# answers truthfully. PANE_STATE_QUOTA_FLAG overrides the flag path
+# (tests); default = the sibling of PANE_STATE_DIR, the same
+# state/quota-stop every other reader resolves.
+pane_state_effective() {
+  local pane_id="$1" state flag
+  state="$(pane_state_read "$pane_id")" || return 1
+  if [ "$state" = "failsafe" ]; then
+    flag="${PANE_STATE_QUOTA_FLAG:-$(dirname "$PANE_STATE_DIR")/quota-stop}"
+    [ -f "$flag" ] || state="idle"
+  fi
+  echo "$state"
+}
+
 # pane_state_clear <pane_id> -- removes the pane's state file. Called by
 # watch.sh's pane-liveness when a pane's CLI process is DEAD (dropped to a
 # plain shell): a dead pane's last-written state is a lie, and clearing it

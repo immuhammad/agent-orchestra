@@ -90,7 +90,9 @@ evaluated on adoption, not bulk-imported.
   `.msg` files exist); an IDLE receiver gets one typed `check inbox`
   wake — safe, because idle is ground truth, not a heuristic; a
   FAILSAFE (quota-parked) receiver has delivery HELD until the park
-  lifts. `lib/broker.sh` (in the watch loop) owns retries: every wake is
+  lifts — and "lifted" is derived from the quota-stop flag, so a stale
+  failsafe state on a pane nobody spoke to after the flag cleared reads
+  as idle again (delivery resumes on its own). `lib/broker.sh` (in the watch loop) owns retries: every wake is
   verified by the `.ack` appearing within `dispatch.ack_deadline_s`,
   retried once, then escalated as a durable FLAG — nothing waits
   forever, and nothing but dispatch/broker ever types into another

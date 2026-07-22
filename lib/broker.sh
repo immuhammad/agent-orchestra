@@ -93,7 +93,10 @@ broker_check() {
     pane_id=""; state=""
     if [ -n "$target" ]; then
       pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
-      [ -n "$pane_id" ] && state="$(pane_state_read "$pane_id" 2>/dev/null || echo '')"
+      # effective, not raw: a stale 'failsafe' whose quota flag already
+      # lifted reads as idle here, so delivery resumes without needing
+      # the pane to somehow wake itself first (issue #125 follow-up).
+      [ -n "$pane_id" ] && state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
     fi
     for m in "$inbox"/*.msg; do
       [ -e "$m" ] || continue
@@ -167,7 +170,7 @@ broker_states_summary() {
     if [ -n "$target" ]; then
       pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
       if [ -n "$pane_id" ]; then
-        state="$(pane_state_read "$pane_id" 2>/dev/null || echo '?')"
+        state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '?')"
         [ -z "$state" ] && state="?"
       fi
     fi

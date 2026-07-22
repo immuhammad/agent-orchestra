@@ -125,6 +125,27 @@ else
   pass "pane_state_session fails cleanly with no recorded session_id"
 fi
 
+echo "== issue #125 follow-up: failsafe is EFFECTIVE only while the quota flag exists =="
+pane_state_write "%94" failsafe "sid-eff"
+EFF_FLAG="$(mktemp)"
+if [ "$(PANE_STATE_QUOTA_FLAG="$EFF_FLAG" pane_state_effective "%94" 2>/dev/null)" = "failsafe" ]; then
+  pass "flag present -> effective state is failsafe (delivery held)"
+else
+  fail "expected effective failsafe while the quota flag exists"
+fi
+rm -f "$EFF_FLAG"
+if [ "$(PANE_STATE_QUOTA_FLAG="$EFF_FLAG" pane_state_effective "%94" 2>/dev/null)" = "idle" ]; then
+  pass "flag lifted -> stale failsafe reads as idle (breaks the nothing-can-wake-it chicken-and-egg)"
+else
+  fail "expected effective idle once the quota flag is gone"
+fi
+if [ "$(pane_state_read "%94" 2>/dev/null)" = "failsafe" ]; then
+  pass "raw read still reports failsafe (auto-resume ownership stays truthful)"
+else
+  fail "raw pane_state_read should be untouched by the effective derivation"
+fi
+pane_state_clear "%94"
+
 echo "== issue #125: pane_state_clear removes the entry =="
 pane_state_clear "%97"
 if pane_state_read "%97" >/dev/null 2>&1; then

@@ -33,6 +33,24 @@ BROKER_INBOX_ROOT="$TMP/inbox"
 export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE WATCH_EVENTS_LOG REVIEW_WATCH_STATE BROKER_STATE_DIR BROKER_INBOX_ROOT
 source "$LIB/watch.sh"
 
+# wait_for_pane_cmd <target> <cmd substring> -- polls until the pane's
+# foreground process matches (up to 5s). A fixed `sleep 1` after sending a
+# fixture command raced the shell's startup: a just-created pane whose
+# fixture hasn't started yet still reports its SHELL as the foreground
+# process, which reads as idle to pane_is_idle and dead to
+# pw_pane_is_dead -- both live-observed flakes of the old fixed sleeps.
+wait_for_pane_cmd() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null | grep -q "$2"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "WARN: pane $1 never reached foreground cmd '$2'" >&2
+  return 1
+}
+
 echo "== mw_extract_issue: parses linked issue from title+body text =="
 [ "$(mw_extract_issue 'Closes #34.')" = "34" ] && pass "Closes #N" || fail "Closes #N"
 [ "$(mw_extract_issue 'fixes #40 also')" = "40" ] && pass "fixes #N (lowercase)" || fail "fixes #N (lowercase)"
@@ -520,7 +538,7 @@ tmux new-session -d -s "$TEST_SESSION" -n main
 tmux split-window -h -t "$TEST_SESSION:0"
 # Pane 1 starts busy (simulated heuristic-busy, no hook state).
 tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.1" sleep
 pane_for_agent() {
   case "$1" in
     watchtest) echo "$TEST_SESSION:0.1" ;;
@@ -614,7 +632,7 @@ tmux split-window -h -t "$TEST_SESSION:0"
 # Pane 0: plain shell -- "dead" per pw_pane_is_dead. Pane 1: a fake
 # long-running "CLI" (sleep) -- alive.
 tmux send-keys -t "$TEST_SESSION:0.1" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.1" sleep
 pane_for_agent() {
   case "$1" in
     deadtest)  echo "$TEST_SESSION:0.0" ;;
@@ -656,7 +674,7 @@ fi
 
 echo "== pane-liveness: clears the flag once the pane recovers =="
 tmux send-keys -t "$TEST_SESSION:0.0" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.0" sleep
 pane_liveness_check
 if grep -qxF "deadtest" "$WATCH_FLAGGED_DEAD_FILE" 2>/dev/null; then
   fail "recovered pane's flag should have been cleared"
@@ -708,7 +726,7 @@ echo "== T33: pane-liveness FLAG/recovery events are logged to EVENTS_LOG =="
 tmux new-session -d -s "$TEST_SESSION" -n main
 tmux split-window -h -t "$TEST_SESSION:0"
 tmux send-keys -t "$TEST_SESSION:0.1" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.1" sleep
 pane_for_agent() {
   case "$1" in
     deadtest) echo "$TEST_SESSION:0.0" ;;
@@ -726,7 +744,7 @@ else
   fail "expected a FLAGGED event in EVENTS_LOG: $(cat "$WATCH_EVENTS_LOG" 2>/dev/null)"
 fi
 tmux send-keys -t "$TEST_SESSION:0.0" "sleep 20" Enter
-sleep 1
+wait_for_pane_cmd "$TEST_SESSION:0.0" sleep
 pane_liveness_check
 if grep -q "deadtest pane alive again" "$WATCH_EVENTS_LOG" 2>/dev/null; then
   pass "pane-liveness logged the recovery event"

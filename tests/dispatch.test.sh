@@ -131,11 +131,23 @@ else
   fail "expected the Stop-hook-pickup message for hook-state busy, got: $OUT"
 fi
 echo "failsafe $(date '+%s') sid-t24" > "$PANE_STATE_DIR/$NUDGE_SAFE_ID"
+mkdir -p "$CANON_DIR/state"
+touch "$CANON_DIR/state/quota-stop"
 OUT="$(nudge_agent "deferredtest" 2>&1)"
 if echo "$OUT" | grep -q "parked on quota failsafe"; then
-  pass "issue #125: hook-state failsafe -> delivery held, no wake"
+  pass "issue #125: hook-state failsafe (flag up) -> delivery held, no wake"
 else
-  fail "expected the failsafe-hold message, got: $OUT"
+  fail "expected the failsafe-hold message while the quota flag exists, got: $OUT"
+fi
+rm -f "$CANON_DIR/state/quota-stop"
+OUT="$(nudge_agent "deferredtest" 2>&1)"
+if echo "$OUT" | grep -q "Stop-hook pickup delivers at turn end"; then
+  fail "stale failsafe with the flag lifted must not read busy, got: $OUT"
+fi
+if echo "$OUT" | grep -q "parked on quota failsafe"; then
+  fail "issue #125 follow-up: stale failsafe (flag lifted) must not hold delivery, got: $OUT"
+else
+  pass "issue #125 follow-up: stale failsafe with the flag lifted no longer holds delivery"
 fi
 # Idle ground truth: kill the busy fixture first so the typed wake lands
 # at a real shell prompt, then assert the wake actually typed.

@@ -176,7 +176,7 @@ pane_is_idle() {
   # falls through to the screen-scrape heuristic unchanged.
   pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
   if [ -n "$pane_id" ]; then
-    hook_state="$(pane_state_read "$pane_id" 2>/dev/null || echo '')"
+    hook_state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
     case "$hook_state" in
       idle) return 0 ;;
       busy|failsafe) return 1 ;;
@@ -267,7 +267,7 @@ nudge_agent() {
   local pane_id hook_state
   pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
   hook_state=""
-  [ -n "$pane_id" ] && hook_state="$(pane_state_read "$pane_id" 2>/dev/null || echo '')"
+  [ -n "$pane_id" ] && hook_state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
   case "$hook_state" in
     busy)
       echo "dispatch.sh: $agent ($target) busy (hook state) -- Stop-hook pickup delivers at turn end"
