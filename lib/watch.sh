@@ -461,41 +461,70 @@ pane_liveness_check() {
 
 # -- main loop ----------------------------------------------------------
 
-# watch_render -- clears the pane and redraws the fixed
-# board: PRs / DEFERRED NUDGES / PANE LIVENESS / EVENTS. Display-layer
-# only -- every section reads from a file that already persists the data
-# (merge-watch's own EVENTS_LOG, the deferred-nudge queue, the flagged-dead
-# file), so clearing the screen each tick loses nothing.
+# watch_pane_lines -- how many rows watch_render has to work with.
+# WATCH_PANE_LINES overrides outright (tests: deterministic sizing without
+# a real controlling tty); otherwise `tput lines` when stdout is a real
+# tty, else a sane fixed fallback (the monitor strip's own row count --
+# see bin/orc's monitor_rows) for a non-tty invocation (piped/redirected).
+watch_pane_lines() {
+  if [ -n "${WATCH_PANE_LINES:-}" ]; then
+    echo "$WATCH_PANE_LINES"
+  elif [ -t 1 ]; then
+    tput lines 2>/dev/null || echo 14
+  else
+    echo 14
+  fi
+}
+
+# watch_render -- clears the pane and redraws a compact 1-line header
+# (interval + nudge count + liveness summary) followed by an ADAPTIVE
+# EVENTS tail that fills whatever rows are left (issue #120: the old
+# 4-section fixed frame was ~26 lines tall -- taller than any realistic
+# monitor strip, so the header/PRs/liveness sections scrolled off and only
+# EVENTS ever showed). PR lines are already appended to EVENTS_LOG by
+# merge_watch_check, so they fold into the EVENTS tail instead of getting
+# their own section. NUDGE:/DEAD: lines list the actual pending agents
+# (rare + important, per the no-silent-caps rule) and are omitted entirely
+# when both counts are zero. Display-layer only -- every value here reads
+# from a file that already persists the data, so clearing the screen each
+# tick loses nothing.
 watch_render() {
   tui_clear
-  echo "$(tui_bold "Watch") -- $(date '+%Y-%m-%d %H:%M:%S') (interval ${WATCH_INTERVAL}s)"
-  echo ""
-  echo "$(tui_section PRs)"
-  if grep -q 'PR #' "$EVENTS_LOG" 2>/dev/null; then
-    grep 'PR #' "$EVENTS_LOG" | tail -5 | sed 's/^/  /'
+  local nudge_count=0 dead_count=0 liveness_lines=0 dead_str
+  [ -s "$DEFERRED_FILE" ] && nudge_count="$(wc -l < "$DEFERRED_FILE" | tr -d ' ')"
+  [ -s "$FLAGGED_DEAD_FILE" ] && dead_count="$(wc -l < "$FLAGGED_DEAD_FILE" | tr -d ' ')"
+  if [ "$dead_count" -eq 0 ]; then
+    dead_str="all alive"
   else
-    echo "  (none processed yet)"
+    dead_str="${dead_count} dead"
   fi
+  echo "Watch $(date '+%H:%M:%S')  ${WATCH_INTERVAL}s | nudges ${nudge_count} | ${dead_str}"
   echo ""
-  echo "$(tui_section "DEFERRED NUDGES")"
-  if [ -s "$DEFERRED_FILE" ]; then
-    sed 's/^/  /' "$DEFERRED_FILE"
-  else
-    echo "  (empty)"
+  if [ "$nudge_count" -gt 0 ]; then
+    sed 's/^/NUDGE: /' "$DEFERRED_FILE"
+    liveness_lines=$(( liveness_lines + nudge_count ))
   fi
-  echo ""
-  echo "$(tui_section "PANE LIVENESS")"
-  if [ -s "$FLAGGED_DEAD_FILE" ]; then
-    sed 's/^/  DEAD: /' "$FLAGGED_DEAD_FILE"
-  else
-    echo "  all agents alive"
+  if [ "$dead_count" -gt 0 ]; then
+    sed 's/^/DEAD: /' "$FLAGGED_DEAD_FILE"
+    liveness_lines=$(( liveness_lines + dead_count ))
   fi
-  echo ""
-  echo "$(tui_section EVENTS)"
-  if [ -f "$EVENTS_LOG" ] && [ -s "$EVENTS_LOG" ]; then
-    tail -10 "$EVENTS_LOG" | sed 's/^/  /'
+
+  local pane_lines events_budget total_events shown
+  pane_lines="$(watch_pane_lines)"
+  events_budget=$(( pane_lines - 2 - liveness_lines ))  # -2: header + blank separator
+  [ "$events_budget" -lt 0 ] && events_budget=0
+  total_events=0
+  [ -f "$EVENTS_LOG" ] && total_events="$(wc -l < "$EVENTS_LOG" | tr -d ' ')"
+
+  if [ "$total_events" -eq 0 ]; then
+    echo "(no events yet)"
+  elif [ "$total_events" -gt "$events_budget" ] && [ "$events_budget" -gt 0 ]; then
+    shown=$(( events_budget - 1 ))
+    [ "$shown" -lt 0 ] && shown=0
+    echo "(last ${shown} of ${total_events})"
+    tail -"$shown" "$EVENTS_LOG" | sed 's/^/  /'
   else
-    echo "  (no events yet)"
+    tail -"$events_budget" "$EVENTS_LOG" | sed 's/^/  /'
   fi
 }
 
