@@ -247,7 +247,16 @@ NOTTY_SESSION="orctest-notty-$$"
 NOTTY_TMP="$(mktemp -d)"
 (
   cd "$TMP"
-  env -u ORC_TERM_COLS -u ORC_TERM_LINES TERM=dumb \
+  # -u TMUX (issue #119, review round 2 -- reproduced live running this
+  # suite from inside a real tmux pane): this test's whole POINT is
+  # "nothing about the real client size is knowable" -- but the #119 fix
+  # added a SECOND way to learn it (the attached tmux client), which is
+  # unconditionally available whenever $TMUX happens to be inherited from
+  # whatever shell is running this test. Stripped explicitly so the
+  # scenario stays genuinely size-unknown regardless of the invoking
+  # shell's own tmux context, instead of accidentally exercising #119's
+  # new code path (that path has its own dedicated tests below).
+  env -u ORC_TERM_COLS -u ORC_TERM_LINES -u TMUX TERM=dumb \
     ORC_SESSION="$NOTTY_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$NOTTY_TMP/build.out" 2> "$NOTTY_TMP/build.err" < /dev/null
 )
@@ -261,6 +270,97 @@ fi
 NOTTY_ZERO_HEIGHT="$(tmux list-panes -t "$NOTTY_SESSION" -F '#{pane_height}' 2>/dev/null | awk '$1<=0' | wc -l | tr -d ' ')"
 assert_eq "issue #87: no-tty fallback never produces a zero-height pane" "0" "$NOTTY_ZERO_HEIGHT"
 tmux kill-session -t "$NOTTY_SESSION" 2>/dev/null || true
+
+# issue #119: `orc up` run from INSIDE an already-attached tmux client (a
+# human's outer terminal is itself a tmux pane) measures the CALLING
+# PANE's own geometry via tput, not the actual physical terminal window --
+# live-hit rebuilding this room's own #87 layout, where the calling pane
+# was narrower than the real attached client, tripping the loud tiled
+# fallback for no real reason. Fixed by sizing from the attached client
+# (`tmux display-message -p '#{client_width} #{client_height}'`) whenever
+# $TMUX is set, before falling through to tput/none.
+#
+# A `tmux` STUB on PATH (not a real second attached client, which would
+# need a real pty) intercepts ONLY the exact display-message call this
+# fix makes and execs through to the REAL tmux binary (captured as
+# REAL_TMUX before PATH is touched) for every other invocation --
+# session/window management in this test still goes through real tmux.
+REAL_TMUX="$(command -v tmux)"
+
+echo "== issue #119: \$TMUX set -> sizes from the attached tmux CLIENT, not tput, and echoes the chosen size + source =="
+T119_STUB_DIR="$(mktemp -d)"
+cat > "$T119_STUB_DIR/tmux" <<STUB
+#!/bin/bash
+if [ "\$1" = "display-message" ] && [ "\$2" = "-p" ] && [ "\$3" = "#{client_width} #{client_height}" ]; then
+  echo "199 55"
+  exit 0
+fi
+exec "$REAL_TMUX" "\$@"
+STUB
+chmod +x "$T119_STUB_DIR/tmux"
+T119_SESSION="orctest-119-$$"
+T119_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  env -u ORC_TERM_COLS -u ORC_TERM_LINES PATH="$T119_STUB_DIR:$PATH" TMUX="/tmp/faketmux,12345,0" \
+    ORC_SESSION="$T119_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$T119_TMP/build.out" 2> "$T119_TMP/build.err" < /dev/null
+)
+# issue #119 review: $TMUX's socket segment IS load-bearing for plain tmux
+# CLI invocations with no -L/-S (confirmed live on tmux 3.7b -- a
+# different TMUX value really does route to a different server/socket,
+# not just a nesting marker). The builder subshell above ran with
+# TMUX="/tmp/faketmux,12345,0", so every query against the session it
+# built must use that SAME value or it's asking the wrong server.
+T119_WINSIZE="$(TMUX="/tmp/faketmux,12345,0" tmux list-windows -t "$T119_SESSION" -F '#{window_width}x#{window_height}' 2>/dev/null)"
+assert_eq "issue #119: room is sized from the stubbed attached-client dimensions (199x55), not this test's own tput/pane size" "199x55" "$T119_WINSIZE"
+if grep -q 'sizing room at 199x55 (source: attached tmux client)' "$T119_TMP/build.out" 2>/dev/null; then
+  pass "issue #119: happy path echoes the chosen size + source"
+else
+  fail "issue #119: expected an echoed 'sizing room at 199x55 (source: attached tmux client)' line, got: $(cat "$T119_TMP/build.out" 2>/dev/null)"
+fi
+TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119_SESSION" 2>/dev/null || true
+
+echo "== issue #119: ORC_TERM_COLS/LINES override still wins even when \$TMUX is set (override stays top-priority) =="
+T119OV_SESSION="orctest-119ov-$$"
+T119OV_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  PATH="$T119_STUB_DIR:$PATH" TMUX="/tmp/faketmux,12345,0" \
+    ORC_TERM_COLS=90 ORC_TERM_LINES=30 \
+    ORC_SESSION="$T119OV_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$T119OV_TMP/build.out" 2> "$T119OV_TMP/build.err" < /dev/null
+)
+T119OV_WINSIZE="$(TMUX="/tmp/faketmux,12345,0" tmux list-windows -t "$T119OV_SESSION" -F '#{window_width}x#{window_height}' 2>/dev/null)"
+assert_eq "issue #119: ORC_TERM_COLS/LINES (90x30) wins over the attached-client stub (199x55)" "90x30" "$T119OV_WINSIZE"
+TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119OV_SESSION" 2>/dev/null || true
+
+echo "== issue #119: \$TMUX set but no attached client (empty display-message) falls through to the loud tiled fallback, not a crash =="
+T119EMPTY_STUB_DIR="$(mktemp -d)"
+cat > "$T119EMPTY_STUB_DIR/tmux" <<STUB
+#!/bin/bash
+if [ "\$1" = "display-message" ] && [ "\$2" = "-p" ] && [ "\$3" = "#{client_width} #{client_height}" ]; then
+  exit 0
+fi
+exec "$REAL_TMUX" "\$@"
+STUB
+chmod +x "$T119EMPTY_STUB_DIR/tmux"
+T119EMPTY_SESSION="orctest-119empty-$$"
+T119EMPTY_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  env -u ORC_TERM_COLS -u ORC_TERM_LINES PATH="$T119EMPTY_STUB_DIR:$PATH" TMUX="/tmp/faketmux,12345,0" \
+    ORC_SESSION="$T119EMPTY_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$T119EMPTY_TMP/build.out" 2> "$T119EMPTY_TMP/build.err" < /dev/null
+)
+T119EMPTY_PANE_COUNT="$(TMUX="/tmp/faketmux,12345,0" tmux list-panes -t "$T119EMPTY_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "issue #119: empty client-size reading still builds all 5 panes via the loud fallback" "5" "$T119EMPTY_PANE_COUNT"
+if grep -qi 'WARNING.*too small' "$T119EMPTY_TMP/build.err" 2>/dev/null; then
+  pass "issue #119: no attached-client size + no tty falls back loudly, same as the no-override/no-tty case"
+else
+  fail "issue #119: expected the loud too-small WARNING when the client-size reading is empty, got: $(cat "$T119EMPTY_TMP/build.err" 2>/dev/null)"
+fi
+TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119EMPTY_SESSION" 2>/dev/null || true
 
 echo "== issue #59: liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
 if grep -v '^[[:space:]]*#' "$DIR/../bin/orc" | grep -q 'nohup'; then

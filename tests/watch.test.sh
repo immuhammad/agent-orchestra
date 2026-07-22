@@ -676,28 +676,68 @@ else
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== T33: watch_render draws all four dashboard sections and nothing is lost from their backing files =="
+echo "== T33 (issue #120): watch_render draws a compact 1-line header + adaptive EVENTS tail; nothing is lost from the backing files =="
 : > "$WATCH_EVENTS_LOG"
 echo "2026-07-05 00:00:00 - PR #999 merged -> closed issue #1" >> "$WATCH_EVENTS_LOG"
 echo "testagent" > "$DEFERRED_FILE"
 echo "deadagent" > "$FLAGGED_DEAD_FILE"
-OUT="$(watch_render)"
-MISSING=""
-for section in PRs "DEFERRED NUDGES" "PANE LIVENESS" EVENTS; do
-  echo "$OUT" | grep -q "== $section ==" || MISSING="$MISSING [$section]"
-done
-if [ -z "$MISSING" ]; then
-  pass "watch_render draws all four dashboard sections"
+OUT="$(WATCH_PANE_LINES=20 watch_render)"
+if echo "$OUT" | grep -Eq '^Watch [0-9:]+  60s \| nudges 1 \| 1 dead$'; then
+  pass "issue #120: 1-line header folds interval + nudge count + liveness summary"
 else
-  fail "missing dashboard section(s):$MISSING -- got: $OUT"
+  fail "issue #120: expected a compact 'Watch HH:MM:SS  60s | nudges 1 | 1 dead' header, got: $OUT"
 fi
-if echo "$OUT" | grep -q "PR #999" && echo "$OUT" | grep -q "testagent" && echo "$OUT" | grep -q "DEAD: deadagent"; then
-  pass "watch_render surfaces the backing files' current contents (nothing silently dropped)"
+if echo "$OUT" | grep -q "PR #999" && echo "$OUT" | grep -q "NUDGE: testagent" && echo "$OUT" | grep -q "DEAD: deadagent"; then
+  pass "issue #120: watch_render surfaces the backing files' current contents (nothing silently dropped)"
 else
-  fail "watch_render should surface PR #999 / testagent / DEAD: deadagent, got: $OUT"
+  fail "issue #120: watch_render should surface PR #999 / NUDGE: testagent / DEAD: deadagent, got: $OUT"
 fi
 : > "$DEFERRED_FILE"
 : > "$FLAGGED_DEAD_FILE"
+
+echo "== issue #120: header collapses to 'nudges 0 | all alive' and drops the NUDGE:/DEAD: lines entirely when both backing files are empty =="
+OUT="$(WATCH_PANE_LINES=20 watch_render)"
+if echo "$OUT" | grep -Eq '\| nudges 0 \| all alive$'; then
+  pass "issue #120: zero-case header reads 'nudges 0 | all alive'"
+else
+  fail "issue #120: expected 'nudges 0 | all alive' in the header, got: $OUT"
+fi
+if echo "$OUT" | grep -q "NUDGE:" || echo "$OUT" | grep -q "DEAD:"; then
+  fail "issue #120: NUDGE:/DEAD: lines should not appear when both backing files are empty, got: $OUT"
+else
+  pass "issue #120: no NUDGE:/DEAD: lines printed when both backing files are empty"
+fi
+
+echo "== issue #120: EVENTS tail is ADAPTIVE to WATCH_PANE_LINES, and truncation is shown explicitly (no silent caps) =="
+: > "$WATCH_EVENTS_LOG"
+for i in $(seq 1 20); do echo "2026-07-05 00:00:00 - event $i" >> "$WATCH_EVENTS_LOG"; done
+OUT="$(WATCH_PANE_LINES=10 watch_render)"
+OUT_LINES="$(echo "$OUT" | wc -l | tr -d ' ')"
+if [ "$OUT_LINES" = "10" ]; then
+  pass "issue #120: rendered output exactly fits the WATCH_PANE_LINES=10 budget"
+else
+  fail "issue #120: expected exactly 10 rendered lines for WATCH_PANE_LINES=10, got $OUT_LINES: $OUT"
+fi
+if echo "$OUT" | grep -qF "(last 7 of 20)"; then
+  pass "issue #120: truncated EVENTS tail states '(last N of TOTAL)' explicitly"
+else
+  fail "issue #120: expected an explicit '(last 7 of 20)' truncation note, got: $OUT"
+fi
+SHOWN_EVENTS="$(echo "$OUT" | grep -c '^  2026-07-05')"
+if [ "$SHOWN_EVENTS" = "7" ]; then
+  pass "issue #120: exactly 7 event lines shown (budget minus the truncation note itself)"
+else
+  fail "issue #120: expected exactly 7 event lines shown, got $SHOWN_EVENTS: $OUT"
+fi
+
+echo "== issue #120: a bigger WATCH_PANE_LINES shows every event with no truncation note once everything fits =="
+OUT="$(WATCH_PANE_LINES=30 watch_render)"
+if echo "$OUT" | grep -q "event 1$" && echo "$OUT" | grep -q "event 20$" && ! echo "$OUT" | grep -q "(last"; then
+  pass "issue #120: all 20 events shown with room to spare, no truncation note"
+else
+  fail "issue #120: expected all 20 events with no truncation note when the pane has room, got: $OUT"
+fi
+: > "$WATCH_EVENTS_LOG"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

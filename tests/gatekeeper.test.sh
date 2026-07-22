@@ -247,17 +247,34 @@ else
   skip "no credentials, see above"
 fi
 
-echo "== gatekeeper.sh dashboard board: sections present (QUOTA/HEARTBEAT/AUTO-RESUME/LAST ALERT) =="
+echo "== issue #120: gatekeeper_render is a compact 6-line fixed frame (header/QUOTA/HB/RESUME/ALERT/ROOM), no blank spacers =="
+GK120_STATE="$(mktemp)"
+GK120_OUT="$(GATEKEEPER_ALERT_STATE_FILE="$GK120_STATE" GATEKEEPER_ROOM_ROOT="$PWD" \
+  bash -c "source '$GATEKEEPER'; ROOM_BRANCH_STATE=ok; ROOM_BRANCH_HEAD=abc1234; USAGE_PCT=10; WEEKLY_PCT=20; AGY_PCT=30; HEARTBEAT_AGE=5; gatekeeper_render")"
+GK120_LINES="$(echo "$GK120_OUT" | wc -l | tr -d ' ')"
+assert_eq "issue #120: gatekeeper_render prints exactly 6 lines (no blank spacers)" "6" "$GK120_LINES"
+MISSING=""
+for label in QUOTA HB RESUME ALERT ROOM; do
+  echo "$GK120_OUT" | grep -q "^${label}:" || MISSING="$MISSING [$label]"
+done
+if [ -z "$MISSING" ]; then
+  pass "issue #120: all compact labels present, one per line"
+else
+  fail "issue #120: missing compact label(s):$MISSING -- got: $GK120_OUT"
+fi
+rm -f "$GK120_STATE"
+
+echo "== gatekeeper.sh dashboard board: compact labels present on a live run (QUOTA/HB/RESUME/ALERT/ROOM) =="
 if [ -n "$TOKEN" ]; then
   OUT="$(GATEKEEPER_INTERVAL=9999 run_briefly 5 bash "$GATEKEEPER")"
   MISSING=""
-  for section in QUOTA HEARTBEAT AUTO-RESUME "LAST ALERT"; do
-    echo "$OUT" | grep -q "== $section ==" || MISSING="$MISSING [$section]"
+  for label in QUOTA HB RESUME ALERT ROOM; do
+    echo "$OUT" | grep -q "^${label}:" || MISSING="$MISSING [$label]"
   done
   if [ -z "$MISSING" ]; then
-    pass "all dashboard sections present"
+    pass "all dashboard labels present"
   else
-    fail "missing dashboard section(s):$MISSING -- got: $OUT"
+    fail "missing dashboard label(s):$MISSING -- got: $OUT"
   fi
 else
   skip "no credentials, see above"
@@ -979,7 +996,7 @@ RB_GK_OK_INBOX_BEFORE=$(ls "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.m
 RB_GK_OK_OUT="$(GATEKEEPER_ALERT_STATE_FILE="$RB_GK_OK_STATE" GATEKEEPER_ROOM_ROOT="$RB_GK_OK_REPO" \
   bash -c "source '$GATEKEEPER'; gk_check_room_branch; USAGE_PCT=0; WEEKLY_PCT=0; AGY_PCT=0; HEARTBEAT_AGE=''; gatekeeper_render")"
 RB_GK_OK_INBOX_AFTER=$(ls "$DISPATCH_CANON_DIR"/inbox/orchestra/*-room-branch.msg 2>/dev/null | wc -l | tr -d ' ')
-echo "$RB_GK_OK_OUT" | grep -q "== ROOM ==" && pass "ROOM section present on the dashboard" || fail "expected a ROOM section: $RB_GK_OK_OUT"
+echo "$RB_GK_OK_OUT" | grep -q "^ROOM:" && pass "ROOM line present on the dashboard" || fail "expected a ROOM line: $RB_GK_OK_OUT"
 echo "$RB_GK_OK_OUT" | grep -q "$RB_GK_OK_HEAD" && pass "ROOM section shows the short HEAD when on the integration branch" || fail "expected short HEAD '$RB_GK_OK_HEAD': $RB_GK_OK_OUT"
 assert_eq "on integration branch: no room-branch alert dispatched" "$RB_GK_OK_INBOX_BEFORE" "$RB_GK_OK_INBOX_AFTER"
 rm -rf "$RB_GK_OK_REPO" "$RB_GK_OK_STATE"

@@ -232,47 +232,40 @@ fetch_claude_usage() {
     https://api.anthropic.com/api/oauth/usage 2>/dev/null
 }
 
-# gatekeeper_render -- clears the pane and redraws the
-# fixed board: QUOTA / HEARTBEAT / AUTO-RESUME / LAST ALERT. Display-layer
-# only -- reads USAGE_PCT/WEEKLY_PCT/AGY_PCT/HEARTBEAT_AGE from the caller's
-# scope, doesn't compute or persist anything itself. Every alert this loop
-# fires still appends to $BUDGET_LOG unchanged; this function only
-# controls what's currently ON SCREEN.
+# gatekeeper_render -- clears the pane and redraws a compact 6-line fixed
+# frame: header (time + thresholds), then one labeled line each for
+# QUOTA/HB/RESUME/ALERT/ROOM, no blank spacers (issue #120: the old
+# blank-separated multi-line board was 17 lines tall -- taller than the
+# monitor strip, so QUOTA -- the most important line -- scrolled off
+# screen). Display-layer only -- reads USAGE_PCT/WEEKLY_PCT/AGY_PCT/
+# HEARTBEAT_AGE from the caller's scope, doesn't compute or persist
+# anything itself. Every alert this loop fires still appends to
+# $BUDGET_LOG unchanged; this function only controls what's on screen.
 gatekeeper_render() {
   tui_clear
   echo "$(tui_bold "Gatekeeper") -- $(date '+%Y-%m-%d %H:%M:%S') (threshold claude ${CLAUDE_THRESHOLD}% / agy ${AGY_THRESHOLD}%)"
-  echo ""
-  echo "$(tui_section QUOTA)"
-  echo "  Claude 5h: $(tui_traffic_light "$USAGE_PCT" "${USAGE_PCT}%") | Claude weekly: $(tui_traffic_light "$WEEKLY_PCT" "${WEEKLY_PCT}%") | agy(max pool): $(tui_traffic_light "$AGY_PCT" "${AGY_PCT}%")"
-  echo ""
-  echo "$(tui_section HEARTBEAT)"
+  echo "QUOTA: Claude 5h: $(tui_traffic_light "$USAGE_PCT" "${USAGE_PCT}%") | Claude weekly: $(tui_traffic_light "$WEEKLY_PCT" "${WEEKLY_PCT}%") | agy(max pool): $(tui_traffic_light "$AGY_PCT" "${AGY_PCT}%")"
   if [ -n "$HEARTBEAT_AGE" ]; then
     if [ "$HEARTBEAT_AGE" -ge "$GATEKEEPER_STALE_AFTER" ]; then
-      echo "  $(tui_red "${HEARTBEAT_AGE}s ago (stale, expected every ~${GATEKEEPER_STALE_AFTER}s)")"
+      echo "HB: $(tui_red "${HEARTBEAT_AGE}s ago (stale, expected every ~${GATEKEEPER_STALE_AFTER}s)")"
     else
-      echo "  $(tui_green "${HEARTBEAT_AGE}s ago")"
+      echo "HB: $(tui_green "${HEARTBEAT_AGE}s ago")"
     fi
   else
-    echo "  never (first tick)"
+    echo "HB: never (first tick)"
   fi
-  echo ""
-  echo "$(tui_section AUTO-RESUME)"
   local parked pending resumes_used
   parked="$(ar_read '[.panes[] | select(.state=="parked")] | length' 2>/dev/null)"
   pending="$(ar_read '[.panes[] | select(.state=="pending")] | length' 2>/dev/null)"
   resumes_used="$(ar_read '.budget.count' 2>/dev/null)"
-  echo "  parked: ${parked:-0} | pending: ${pending:-0} | resumes used today: ${resumes_used:-0}/${AR_MAX_PER_DAY}"
-  echo ""
-  echo "$(tui_section "LAST ALERT")"
+  echo "RESUME: parked: ${parked:-0} | pending: ${pending:-0} | resumes used today: ${resumes_used:-0}/${AR_MAX_PER_DAY}"
   local last_alert
   last_alert="$(grep 'ALERT' "$BUDGET_LOG" 2>/dev/null | tail -1)"
-  echo "  ${last_alert:-none}"
-  echo ""
-  echo "$(tui_section ROOM)"
+  echo "ALERT: ${last_alert:-none}"
   if [ "${ROOM_BRANCH_STATE:-}" = "ok" ]; then
-    echo "  $(tui_green "${ROOM_BRANCH_HEAD:-?} (integration branch)")"
+    echo "ROOM: $(tui_green "${ROOM_BRANCH_HEAD:-?} (integration branch)")"
   else
-    echo "  $(tui_red "${ROOM_BRANCH_STATE:-unknown} (HEAD ${ROOM_BRANCH_HEAD:-?})")"
+    echo "ROOM: $(tui_red "${ROOM_BRANCH_STATE:-unknown} (HEAD ${ROOM_BRANCH_HEAD:-?})")"
   fi
 }
 

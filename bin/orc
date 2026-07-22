@@ -139,11 +139,24 @@ orc_build_session() {
   # trusted when stdout is a REAL tty; otherwise (and with no
   # ORC_TERM_COLS/LINES override) this always falls through to the loud
   # tiled fallback rather than gambling on what a non-tty default means.
-  local term_cols term_lines monitor_rows=12 min_agent_rows=15 agent_rows
-  local col_width half_width
+  local term_cols term_lines monitor_rows=14 min_agent_rows=15 agent_rows
+  local col_width half_width client_size
   if [ -n "${ORC_TERM_COLS:-}" ] && [ -n "${ORC_TERM_LINES:-}" ]; then
     term_cols="$ORC_TERM_COLS"
     term_lines="$ORC_TERM_LINES"
+  elif [ -n "${TMUX:-}" ] && client_size="$(tmux display-message -p '#{client_width} #{client_height}' 2>/dev/null)" && [ -n "$client_size" ]; then
+    # issue #119: `orc up` run from INSIDE an already-attached tmux client
+    # (a human's outer terminal is itself a tmux pane) measures the
+    # CALLING PANE's own geometry via tput below, not the actual physical
+    # terminal window -- live-hit rebuilding this room's own #87 layout,
+    # where the calling pane was narrower than the real attached client,
+    # tripping the loud tiled fallback for no real reason. Size from the
+    # attached CLIENT instead whenever $TMUX is set (ORC_TERM_COLS/LINES
+    # above still wins outright). No attached client (empty output) falls
+    # through to the tput/none chain below unchanged.
+    term_cols="${client_size%% *}"
+    term_lines="${client_size##* }"
+    echo "orc: sizing room at ${term_cols}x${term_lines} (source: attached tmux client)"
   elif [ -t 1 ]; then
     term_cols="$(tput cols 2>/dev/null || echo 0)"
     term_lines="$(tput lines 2>/dev/null || echo 0)"
