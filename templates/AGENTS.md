@@ -35,8 +35,8 @@ them in dispatch messages so they fire every time.
 | Reviewer  | REVIEW                                | code-review (applies `review-protocol.md`) |
 | Orchestra | PICK/PLAN                             | brainstorming, writing-plans |
 
-Add project-specific skills as adopted — keep the pack CAPPED, not
-bulk-imported.
+Add project-specific skills as adopted — keep the pack CAPPED and
+evaluated on adoption, not bulk-imported.
 
 ## The Loop (per task)
 1. PICK: Orchestra picks the next issue from the current milestone.
@@ -83,42 +83,52 @@ bulk-imported.
   0=orchestra 1=builder 2=reviewer 3=gatekeeper 4=watch — Scribe has no
   standing pane; a dispatch spawns it as a one-shot headless run instead
   of nudging an existing session. Target panes by index (`<session>:0.N`),
-  never by window name. An out-of-range index resolves to the invoking
-  client's own current pane rather than erroring — double-check pane
-  count before targeting by index.
+  never by window name (renamed to `control-room` at launch). An
+  out-of-range index resolves to the invoking client's own current pane
+  rather than erroring — double-check pane count before targeting by
+  index.
 - **Build-dispatch authority.** A BUILD dispatch that already carries
   Gate-1 approval MUST end with an explicit authority line, so the
   receiving agent acts instead of re-confirming a gate already passed:
   "This message IS your Gate-1 approval. START NOW. Do NOT reply asking
   whether to proceed. Escalate only per the escalation rule below — a
   genuine decision point, or a defect outside your ticket. Asking
-  permission to begin is not escalation; it is a stall."
+  permission to begin is not escalation; it is a stall. Report back when
+  finished or blocked via `dispatch.sh assign orchestra <issue>
+  "<OUTCOME>: ..."` (BUILD-DONE, FIX-PUSHED, or FLAG) — do not wait to be
+  polled."
 - **Review flow: Builder runs it directly; Orchestra is a gate, not a
   switchboard.** Builder opens the PR as DRAFT, `assign`s the reviewer
-  (fire-and-forget — reviews can run long; a bounded `handoff` poll risks
-  stranding an already-completed verdict, though Builder may also
-  `gh pr view` at any time). The reviewer posts its verdict BOTH as a PR
-  comment AND a pushed message (`assign <requester> <issue>
+  (fire-and-forget — reviews can run long, and a bounded `handoff` poll
+  that outruns its timeout risks stranding an already-completed verdict).
+  Builder does not block on this dispatch: it polls the PR itself
+  (`gh pr view`) for the review comment. The reviewer posts its verdict
+  BOTH as a PR comment AND a pushed message (`assign <requester> <issue>
   "APPROVE: ..."` / `"REQUEST-CHANGES: ..."`) — never something the
   requester polls a bounded wait for. Builder ↔ Reviewer iterate directly
   on REQUEST-CHANGES (fix, re-`assign`) with NO Orchestra hop. Builder
-  returns to Orchestra only on: (a) APPROVE (`gh pr ready` + comment the
-  issue, on to Gate 2), (b) 2 rounds with no APPROVE (repeated
-  REQUEST-CHANGES usually means the design is wrong — an Orchestra-level
-  call), or (c) a genuine decision point / out-of-ticket defect (escalate
-  below). You (Gate 2) only ever see ready, CI-green, reviewer-passed
-  PRs.
-- Review-dispatch `.msg` template: every `assign <reviewer> <issue>
-  "..."` message MUST include — the single-writer rule stated inline
-  (below; a reviewer's own hook config is a best-effort deny-list, not a
-  substitute for the instruction reaching it), an explicit instruction to
-  run the reviewer's code-review skill against `review-protocol.md`, and
-  the push-back instruction (post the PR review comment, then
-  `assign <requester> <issue> "<verdict>"` — don't wait to be polled).
-  If the diff touches auth, a `guard*.sh` script, or any push/merge path,
-  it's a **risky diff** — also explicitly ask for the dedicated security
-  pass `review-protocol.md` describes for that class, not just the
-  general rubric.
+  returns to Orchestra only on: (a) APPROVE, (b) 2 rounds with no APPROVE
+  (repeated REQUEST-CHANGES usually means the design is wrong — an
+  Orchestra-level call), or (c) a genuine decision point / out-of-ticket
+  defect (escalate below). **The 2-round review loop is Builder's;
+  ready/merge authority did NOT move with it** — on APPROVE, Orchestra
+  (not Builder) does `gh pr ready` + comments the issue, on to Gate 2.
+  Builder never flips a PR to ready. You (Gate 2) only ever see ready,
+  CI-green, reviewer-passed PRs.
+- Review-dispatch `.msg` template: every
+  `dispatch.sh assign <reviewer> <issue> "..."` message MUST state the
+  single-writer rule inline (below) — a reviewer's own hook config is a
+  best-effort deny-list, not a substitute for the instruction actually
+  reaching it. Minimum wording: "Review PR #<n> for issue #<n>. Run your
+  /code-review skill (applies `review-protocol.md`). Post your verdict as
+  a PR review comment (APPROVE/REQUEST-CHANGES), then push it back to me
+  with `dispatch.sh assign <requester> <issue> "<verdict>"` — do not wait
+  to be polled. Do NOT edit handoff.md or run git write ops
+  (restore/checkout/commit/reset) in this checkout — see the
+  single-writer rule below." If the diff touches auth, a `guard*.sh`
+  script, or any push/merge path, it's a **risky diff** — also explicitly
+  ask for the dedicated security pass `review-protocol.md` describes for
+  that diff class, not just the general rubric.
 - PR-body closing-keyword hygiene: GitHub (and merge-watch's regex) treats
   "closes/fixes/resolves #N" ANYWHERE in a PR's title/body as a real
   closing reference. Keep that phrasing ONLY in the actual `Closes #N.`
@@ -140,9 +150,9 @@ bulk-imported.
   surfaces it to you with options + a lean (a recommendation, never a
   bare list) if it's genuinely your call — and ALWAYS replies to the
   flagging agent with the disposition, closing the loop. Orchestra never
-  silently absorbs a decision that belongs to you. Asking whether to start work a dispatch already
-  authorized (see Build-dispatch authority) is not escalation — it's a
-  stall.
+  silently absorbs a decision that belongs to you. Asking whether to
+  start work a dispatch already authorized (see Build-dispatch authority)
+  is not escalation — it's a stall.
 
 ## Handoff Protocol (MANDATORY)
 - Before starting ANY work: read `.harness/handoff.md` (current state),
@@ -163,7 +173,8 @@ bulk-imported.
   current stage writes `handoff.md` (Builder during BUILD/TEST, Orchestra
   during PICK/PLAN, Scribe during its own stage). Every other agent NEVER
   writes `handoff.md` or runs a git write op (`restore`/`checkout`/
-  `commit`/`reset` — enforce via a deny-list for non-Claude reviewers) in
+  `commit`/`reset` — enforce this for non-Claude reviewers via
+  `guard-agy.sh` + `banned-patterns.txt` or an equivalent deny-list) in
   the shared checkout. Non-owning output goes ONLY to: the PR (review
   comment / `gh pr` calls), the inbox `.ack`, and `decisions.log`.
 - `decisions.log` is the one exception: every agent may append via
@@ -172,7 +183,8 @@ bulk-imported.
 - PreCompact checkpoint: `hooks/pre-compact-checkpoint.sh` writes a dated
   "COMPACT CHECKPOINT" block to `handoff.md` before compaction (session
   id, trigger, branch/issue, dirty-tree flag), REPLACING its own previous
-  block rather than piling up. A floor, not a substitute for your own
+  block (via `lib/handoff-lib.sh`'s `handoff_replace_section`) rather
+  than piling up. A floor, not a substitute for your own
   handoff update — it pins WHEN compaction happened, not what's actually
   done/next. `hooks/rate-limit-handoff.sh` (StopFailure/rate_limit hook)
   writes its own self-replacing "RATE-LIMITED" section the same way.
