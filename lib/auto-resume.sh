@@ -162,18 +162,50 @@ ar_fingerprint() { # $1 = tmux pane target
 }
 
 # ar_still_at_failsafe_question <pane target> -- true if the AGENTS.md
-# failsafe question is STILL present in the pane's meaningful tail right
-# now. Same flatten-then-match as the pending->parked transition below
-# (tmux hard-wraps mid-word, so newlines are deleted rather than replaced
-# with a space to undo that). Issue #73: this is the driver pane's
-# parked-state ownership test -- a substring search means interleaved
-# passive output above/around the question doesn't count as "changed",
-# while a human actually answering (question no longer in the tail at
-# all) still correctly reads as moved-on.
+# failsafe question is STILL the thing the driver pane is sitting at,
+# right now. Issue #73 fix round (agy REQUEST-CHANGES): an earlier
+# version searched the WHOLE flattened tail as one unanchored substring,
+# which wrongly matched (a) while a human was mid-answering on the input
+# line right below the question, and (b) when the question text was
+# merely quoted/referenced in later prose -- either would let
+# auto-continue inject over live human input or a long-settled pane.
+# Now: the marker must END-anchor its OWN line (rejects a quoted mention
+# embedded in a longer sentence -- prose almost never happens to end a
+# line exactly on "Pick one." with nothing after); the tail-most matching
+# line must then have nothing but bare, empty prompt lines after it
+# (>/❯ for a real Claude Code TUI, same bare-prompt shape dispatch.sh's
+# pane_is_idle already uses; a line simply ENDING in $ for this test
+# suite's plain-shell fixture, whose default prompt carries a leading
+# shell/version prefix like "sh-3.2$" -- see
+# tests/auto-resume.test.sh's simulate_parked_pane). Any
+# real content there (an answer being typed, anything else) means the
+# pane has moved on and this returns false, not a guess. Known limit:
+# unlike the pending->parked transition, this does NOT flatten newlines
+# to undo tmux's mid-word hard-wrap, so an unusually narrow pane could
+# occasionally fail to re-match a genuinely still-pending question --
+# accepted deliberately, since that fails toward "drop tracking, no
+# auto-continue" (safe) rather than toward injecting over a live pane
+# (unsafe), matching dispatch.sh's own "on doubt, treat as busy" posture.
 ar_still_at_failsafe_question() { # $1 = pane target
-  local tail_text
-  tail_text="$(ar_meaningful_tail "$1" | tr -d '\n')"
-  echo "$tail_text" | grep -Eq "$AR_PARK_MARKER"
+  local pane="$1" tail line last_q_idx=-1 idx=0
+  local -a lines
+  tail="$(ar_meaningful_tail "$pane")"
+  [ -z "$tail" ] && return 1
+  while IFS= read -r line; do
+    lines+=("$line")
+    if echo "$line" | grep -Eq "${AR_PARK_MARKER}[[:space:]]*\$"; then
+      last_q_idx=$idx
+    fi
+    idx=$((idx + 1))
+  done <<< "$tail"
+  [ "$last_q_idx" -lt 0 ] && return 1
+  local n="${#lines[@]}"
+  for ((idx = last_q_idx + 1; idx < n; idx++)); do
+    if ! echo "${lines[idx]}" | grep -Eq '^[[:space:]]*[>❯][[:space:]]*$|\$[[:space:]]*$'; then
+      return 1
+    fi
+  done
+  return 0
 }
 
 # ar_pane_still_owned <pane> <role> <stored fingerprint> <current tail
