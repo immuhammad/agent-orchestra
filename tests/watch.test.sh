@@ -30,13 +30,6 @@ REVIEW_WATCH_STATE="$TMP/review-watch-state"
 export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE DISPATCH_DEFERRED_FILE WATCH_EVENTS_LOG REVIEW_WATCH_STATE
 source "$LIB/watch.sh"
 
-# Captured immediately after the real source, before any test below
-# redefines these -- lets later tests restore JUST these two functions
-# surgically (via `eval`) without resetting anything ELSE a still-running
-# earlier test's mock (e.g. mw_teardown_branch) depends on staying mocked.
-REAL_RW_FETCH_PR_COMMENTS="$(declare -f rw_fetch_pr_comments)"
-REAL_RW_FETCH_OPEN_DRAFT_PRS="$(declare -f rw_fetch_open_draft_prs)"
-
 echo "== mw_extract_issue: parses linked issue from title+body text =="
 [ "$(mw_extract_issue 'Closes #34.')" = "34" ] && pass "Closes #N" || fail "Closes #N"
 [ "$(mw_extract_issue 'fixes #40 also')" = "40" ] && pass "fixes #N (lowercase)" || fail "fixes #N (lowercase)"
@@ -449,51 +442,44 @@ else
 fi
 
 echo "== review round 2 (agy finding 1): rw_latest_verdict against the REAL (unmocked) rw_fetch_pr_comments -- every test above mocked rw_fetch_pr_comments directly and never actually exercised the real jq newline-sentinel pipeline at all =="
-# Restore the REAL rw_fetch_pr_comments/rw_fetch_open_draft_prs: earlier
-# tests above redefined these directly (the established mocking pattern in
-# this file), and a bash function redefinition persists for the rest of
-# the script until explicitly undone -- without this, these tests would
-# silently call whichever earlier test's stale mock was defined last
-# instead of the real implementation, which is exactly what happened
-# writing this block (a stale mock made both new assertions read from the
-# SAME canned data regardless of PR number, passing one and failing the
-# other for the wrong reason entirely).
-# `unset -f` alone would just DELETE the function rather than restore it.
-# Re-sourcing the whole file would restore it but ALSO reset every OTHER
-# function back to real -- including mw_teardown_branch, which a LATER
-# test in this file depends on staying mocked from an EVEN EARLIER
-# override (found live: re-sourcing here made that later test's
-# merge_watch_check call a REAL orc-worktree.sh teardown subprocess
-# instead of its intended mock). `eval`-ing the captured definitions
-# restores JUST these two functions, surgically.
-eval "$REAL_RW_FETCH_PR_COMMENTS"
-eval "$REAL_RW_FETCH_OPEN_DRAFT_PRS"
-# gh's own `--jq` flag runs jq INSIDE the gh binary -- overriding the `gh`
-# shell function loses that entirely unless the mock replicates it. This
-# mock forwards the REAL --jq expression rw_fetch_pr_comments actually
-# passes to a REAL local jq run against a canned fixture file, so this is
-# genuine coverage of the sentinel gsub/implode + tr restore logic, not a
-# re-mock of the thing under test.
-gh() {
-  if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-    local pr="$3" jqexpr="" fixture="$TMP/rw-fixture-$3.json"
-    shift 3
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--jq" ]; then jqexpr="$2"; break; fi
-      shift
-    done
-    if [ -n "$jqexpr" ] && [ -f "$fixture" ]; then
-      jq -r "$jqexpr" "$fixture" 2>/dev/null
-    fi
-    return 0
-  fi
-  echo "$*" >> "$RW_GH_CALLS"
-}
-
+# CI fix round: a declare-f/eval restore-dance was tried here first -- it
+# broke a LATER test (T33 merge_watch_check) in a way that only reproduced
+# on the CI runner's bash (5.2), not this machine's (3.2), confirmed by
+# reproducing in a matching Docker container before touching anything.
+# Replaced with the sturdier pattern: each assertion below runs inside its
+# OWN command-substitution subshell. A subshell's source/function-
+# overrides/unset -f all die with it -- the parent script (and every test
+# after this block, on any bash version) never observes them at all.
+# Nothing to restore afterward, nothing to get wrong.
 cat > "$TMP/rw-fixture-301.json" <<'EOF'
 {"comments": [{"createdAt": "2026-01-01T00:00:00Z", "body": "APPROVE:\n\nProbe 1: verified input handling.\nProbe 2: verified the guard rule.\nLooks good."}]}
 EOF
-RW_VERDICT_301="$(rw_latest_verdict 301)"
+RW_VERDICT_301="$(
+  source "$LIB/watch.sh"
+  # gh own --jq flag runs jq inside the gh binary -- overriding the gh
+  # shell function loses that entirely unless the mock replicates it.
+  # This mock forwards the REAL --jq expression rw_fetch_pr_comments
+  # actually passes to a REAL local jq run against a canned fixture file,
+  # so this is genuine coverage of the sentinel gsub/implode + tr restore
+  # logic, not a re-mock of the thing under test. Confined to THIS
+  # subshell only. No backticks or apostrophes in comments inside this
+  # subshell body -- confirmed live that bash can break its own syntax
+  # check on that combination specifically inside a command substitution,
+  # even though the identical text is fine as a top-level comment.
+  gh() {
+    if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+      local pr="$3" jqexpr="" fixture="$TMP/rw-fixture-$3.json"
+      shift 3
+      while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--jq" ]; then jqexpr="$2"; break; fi
+        shift
+      done
+      [ -n "$jqexpr" ] && [ -f "$fixture" ] && jq -r "$jqexpr" "$fixture" 2>/dev/null
+      return 0
+    fi
+  }
+  rw_latest_verdict 301
+)"
 if [ "$RW_VERDICT_301" = "APPROVE" ]; then
   pass "issue #96 review round 2: a genuine multi-line APPROVE comment (verdict line + probe list on later lines) restores correctly through the real jq pipeline and start-anchors as APPROVE"
 else
@@ -503,16 +489,28 @@ fi
 cat > "$TMP/rw-fixture-302.json" <<'EOF'
 {"comments": [{"createdAt": "2026-01-01T00:00:00Z", "body": "REQUEST-CHANGES:\n\nProbe 1: found an issue with error handling.\nA quoted example in the finding: \"> APPROVE: not yet\" -- do not treat this as a real verdict.\nPlease fix and re-request review."}]}
 EOF
-RW_VERDICT_302="$(rw_latest_verdict 302)"
+RW_VERDICT_302="$(
+  source "$LIB/watch.sh"
+  gh() {
+    if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+      local pr="$3" jqexpr="" fixture="$TMP/rw-fixture-$3.json"
+      shift 3
+      while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--jq" ]; then jqexpr="$2"; break; fi
+        shift
+      done
+      [ -n "$jqexpr" ] && [ -f "$fixture" ] && jq -r "$jqexpr" "$fixture" 2>/dev/null
+      return 0
+    fi
+  }
+  rw_latest_verdict 302
+)"
 if [ "$RW_VERDICT_302" = "REQUEST-CHANGES" ]; then
   pass "issue #96 review round 2: a comment whose LATER line contains 'APPROVE:' (quoted/prose) does NOT match -- the anchor applies to the true first line only, via the real jq pipeline"
 else
   fail "CORRECTNESS REGRESSION (issue #96 review round 2): a later-line 'APPROVE:' mention should never override the comment's true first-line verdict, got '$RW_VERDICT_302' (expected REQUEST-CHANGES)"
 fi
 rm -f "$TMP/rw-fixture-301.json" "$TMP/rw-fixture-302.json"
-
-# restore the real gh/rw_notify for anything below that needs them
-unset -f gh rw_notify
 
 echo "== deferred-nudge retry (live, isolated panes) =="
 tmux new-session -d -s "$TEST_SESSION" -n main
