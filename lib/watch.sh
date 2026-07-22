@@ -14,11 +14,12 @@
 #      (closes the loop-continuity gap where nothing
 #      told Orchestra to move on after a merge). Guard rules unchanged
 #      elsewhere: this script never merges.
-#   2. deferred-nudge retry: drain dispatch.sh's deferred-nudge queue so a
-#      nudge that was skipped because the target pane was busy actually
-#      gets retried once that pane goes idle, instead of requiring a
-#      manual re-nudge (this was happening on every single copilot
-#      dispatch before this was fixed).
+#   2. broker (issue #125, lib/broker.sh): the delivery layer -- verifies
+#      every dispatch by its .ack, wakes idle receivers (ground-truth
+#      hook state, never a screen guess), holds delivery for parked
+#      (failsafe) panes, escalates unresponsive ones, archives acked
+#      messages and prunes/rotates history. Replaces the old
+#      deferred-nudge retry queue (the #118 failure class).
 #   3. pane-liveness: detect an agent pane that has dropped back to a bare
 #      shell (its CLI process crashed/exited without anyone noticing)
 #      and FLAG orchestra via the inbox.
@@ -58,6 +59,11 @@ LIVENESS_AGENTS="${WATCH_LIVENESS_AGENTS:-orchestra builder agy}"
 we_log_event() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$EVENTS_LOG"
 }
+
+# issue #125: delivery layer. Sourced AFTER dispatch.sh (CANON_DIR,
+# pane_for_agent, pane_state_read, send_submit) and we_log_event above.
+# shellcheck source=./broker.sh
+source "$DIR/broker.sh"
 
 # -- merge-watch ----------------------------------------------------------
 
@@ -435,6 +441,12 @@ pane_liveness_check() {
     tmux has-session -t "${target%%:*}" 2>/dev/null || continue
 
     if pw_pane_is_dead "$target"; then
+      # issue #125: a dead pane's last hook-written state is a lie -- clear
+      # it (every pass, not just the first flag) so terminal states can
+      # persist without an age-out; the broker/nudge gating must never
+      # trust a crashed pane's stale 'busy'/'idle'.
+      pw_dead_pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
+      [ -n "$pw_dead_pane_id" ] && pane_state_clear "$pw_dead_pane_id"
       if ! grep -qxF "$agent" "$FLAGGED_DEAD_FILE" 2>/dev/null; then
         echo "$agent" >> "$FLAGGED_DEAD_FILE"
         if [ "$agent" = "orchestra" ]; then
@@ -490,29 +502,40 @@ watch_pane_lines() {
 # tick loses nothing.
 watch_render() {
   tui_clear
-  local nudge_count=0 dead_count=0 liveness_lines=0 dead_str
-  [ -s "$DEFERRED_FILE" ] && nudge_count="$(wc -l < "$DEFERRED_FILE" | tr -d ' ')"
+  local pending_count=0 dead_count=0 dyn_lines=0 dead_str
+  [ -s "$BROKER_PENDING_LIST" ] && pending_count="$(wc -l < "$BROKER_PENDING_LIST" | tr -d ' ')"
   [ -s "$FLAGGED_DEAD_FILE" ] && dead_count="$(wc -l < "$FLAGGED_DEAD_FILE" | tr -d ' ')"
   if [ "$dead_count" -eq 0 ]; then
     dead_str="all alive"
   else
     dead_str="${dead_count} dead"
   fi
-  echo "Watch $(date '+%H:%M:%S')  ${WATCH_INTERVAL}s | nudges ${nudge_count} | ${dead_str}"
+  # Header carries the ground-truth agent states (issue #125: liveness AND
+  # state, so a parked pane reads 'failsafe', never confused with dead).
+  echo "Watch $(date '+%H:%M:%S')  ${WATCH_INTERVAL}s | $(broker_states_summary) | pending ${pending_count} | ${dead_str}"
   echo ""
-  if [ "$nudge_count" -gt 0 ]; then
-    sed 's/^/NUDGE: /' "$DEFERRED_FILE"
-    liveness_lines=$(( liveness_lines + nudge_count ))
+  if [ "$pending_count" -gt 0 ]; then
+    sed 's/^/PENDING: /' "$BROKER_PENDING_LIST"
+    dyn_lines=$(( dyn_lines + pending_count ))
   fi
   if [ "$dead_count" -gt 0 ]; then
     sed 's/^/DEAD: /' "$FLAGGED_DEAD_FILE"
-    liveness_lines=$(( liveness_lines + dead_count ))
+    dyn_lines=$(( dyn_lines + dead_count ))
   fi
 
-  local pane_lines events_budget total_events shown
+  local pane_lines events_budget total_events shown events_shown_cap
+  # Ahmad-configurable display cap (orchestrator.yaml `watch: events_shown`,
+  # default 5); WATCH_EVENTS_SHOWN env overrides for tests.
+  events_shown_cap="${WATCH_EVENTS_SHOWN:-$(orc_get_nested watch events_shown)}"
+  events_shown_cap="${events_shown_cap:-5}"
   pane_lines="$(watch_pane_lines)"
-  events_budget=$(( pane_lines - 2 - liveness_lines ))  # -2: header + blank separator
+  # issue #124: -3, not -2 -- header + blank separator + the cursor row the
+  # final newline scrolls onto. The old budget was off by one the moment
+  # the frame exactly filled the pane, which pushed the header off-screen
+  # precisely when PENDING/DEAD lines were present.
+  events_budget=$(( pane_lines - 3 - dyn_lines ))
   [ "$events_budget" -lt 0 ] && events_budget=0
+  [ "$events_budget" -gt "$events_shown_cap" ] && events_budget="$events_shown_cap"
   total_events=0
   [ -f "$EVENTS_LOG" ] && total_events="$(wc -l < "$EVENTS_LOG" | tr -d ' ')"
 
@@ -533,7 +556,7 @@ watch_main() {
   while true; do
     merge_watch_check
     review_watch_check
-    retry_deferred_nudges
+    broker_check
     pane_liveness_check
 
     watch_render

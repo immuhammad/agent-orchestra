@@ -193,6 +193,37 @@ orc_get_budget_pct() {
   ' "$yaml"
 }
 
+# orc_get_nested <section> <key> -- prints <section>.<key> from a two-level
+# block mapping (`section:\n  key: value`). Same indent-tracking awk shape
+# as orc_get_role_model/orc_get_budget_pct above, generalized for issue
+# #125's `dispatch:`/`watch:` config blocks. Prints nothing if the file,
+# the section, or the key is missing -- callers must supply their own
+# fallback (per #86, every key read here ships with a live consumer).
+orc_get_nested() {
+  local section="$1" key="$2"
+  local yaml
+  yaml="$(orc_config_file)"
+  [ -f "$yaml" ] || return 0
+
+  awk -v sec="^${section}:[[:space:]]*$" -v key_re="^${key}:" '
+    $0 ~ sec { in_sec = 1; next }
+    in_sec && /^[^[:space:]]/ { in_sec = 0 }
+    in_sec {
+      trimmed = $0
+      gsub(/^[[:space:]]+/, "", trimmed)
+      if (trimmed ~ key_re) {
+        sub(key_re "[[:space:]]*", "", trimmed)
+        sub(/[[:space:]]*#.*$/, "", trimmed)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", trimmed)
+        gsub(/^"|"$/, "", trimmed)
+        gsub(/^'"'"'|'"'"'$/, "", trimmed)
+        print trimmed
+        exit
+      }
+    }
+  ' "$yaml"
+}
+
 # orc_session_name [fallback] -- derives the tmux SESSION name this
 # project's control room runs under, from orchestrator.yaml's `project`
 # scalar (falling back to the given default, or "harness", if unset).

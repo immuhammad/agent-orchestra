@@ -12,22 +12,18 @@
 #   it in. If anything about that pane changed since parking -- Ahmad
 #   answered it, it crashed, it moved on some other way -- auto-resume backs
 #   off silently (well, loudly in the log) rather than guessing.
-# - Each tracked pane carries a role ("driver" for the Orchestra pane,
-#   "worker" otherwise -- see ar_mark_pending). The parked-state ownership
-#   test differs by role (issue #73): workers use exact raw-fingerprint
-#   equality; the driver instead re-checks whether the AGENTS.md failsafe
-#   question is STILL present in its tail, since the driver pane keeps
-#   accumulating passive output (gatekeeper alerts, watch nudges) while
-#   parked -- that would otherwise always drift its raw fingerprint even
-#   though it never actually moved past the question (see
-#   ar_pane_still_owned).
+# - issue #125: parked-detection and ownership read the pane's own
+#   hook-written state file (failsafe + session_id, lib/pane-state-lib.sh),
+#   NEVER the screen. The old role-split fingerprint/question-visible
+#   machinery (#73/#80) is gone; `role` stays in the state entry for
+#   logging/back-compat only.
 #
 # State machine per tracked pane (persisted in AUTO_RESUME_STATE_FILE so it
 # survives a gatekeeper.sh restart -- exactly the kind of restart the
 # liveness watchdog exists to catch):
 #   (not tracked) --[usage >= threshold]--> pending
-#   pending --[scrollback shows the AGENTS.md failsafe question]--> parked
-#     (fingerprint + the five_hour resets_at at the moment of parking are
+#   pending --[pane's own hooks report failsafe]--> parked
+#     (session_id + the five_hour resets_at at the moment of parking are
 #     recorded)
 #   parked --[ownership test fails, see ar_pane_still_owned]--> dropped
 #     (touched or moved on, not ours to resume anymore)
@@ -68,10 +64,15 @@ AR_RESUME_USAGE_CEILING="${AUTO_RESUME_USAGE_CEILING:-50}"
 # hooks/quota-stop-gate.sh / lib/guard-quota-stop-agy.sh (readers) must
 # never resolve this independently or they can drift apart.
 AR_QUOTA_STOP_FLAG="${AUTO_RESUME_QUOTA_STOP_FLAG:-$(_ar_canon_dir)/state/quota-stop}"
-# The exact wording is mandated by AGENTS.md's Quota Failsafe ("Keep the
-# (a)/(b)/(c) structure exactly") -- this regex is deliberately narrow so it
-# can't accidentally match ordinary conversation.
-AR_PARK_MARKER='Quota .*Options: \(a\).*Pick one\.'
+# issue #125: ground-truth pane state (busy|idle|failsafe + session_id),
+# written by each pane's own hooks -- replaces every screen-scrape this
+# file used to do (AR_PARK_MARKER question-spotting, fingerprint
+# ownership). gatekeeper-liveness.sh keeps its own inline copy of the
+# failsafe-question regex for its stuck-banner SUPPRESSION -- a backup
+# detector, not a state source.
+# shellcheck source=./pane-state-lib.sh
+source "$AR_DIR/pane-state-lib.sh"
+PANE_STATE_DIR="${PANE_STATE_DIR:-$(_ar_canon_dir)/state/pane-state}"
 
 ar_today() { date -u +%Y-%m-%d; }
 
@@ -134,11 +135,28 @@ ar_epoch_from_iso8601() {
   return 0
 }
 
-# ar_meaningful_tail -- thin alias for send-lib.sh's send_meaningful_tail
-# (issue #86: moved there so dispatch.sh's pane_is_idle gets the same
-# blank-padding fix). Kept under its original name since ar_fingerprint/
-# ar_poll_pane below already call it by this name.
-ar_meaningful_tail() { send_meaningful_tail "$@"; }
+# issue #125: park detection and ownership moved OFF screen-scrapes onto
+# the hook-written pane state file. The machinery this replaces -- tail
+# fingerprint hashing (#80's ar_fingerprint/ar_normalize) and the
+# question-visible re-check (#73's ar_still_at_failsafe_question) -- was
+# assumptions derived from rendered text; the state file is written by
+# the parked session's own hooks at the moment it parks, and session_id
+# gives ownership an identity comparison instead of a screen hash.
+ar_pane_id() { tmux display-message -p -t "$1" '#{pane_id}' 2>/dev/null || echo ''; }
+
+ar_pane_state() {
+  local pid
+  pid="$(ar_pane_id "$1")"
+  [ -n "$pid" ] || return 1
+  pane_state_read "$pid" 2>/dev/null
+}
+
+ar_pane_session() {
+  local pid
+  pid="$(ar_pane_id "$1")"
+  [ -n "$pid" ] || return 1
+  pane_state_session "$pid" 2>/dev/null
+}
 
 # #80: hash a NORMALIZED view of the tail, not the raw bytes. Claude Code's
 # TUI repaints volatile chrome (context/token counters, timers, "esc to
@@ -152,78 +170,21 @@ ar_meaningful_tail() { send_meaningful_tail "$@"; }
 # (context %, token count, elapsed time) normalizes to the SAME text while a
 # real new line (a human answering) still changes it. Split out from
 # ar_fingerprint so it can be unit-tested directly.
-ar_normalize() {
-  grep -vE 'esc to interrupt|auto-accept edits|ctx:|[0-9]+ tokens|[0-9]+%' \
-    | sed -E 's/[0-9]+/#/g; s/[[:space:]]+/ /g'
-}
 
-ar_fingerprint() { # $1 = tmux pane target
-  ar_meaningful_tail "$1" | ar_normalize | shasum -a 256 | awk '{print $1}'
-}
 
-# ar_still_at_failsafe_question <pane target> -- true if the AGENTS.md
-# failsafe question is STILL the thing the driver pane is sitting at,
-# right now. Issue #73 fix round (agy REQUEST-CHANGES): an earlier
-# version searched the WHOLE flattened tail as one unanchored substring,
-# which wrongly matched (a) while a human was mid-answering on the input
-# line right below the question, and (b) when the question text was
-# merely quoted/referenced in later prose -- either would let
-# auto-continue inject over live human input or a long-settled pane.
-# Now: the marker must END-anchor its OWN line (rejects a quoted mention
-# embedded in a longer sentence -- prose almost never happens to end a
-# line exactly on "Pick one." with nothing after); the tail-most matching
-# line must then have nothing but bare, empty prompt lines after it
-# (>/❯ for a real Claude Code TUI, same bare-prompt shape dispatch.sh's
-# pane_is_idle already uses; a line simply ENDING in $ for this test
-# suite's plain-shell fixture, whose default prompt carries a leading
-# shell/version prefix like "sh-3.2$" -- see
-# tests/auto-resume.test.sh's simulate_parked_pane). Any
-# real content there (an answer being typed, anything else) means the
-# pane has moved on and this returns false, not a guess. Known limit:
-# unlike the pending->parked transition, this does NOT flatten newlines
-# to undo tmux's mid-word hard-wrap, so an unusually narrow pane could
-# occasionally fail to re-match a genuinely still-pending question --
-# accepted deliberately, since that fails toward "drop tracking, no
-# auto-continue" (safe) rather than toward injecting over a live pane
-# (unsafe), matching dispatch.sh's own "on doubt, treat as busy" posture.
-ar_still_at_failsafe_question() { # $1 = pane target
-  local pane="$1" tail line last_q_idx=-1 idx=0
-  local -a lines
-  tail="$(ar_meaningful_tail "$pane")"
-  [ -z "$tail" ] && return 1
-  while IFS= read -r line; do
-    lines+=("$line")
-    if echo "$line" | grep -Eq "${AR_PARK_MARKER}[[:space:]]*\$"; then
-      last_q_idx=$idx
-    fi
-    idx=$((idx + 1))
-  done <<< "$tail"
-  [ "$last_q_idx" -lt 0 ] && return 1
-  local n="${#lines[@]}"
-  for ((idx = last_q_idx + 1; idx < n; idx++)); do
-    if ! echo "${lines[idx]}" | grep -Eq '^[[:space:]]*[>❯][[:space:]]*$|\$[[:space:]]*$'; then
-      return 1
-    fi
-  done
-  return 0
-}
-
-# ar_pane_still_owned <pane> <role> <stored fingerprint> <current tail
-# fingerprint> -- the parked-state ownership test ("amux: only unblock
-# what you parked"). Workers: exact raw-fingerprint equality, unchanged
-# since #80. Driver (issue #73): anchored to whether the failsafe question
-# is still visible instead, since the driver's raw fingerprint never
-# stays stable while parked (gatekeeper alerts/watch nudges land in the
-# same pane) even when it never moved past the question. Shared by both
-# the initial ownership check and the pre-resume re-check below so the two
-# can't drift apart.
-ar_pane_still_owned() { # $1 = pane, $2 = role, $3 = stored fp, $4 = current fp
-  local pane="$1" role="$2" stored_fp="$3" current_fp="$4"
-  if [ "$role" = "driver" ]; then
-    ar_still_at_failsafe_question "$pane"
-  else
-    [ "$current_fp" = "$stored_fp" ]
-  fi
+# ar_pane_still_owned <pane> <stored session_id> -- the parked-state
+# ownership test ("amux: only unblock what you parked"): the pane's hooks
+# still report failsafe AND the same session that parked is still the one
+# in the pane. A human answering flips the state to busy (drops
+# ownership); a restarted session writes a NEW session_id at SessionStart
+# (drops ownership) -- both fail toward "do not inject", the same posture
+# as the old fingerprint test, with no screen read anywhere (issue #125).
+ar_pane_still_owned() { # $1 = pane, $2 = stored session_id
+  local pane="$1" stored_sid="$2" state sid
+  state="$(ar_pane_state "$pane")" || return 1
+  [ "$state" = "failsafe" ] || return 1
+  sid="$(ar_pane_session "$pane")" || return 1
+  [ -n "$stored_sid" ] && [ "$sid" = "$stored_sid" ]
 }
 
 ar_ensure_state_file() {
@@ -288,35 +249,27 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
   state="$(ar_read --arg p "$pane" '.panes[$p].state // empty')"
   [ -z "$state" ] && return 0
 
-  local tail_fp
-  tail_fp="$(ar_fingerprint "$pane")"
-
   if [ "$state" = "pending" ]; then
-    local tail_text
-    # Flatten to a single line before matching: tmux hard-wraps at the
-    # pane's column width with no reflow-awareness, so a narrow pane can
-    # split the failsafe question's words mid-character across physical
-    # lines (e.g. "Pick" -> "Pi\nck"). Deleting the newlines outright (NOT
-    # replacing them with a space) exactly undoes that hard-wrap and
-    # reconstructs the original unbroken text.
-    tail_text="$(ar_meaningful_tail "$pane" | tr -d '\n')"
-    if echo "$tail_text" | grep -Eq "$AR_PARK_MARKER"; then
-      local role
+    # issue #125: parked the moment the pane's OWN hooks report failsafe
+    # (its Stop fired while the quota-stop flag was up, or a rate_limit
+    # StopFailure hit) -- no screen-scrape, no question-spotting.
+    if [ "$(ar_pane_state "$pane" || echo '')" = "failsafe" ]; then
+      local role sid
       role="$(ar_read --arg p "$pane" '.panes[$p].role // "worker"')"
-      ar_write --arg p "$pane" --arg fp "$tail_fp" --arg r "$current_resets_at" --arg role "$role" \
-        '.panes[$p] = {state: "parked", fingerprint: $fp, resets_at: $r, role: $role}'
-      ar_log "parked $pane (failsafe question detected, 5h window resets at $current_resets_at)"
+      sid="$(ar_pane_session "$pane" || echo '')"
+      ar_write --arg p "$pane" --arg sid "$sid" --arg r "$current_resets_at" --arg role "$role" \
+        '.panes[$p] = {state: "parked", session_id: $sid, resets_at: $r, role: $role}'
+      ar_log "parked $pane (failsafe state from its own hooks, session ${sid:-unknown}, 5h window resets at $current_resets_at)"
     fi
     return 0
   fi
 
   if [ "$state" = "parked" ]; then
-    local stored_fp stored_resets_at role
-    stored_fp="$(ar_read --arg p "$pane" '.panes[$p].fingerprint')"
+    local stored_sid stored_resets_at
+    stored_sid="$(ar_read --arg p "$pane" '.panes[$p].session_id // empty')"
     stored_resets_at="$(ar_read --arg p "$pane" '.panes[$p].resets_at')"
-    role="$(ar_read --arg p "$pane" '.panes[$p].role // "worker"')"
 
-    if ! ar_pane_still_owned "$pane" "$role" "$stored_fp" "$tail_fp"; then
+    if ! ar_pane_still_owned "$pane" "$stored_sid"; then
       ar_log "$pane changed since parking -- not ours to resume anymore (amux: only unblock what you parked), dropping tracking"
       ar_write --arg p "$pane" 'del(.panes[$p])'
       return 0
@@ -340,14 +293,10 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
     fi
 
     if [ "$(ar_now_epoch)" -ge "$stored_epoch" ]; then
-      # Window has genuinely time-reset. Re-check the scrollback ONE more
-      # time immediately before acting (paranoia matches the spec wording
-      # -- we already confirmed tail_fp == stored_fp above, but
-      # re-fingerprint right here so the check is against the freshest
-      # possible read, not a value computed earlier in this function).
-      local recheck_fp
-      recheck_fp="$(ar_fingerprint "$pane")"
-      if ! ar_pane_still_owned "$pane" "$role" "$stored_fp" "$recheck_fp"; then
+      # Window has genuinely time-reset. Re-check ownership ONE more time
+      # immediately before acting (paranoia: against the freshest state
+      # read, not a value computed earlier in this function).
+      if ! ar_pane_still_owned "$pane" "$stored_sid"; then
         ar_log "$pane changed between reset-detection and re-check -- skipping resume, dropping tracking"
         ar_write --arg p "$pane" 'del(.panes[$p])'
         return 0
@@ -373,7 +322,23 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
         # confirm, and clear-and-retype on a still-stuck input.
         send_submit "$pane" "Quota window reset (5h) -- auto-resuming per AGENTS.md T20 budgeted auto-resume ($(( AR_MAX_PER_DAY - remaining + 1 ))/${AR_MAX_PER_DAY} today). Continuing (option c)."
         ar_write '.budget.count += 1'
-        ar_log "resumed $pane ($(( AR_MAX_PER_DAY - remaining + 1 ))/${AR_MAX_PER_DAY} today)"
+        # issue #125: verify delivery by ground truth -- the resumed
+        # session's first hook write flips failsafe -> busy -- instead of
+        # re-reading the screen. Bounded so the gatekeeper loop never
+        # stalls long on an unresponsive pane; AUTO_RESUME_VERIFY_S=0
+        # skips the wait outright (tests).
+        local ar_waited=0 ar_post_state=""
+        while [ "$ar_waited" -lt "${AUTO_RESUME_VERIFY_S:-15}" ]; do
+          sleep 3
+          ar_waited=$((ar_waited + 3))
+          ar_post_state="$(ar_pane_state "$pane" || echo '')"
+          [ "$ar_post_state" = "busy" ] && break
+        done
+        if [ "$ar_post_state" = "busy" ]; then
+          ar_log "resumed $pane ($(( AR_MAX_PER_DAY - remaining + 1 ))/${AR_MAX_PER_DAY} today) -- confirmed, state flipped to busy after ${ar_waited}s"
+        else
+          ar_log "resumed $pane ($(( AR_MAX_PER_DAY - remaining + 1 ))/${AR_MAX_PER_DAY} today) -- WARNING: state still '${ar_post_state:-unknown}' after ${ar_waited}s, check the pane"
+        fi
       else
         ar_log "5h window reset for $pane but daily auto-resume budget (${AR_MAX_PER_DAY}) is exhausted -- not resuming, Ahmad must resume it manually"
       fi

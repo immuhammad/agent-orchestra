@@ -96,45 +96,67 @@ else
 fi
 tmux send-keys -t "$TEST_SESSION:0.2" C-c 2>&1
 
-echo "== T24: deferred-nudge queue (nudge_agent / retry_deferred_nudges) =="
+echo "== issue #125: nudge_agent is state-driven -- busy pane (no hook state) sends NO keystrokes; the broker owns retries =="
 # Override pane_for_agent so a fake agent name maps onto this test session's
-# real busy pane (0.1) -- lets us drive nudge_agent's defer branch and
-# retry_deferred_nudges' drain logic against a real tmux pane instead of
-# just asserting on file contents.
+# real busy pane (0.1).
 pane_for_agent() {
   case "$1" in
     deferredtest) echo "$TEST_SESSION:0.1" ;;
     *) echo "" ;;
   esac
 }
-DEFERRED_TEST_FILE="$(mktemp)"
-DEFERRED_FILE="$DEFERRED_TEST_FILE"
 
-nudge_agent "deferredtest" >/dev/null 2>&1
-if grep -qxF "deferredtest" "$DEFERRED_FILE" 2>/dev/null; then
-  pass "nudge into a busy pane queues the agent in the deferred file"
+OUT="$(nudge_agent "deferredtest" 2>&1)"
+if echo "$OUT" | grep -q "broker will retry"; then
+  pass "issue #125: heuristically-busy pane -> no keystrokes, broker owns the retry"
 else
-  fail "busy-pane nudge should have queued 'deferredtest'"
+  fail "expected 'broker will retry' for a busy pane with no hook state, got: $OUT"
+fi
+if tmux capture-pane -p -t "$TEST_SESSION:0.1" | grep -q "check inbox"; then
+  fail "issue #125: nudge_agent must NOT have typed into the busy pane"
+else
+  pass "issue #125: busy pane received no injected keystrokes"
 fi
 
-nudge_agent "deferredtest" >/dev/null 2>&1
-DUP_COUNT="$(grep -cxF "deferredtest" "$DEFERRED_FILE" 2>/dev/null || echo 0)"
-if [ "$DUP_COUNT" -eq 1 ]; then
-  pass "re-deferring the same agent does not duplicate the queue entry"
+echo "== issue #125: nudge_agent trusts hook state outright -- busy/failsafe hold, idle wakes =="
+source "$DIR/../lib/pane-state-lib.sh"
+NUDGE_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.1" '#{pane_id}')"
+NUDGE_SAFE_ID="$(pane_state_sanitize "$NUDGE_PANE_ID")"
+mkdir -p "$PANE_STATE_DIR"
+echo "busy $(date '+%s') sid-t24" > "$PANE_STATE_DIR/$NUDGE_SAFE_ID"
+OUT="$(nudge_agent "deferredtest" 2>&1)"
+if echo "$OUT" | grep -q "Stop-hook pickup delivers at turn end"; then
+  pass "issue #125: hook-state busy -> no wake, Stop-hook pickup owns delivery"
 else
-  fail "expected exactly one queued entry for 'deferredtest', got $DUP_COUNT"
+  fail "expected the Stop-hook-pickup message for hook-state busy, got: $OUT"
 fi
-
-# Make the pane idle, then retry -- should nudge for real and drain the queue.
+echo "failsafe $(date '+%s') sid-t24" > "$PANE_STATE_DIR/$NUDGE_SAFE_ID"
+OUT="$(nudge_agent "deferredtest" 2>&1)"
+if echo "$OUT" | grep -q "parked on quota failsafe"; then
+  pass "issue #125: hook-state failsafe -> delivery held, no wake"
+else
+  fail "expected the failsafe-hold message, got: $OUT"
+fi
+# Idle ground truth: kill the busy fixture first so the typed wake lands
+# at a real shell prompt, then assert the wake actually typed.
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 sleep 1
-retry_deferred_nudges >/dev/null 2>&1
-if [ ! -s "$DEFERRED_FILE" ]; then
-  pass "retry_deferred_nudges drains the queue once the pane is idle"
+echo "idle $(date '+%s') sid-t24" > "$PANE_STATE_DIR/$NUDGE_SAFE_ID"
+OUT="$(nudge_agent "deferredtest" 2>&1)"
+if echo "$OUT" | grep -q "nudged deferredtest"; then
+  pass "issue #125: hook-state idle -> immediate typed wake"
 else
-  fail "deferred queue should be empty after retry, got: $(cat "$DEFERRED_FILE")"
+  fail "expected an immediate wake on hook-state idle, got: $OUT"
 fi
-rm -f "$DEFERRED_TEST_FILE"
+sleep 1
+if tmux capture-pane -p -t "$TEST_SESSION:0.1" | grep -q "check inbox"; then
+  pass "issue #125: the wake really typed 'check inbox' into the idle pane"
+else
+  fail "expected 'check inbox' visible in the idle pane after the wake"
+fi
+rm -f "$PANE_STATE_DIR/$NUDGE_SAFE_ID"
+tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
+tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
 unset -f pane_for_agent
 source "$DISPATCH"
 
@@ -235,37 +257,34 @@ else
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
-echo "-- deferred-drain end-to-end: a pane that goes from genuinely busy to hint-text-idle gets delivered on the next drain --"
+echo "-- issue #97/#125: heuristic path (no hook state) -- genuinely busy defers to the broker; hint-text-idle wakes --"
 pane_for_agent() {
   case "$1" in
     hinttest) echo "$TEST_SESSION:0.1" ;;
     *) echo "" ;;
   esac
 }
-HINT_DEFERRED_FILE="$(mktemp)"
-DEFERRED_FILE="$HINT_DEFERRED_FILE"
 tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
 sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter 2>&1
 sleep 2
-nudge_agent "hinttest" >/dev/null 2>&1
-if grep -qxF "hinttest" "$HINT_DEFERRED_FILE" 2>/dev/null; then
-  pass "issue #97: a genuinely busy pane still defers as before"
+OUT="$(nudge_agent "hinttest" 2>&1)"
+if echo "$OUT" | grep -q "broker will retry"; then
+  pass "issue #97/#125: a genuinely busy pane (heuristic) sends no keystrokes -- broker owns the retry"
 else
-  fail "expected 'hinttest' to be queued while the pane is genuinely busy"
+  fail "expected 'broker will retry' while the pane is genuinely busy, got: $OUT"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
 sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf '❯ check inbox\\n──────────\\n  bypass permissions hint\\n'; sleep 30" Enter 2>&1
 sleep 2
-retry_deferred_nudges >/dev/null 2>&1
-if [ ! -s "$HINT_DEFERRED_FILE" ]; then
-  pass "issue #97: once the pane shows only stuck prompt-line text + hints (no busy marker), the next drain delivers the nudge"
+OUT="$(nudge_agent "hinttest" 2>&1)"
+if echo "$OUT" | grep -q "nudged hinttest"; then
+  pass "issue #97/#125: hint-text-idle (no busy marker) still wakes immediately on the heuristic path"
 else
-  fail "CORRECTNESS REGRESSION (issue #97): deferred nudge to a hint-text-idle pane was not delivered on drain, queue: $(cat "$HINT_DEFERRED_FILE")"
+  fail "CORRECTNESS REGRESSION (issue #97): a hint-text-idle pane was not woken, got: $OUT"
 fi
-rm -f "$HINT_DEFERRED_FILE"
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 # Restore the real pane_for_agent for anything below that relies on it.
 unset -f pane_for_agent
@@ -306,16 +325,21 @@ else
   fail "issue #33: expected fallback to screen-scrape to still detect the plain shell-prompt pane as idle"
 fi
 
-echo "== issue #33: pane_is_idle ignores a STALE hook state file, falls back to screen-scraping =="
+echo "== issue #125: hook state PERSISTS (no age-out) -- an ancient 'busy' still gates; pane_state_clear restores the fallback =="
 STALE_PANE_ID="$NOSTATE_PANE_ID"
 mkdir -p "$PANE_STATE_DIR"
 echo "busy 1000000000" > "$PANE_STATE_DIR/$(pane_state_sanitize "$STALE_PANE_ID")"
 if pane_is_idle "$NOSTATE_TARGET"; then
-  pass "issue #33: a stale 'busy' state file is ignored -- falls back to screen-scrape (shell-prompt = idle)"
+  fail "issue #125: an old hook 'busy' must stay authoritative (states are transitions; crash coverage is pane_state_clear, not an expiry)"
 else
-  fail "issue #33: a stale hook state file should not override the screen-scrape fallback"
+  pass "issue #125: ancient 'busy' hook state still gates -- no age-out"
 fi
-rm -f "$PANE_STATE_DIR/$(pane_state_sanitize "$STALE_PANE_ID")"
+pane_state_clear "$STALE_PANE_ID"
+if pane_is_idle "$NOSTATE_TARGET"; then
+  pass "issue #125: after pane_state_clear (watch liveness on a dead pane), screen-scrape fallback resumes (shell prompt = idle)"
+else
+  fail "issue #125: expected the screen-scrape fallback after the state file was cleared"
+fi
 
 echo "== message verb: writes .msg, no nudge, no ack wait =="
 mkdir -p "$CANON_DIR/inbox/testagent"

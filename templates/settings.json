@@ -3,7 +3,8 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/session-start.sh" }
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/session-start.sh" },
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/pane-state.sh idle" }
         ]
       }
     ],
@@ -47,6 +48,7 @@
       {
         "hooks": [
           { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/check-handoff.sh" },
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/check-inbox-stop.sh" },
           { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/hooks/pane-state.sh idle" }
         ]
       }
