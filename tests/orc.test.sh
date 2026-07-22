@@ -171,6 +171,97 @@ grep -q 'protected_paths=career-ops/' "$TMP/build.err" && pass "build log report
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
+echo "== issue #87: agent panes get real headroom on a normal terminal, not an even 5-way tile =="
+# The naive `tiled` layout gives all 5 panes an equal share -- on a real
+# terminal (measured: 238x60) that squeezed the 3 INTERACTIVE agent panes
+# (orchestra/builder/agy) down to ~18 rows, not enough for Claude Code's
+# own status line + input box + scrollback ("no space to type", live-
+# reported repeatedly). gatekeeper/watch are read-only dashboards that
+# tolerate a short strip; the agent panes get the rest. ORC_TERM_COLS/
+# LINES override `tput` for deterministic sizing in tests -- a real
+# terminal isn't guaranteed (or needed) here.
+LAYOUT_SESSION="orctest-layout-$$"
+LAYOUT_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  ORC_SESSION="$LAYOUT_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    ORC_TERM_COLS=238 ORC_TERM_LINES=60 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$LAYOUT_TMP/build.err"
+)
+
+LAYOUT_PANE_COUNT="$(tmux list-panes -t "$LAYOUT_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "issue #87: weighted layout still has 5 panes" "5" "$LAYOUT_PANE_COUNT"
+
+# Index->role mapping is a hard contract (AGENTS.md: 0=orchestra 1=builder
+# 2=agy 3=gatekeeper 4=watch; dispatch.sh's pane_for_agent and gatekeeper-
+# liveness's watch target hardcode these positions) -- asserted by INDEX
+# ORDER, not just as an unordered set of titles (the pre-existing test
+# above already covers the unordered-set case).
+LAYOUT_TITLES_BY_INDEX="$(tmux list-panes -t "$LAYOUT_SESSION" -F '#{pane_index}:#{pane_title}' 2>/dev/null | sort -t: -k1,1n | cut -d: -f2 | tr '\n' ',')"
+assert_eq "issue #87: index->role order preserved (0=orchestra 1=builder 2=agy 3=gatekeeper 4=watch)" "orchestra,builder,agy,gatekeeper,pr/budget watch," "$LAYOUT_TITLES_BY_INDEX"
+
+AGENT_MIN_HEIGHT="$(tmux list-panes -t "$LAYOUT_SESSION" -F '#{pane_index} #{pane_height}' 2>/dev/null | awk '$1<=2 {print $2}' | sort -n | head -1)"
+if [ -n "$AGENT_MIN_HEIGHT" ] && [ "$AGENT_MIN_HEIGHT" -ge 25 ]; then
+  pass "issue #87: all 3 agent panes (orchestra/builder/agy) have >= 25 rows on a 238x60 terminal (smallest: ${AGENT_MIN_HEIGHT})"
+else
+  fail "CORRECTNESS REGRESSION (issue #87): an agent pane has fewer than 25 rows on a 238x60 terminal (smallest measured: ${AGENT_MIN_HEIGHT:-none})"
+fi
+
+MONITOR_MIN_HEIGHT="$(tmux list-panes -t "$LAYOUT_SESSION" -F '#{pane_index} #{pane_height}' 2>/dev/null | awk '$1>=3 {print $2}' | sort -n | head -1)"
+if [ -n "$MONITOR_MIN_HEIGHT" ] && [ "$MONITOR_MIN_HEIGHT" -gt 0 ]; then
+  pass "issue #87: monitor panes (gatekeeper/watch) still have a positive row count (${MONITOR_MIN_HEIGHT}) -- short is fine, zero is not"
+else
+  fail "CORRECTNESS REGRESSION (issue #87): a monitor pane has zero/negative height"
+fi
+tmux kill-session -t "$LAYOUT_SESSION" 2>/dev/null || true
+
+echo "== issue #87: a terminal too small for the weighted layout falls back to the original tiled layout, loudly =="
+SMALL_SESSION="orctest-small-$$"
+SMALL_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  ORC_SESSION="$SMALL_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    ORC_TERM_COLS=80 ORC_TERM_LINES=24 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SMALL_TMP/build.err"
+)
+SMALL_PANE_COUNT="$(tmux list-panes -t "$SMALL_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "issue #87: too-small terminal still builds all 5 panes (graceful fallback, not a hard failure)" "5" "$SMALL_PANE_COUNT"
+if grep -qi 'WARNING.*too small' "$SMALL_TMP/build.err" 2>/dev/null; then
+  pass "issue #87: a too-small terminal warns loudly about falling back to the tiled layout"
+else
+  fail "expected a loud WARNING about falling back to tiled on a too-small terminal, got: $(cat "$SMALL_TMP/build.err" 2>/dev/null)"
+fi
+SMALL_ZERO_HEIGHT="$(tmux list-panes -t "$SMALL_SESSION" -F '#{pane_height}' 2>/dev/null | awk '$1<=0' | wc -l | tr -d ' ')"
+assert_eq "issue #87: fallback layout never produces a zero-height pane" "0" "$SMALL_ZERO_HEIGHT"
+tmux kill-session -t "$SMALL_SESSION" 2>/dev/null || true
+
+echo "== issue #87 review round 2: no ORC_TERM_COLS/LINES override AND no real controlling tty -- falls back loudly, never trusts a non-tty tput default as if it were the real client size =="
+# CI-reproduced: `tput cols`/`tput lines` do NOT reliably fail when stdout
+# isn't a real terminal -- with TERM set (even TERM=dumb) but no tty, tput
+# happily returns a plausible-looking "80"/"24" fallback default instead of
+# erroring. Trusting that as "the actual client size" is exactly the
+# "garbage math" this test guards against. stdout is redirected to a
+# regular FILE (not inherited) so `[ -t 1 ]` is reliably false here
+# regardless of how this test suite itself happens to be invoked.
+NOTTY_SESSION="orctest-notty-$$"
+NOTTY_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  env -u ORC_TERM_COLS -u ORC_TERM_LINES TERM=dumb \
+    ORC_SESSION="$NOTTY_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$NOTTY_TMP/build.out" 2> "$NOTTY_TMP/build.err" < /dev/null
+)
+NOTTY_PANE_COUNT="$(tmux list-panes -t "$NOTTY_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "issue #87: no override + no tty still builds all 5 panes (graceful fallback)" "5" "$NOTTY_PANE_COUNT"
+if grep -qi 'WARNING.*too small' "$NOTTY_TMP/build.err" 2>/dev/null; then
+  pass "issue #87: no override + no tty falls back to tiled with a loud warning, not a silent guess at the real size"
+else
+  fail "CORRECTNESS REGRESSION (issue #87): no override + no tty should fall back loudly, not trust a non-tty tput default -- got: $(cat "$NOTTY_TMP/build.err" 2>/dev/null)"
+fi
+NOTTY_ZERO_HEIGHT="$(tmux list-panes -t "$NOTTY_SESSION" -F '#{pane_height}' 2>/dev/null | awk '$1<=0' | wc -l | tr -d ' ')"
+assert_eq "issue #87: no-tty fallback never produces a zero-height pane" "0" "$NOTTY_ZERO_HEIGHT"
+tmux kill-session -t "$NOTTY_SESSION" 2>/dev/null || true
+
 echo "== issue #59: liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
 if grep -v '^[[:space:]]*#' "$DIR/../bin/orc" | grep -q 'nohup'; then
   fail "bin/orc should no longer launch gatekeeper-liveness.sh via nohup (a comment MAY still mention nohup to explain why -- only a live invocation fails this) -- the harness's own restart drill needs an inspectable path, same as the other three loops"

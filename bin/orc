@@ -83,21 +83,110 @@ orc_build_session() {
   mkdir -p ./.harness/inbox/orchestra ./.harness/inbox/builder \
     ./.harness/inbox/agy ./.harness/inbox/scribe
 
-  tmux new-session -d -s "$session" -n main
-  tmux rename-window -t "$session:main" "control-room"
-  tmux set -t "$session:0" pane-border-status top
-
   # issue #89 (T38): pane 3 (copilot/scribe) retired -- no recurring scribe
   # job remains after #85 (Builder writes PR bodies, watch.sh closes issues
   # mechanically), so scribe becomes an on-demand headless spawn
   # (dispatch.sh's assign/handoff to 'scribe', see nudge_agent) instead of a
   # standing pane. 5 panes now, not 6: orchestra, builder, agy, gatekeeper,
   # watch.
-  tmux split-window -v -t "$session:0"
-  tmux split-window -h -t "$session:0.0"
-  tmux split-window -h -t "$session:0.0"
-  tmux split-window -h -t "$session:0.3"
-  tmux select-layout -t "$session:0" tiled
+  #
+  # issue #87: an even `tiled` 5-way split squeezed the 3 INTERACTIVE agent
+  # panes (orchestra/builder/agy) down to ~18 rows on a real terminal --
+  # not enough headroom for Claude Code's own status line + input box +
+  # scrollback, so the input line gets squeezed to nothing ("no space to
+  # type", live-reported repeatedly, and plausibly a contributor to the
+  # separate nudge-stranding issues). gatekeeper/watch are read-only
+  # dashboards that tolerate a short strip; the agent panes do not.
+  # Reserves a fixed MONITOR_ROWS-tall bottom strip for gatekeeper+watch
+  # and gives the agent row everything else, computed from the REAL
+  # calling terminal's size via `tput` -- queried BEFORE any tmux client
+  # exists, so this scales with whatever terminal `orc up` is actually run
+  # from rather than a fixed cell count. ORC_TERM_COLS/ORC_TERM_LINES
+  # override tput outright (tests: deterministic sizing without a real
+  # controlling tty).
+  #
+  # Split TARGETS (0, then 0.0 twice, then 0.3) are unchanged from before
+  # this fix -- empirically verified (tmux list-panes geometry) that this
+  # exact sequence assigns indices 0/1/2/3/4 to top-left/top-mid/top-right/
+  # bottom-left/bottom-right respectively, matching the index->role
+  # contract (AGENTS.md: 0=orchestra 1=builder 2=agy 3=gatekeeper
+  # 4=watch; dispatch.sh's pane_for_agent and gatekeeper-liveness's watch
+  # target both hardcode these positions) -- only the SIZE arguments and
+  # the trailing `select-layout tiled` (which discarded them) changed.
+  #
+  # Falls back to the ORIGINAL even-tiled layout, loudly (never silently),
+  # on a terminal too small to give the agent row a floor of
+  # MIN_AGENT_ROWS -- an `-l`/`-p` split size that would be non-positive is
+  # a hard tmux error, not a soft clamp, so this must be decided BEFORE
+  # issuing any split, not discovered from a failed command.
+  # review round 2 (agy, CI-only failure on the Linux runner, reproduced
+  # locally via Docker + Ubuntu 24.04's tmux 3.4): `-p <percent>` on
+  # split-window fails outright ("size missing") on tmux 3.4, even though
+  # it works fine on this dev machine's tmux 3.7b -- a real cross-version
+  # behavior gap, not a typo. `-l <percent>%` and plain absolute `-l
+  # <cells>` both work on every tmux version tested; switched to absolute
+  # cell counts computed in shell (portable everywhere, no version-
+  # dependent flag syntax at all).
+  #
+  # Also (round 2): `tput cols`/`tput lines` does NOT reliably fail when
+  # stdout isn't a real terminal -- reproduced live, with TERM set (even
+  # TERM=dumb) but no controlling tty, tput happily returns a plausible-
+  # looking "80"/"24" fallback instead of erroring, which would otherwise
+  # be trusted as "the actual client size" (this specific 80x24 case is
+  # already caught by the row-count floor below, but that's incidental --
+  # any other non-tty default that happened to number-check would not be
+  # caught the same way). Gated explicitly: tput's numbers are only
+  # trusted when stdout is a REAL tty; otherwise (and with no
+  # ORC_TERM_COLS/LINES override) this always falls through to the loud
+  # tiled fallback rather than gambling on what a non-tty default means.
+  local term_cols term_lines monitor_rows=12 min_agent_rows=15 agent_rows
+  local col_width half_width
+  if [ -n "${ORC_TERM_COLS:-}" ] && [ -n "${ORC_TERM_LINES:-}" ]; then
+    term_cols="$ORC_TERM_COLS"
+    term_lines="$ORC_TERM_LINES"
+  elif [ -t 1 ]; then
+    term_cols="$(tput cols 2>/dev/null || echo 0)"
+    term_lines="$(tput lines 2>/dev/null || echo 0)"
+  else
+    term_cols=0
+    term_lines=0
+  fi
+  agent_rows=$(( term_lines - monitor_rows - 1 ))  # -1: the divider row between the agent row and the monitor row
+
+  if [ "$term_cols" -gt 0 ] && [ "$term_lines" -gt 0 ] && [ "$agent_rows" -ge "$min_agent_rows" ]; then
+    tmux new-session -d -s "$session" -n main -x "$term_cols" -y "$term_lines"
+    tmux rename-window -t "$session:main" "control-room"
+    tmux set -t "$session:0" pane-border-status top
+
+    col_width=$(( term_cols / 3 ))
+    half_width=$(( term_cols / 2 ))
+    tmux split-window -v -l "$monitor_rows" -t "$session:0"
+    tmux split-window -h -l "$col_width" -t "$session:0.0"
+    tmux split-window -h -l "$col_width" -t "$session:0.0"
+    tmux split-window -h -l "$half_width" -t "$session:0.3"
+  else
+    # review round 2: ALWAYS warn on this branch, even when the size is
+    # totally unknown (0x0 -- no tty, no override) rather than merely
+    # measured-too-small. An earlier draft only warned when term_lines was
+    # a real positive number, silently skipping the message for the
+    # unknown-size case -- exactly backwards from "loud, never silent"
+    # (found live: no-tty + no-override took this branch with NO warning
+    # at all).
+    local size_desc="${term_cols}x${term_lines}"
+    if [ "$term_cols" -le 0 ] || [ "$term_lines" -le 0 ]; then
+      size_desc="unknown (no tty, no ORC_TERM_COLS/LINES override)"
+    fi
+    echo "orc: WARNING -- terminal size ${size_desc} -- too small (or undetectable) for the weighted agent-panes layout (need >= ${min_agent_rows} rows for the agent panes after reserving ${monitor_rows} for the monitor row) -- falling back to the even tiled layout. Agent panes will be short; resize your terminal and restart the room ('orc up' again after killing the session) for more headroom." >&2
+    tmux new-session -d -s "$session" -n main
+    tmux rename-window -t "$session:main" "control-room"
+    tmux set -t "$session:0" pane-border-status top
+
+    tmux split-window -v -t "$session:0"
+    tmux split-window -h -t "$session:0.0"
+    tmux split-window -h -t "$session:0.0"
+    tmux split-window -h -t "$session:0.3"
+    tmux select-layout -t "$session:0" tiled
+  fi
 
   tmux select-pane -t "$session:0.0" -T "orchestra"
   tmux select-pane -t "$session:0.1" -T "builder"
