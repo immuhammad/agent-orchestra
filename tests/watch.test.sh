@@ -604,25 +604,49 @@ else
   fail "expected the ancient archived pair to be pruned"
 fi
 
-# Escalation: attempts exhausted + deadline passed -> durable FLAG, once.
+# issue #127: wake dedupe -- multiple pending messages, ONE shared wake,
+# every message's attempt file stamped.
+: > "$SUBMIT_CALLS"
+echo "m3" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-3.msg"
+echo "m4" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-4.msg"
+broker_check
+if [ "$(grep -c 'check inbox' "$SUBMIT_CALLS")" = "1" ]; then
+  pass "issue #127: two pending msgs -> exactly ONE typed wake (per agent, not per message)"
+else
+  fail "issue #127: expected one shared wake for two msgs, got: $(cat "$SUBMIT_CALLS")"
+fi
+if [ -f "$BROKER_STATE_DIR/watchtest__20260101000000-3" ] && [ -f "$BROKER_STATE_DIR/watchtest__20260101000000-4" ]; then
+  pass "issue #127: the shared wake is stamped against BOTH messages' attempt files"
+else
+  fail "issue #127: both attempt files should exist, got: $(ls "$BROKER_STATE_DIR" 2>/dev/null)"
+fi
+rm -f "$BROKER_INBOX_ROOT/watchtest/20260101000000-3.msg" "$BROKER_INBOX_ROOT/watchtest/20260101000000-4.msg"
+rm -f "$BROKER_STATE_DIR"/watchtest__20260101000000-3 "$BROKER_STATE_DIR"/watchtest__20260101000000-4
+
+# Escalation: attempts exhausted + deadline passed -> durable FLAG --
+# deduped to ONE per agent per pass even with several stuck msgs (#127).
 FLAG_CALLS="$TMP/broker-flag-calls.log"
 : > "$FLAG_CALLS"
 dispatch_main() { echo "$*" >> "$FLAG_CALLS"; }
 echo "payload2" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-2.msg"
+echo "payload5" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-5.msg"
 echo "2 1" > "$BROKER_STATE_DIR/watchtest__20260101000000-2"
+echo "2 1" > "$BROKER_STATE_DIR/watchtest__20260101000000-5"
 broker_check
-if grep -q "FLAG: undelivered inbox message for 'watchtest'" "$FLAG_CALLS"; then
-  pass "issue #125: exhausted wakes escalate as a durable FLAG to orchestra"
+if [ "$(grep -c "FLAG: undelivered inbox message for 'watchtest'" "$FLAG_CALLS")" = "1" ]; then
+  pass "issue #125/#127: exhausted wakes escalate as ONE durable FLAG per agent per pass"
 else
-  fail "expected an escalation FLAG, got: $(cat "$FLAG_CALLS")"
+  fail "expected exactly one escalation FLAG, got: $(cat "$FLAG_CALLS")"
 fi
 read -r ESC_ATTEMPTS _ < "$BROKER_STATE_DIR/watchtest__20260101000000-2"
-if [ "$ESC_ATTEMPTS" = "99" ]; then
-  pass "issue #125: escalation is marked (attempts=99) so it fires once, not every pass"
+read -r ESC_ATTEMPTS5 _ < "$BROKER_STATE_DIR/watchtest__20260101000000-5"
+if [ "$ESC_ATTEMPTS" = "99" ] && [ "$ESC_ATTEMPTS5" = "99" ]; then
+  pass "issue #125/#127: BOTH stuck messages are marked escalated (attempts=99) so neither re-fires"
 else
-  fail "expected attempts=99 after escalation, got: $ESC_ATTEMPTS"
+  fail "expected attempts=99 on both after escalation, got: $ESC_ATTEMPTS / $ESC_ATTEMPTS5"
 fi
-rm -f "$BROKER_INBOX_ROOT/watchtest/20260101000000-2.msg" "$BROKER_STATE_DIR/watchtest__20260101000000-2"
+rm -f "$BROKER_INBOX_ROOT/watchtest/20260101000000-2.msg" "$BROKER_INBOX_ROOT/watchtest/20260101000000-5.msg"
+rm -f "$BROKER_STATE_DIR"/watchtest__20260101000000-2 "$BROKER_STATE_DIR"/watchtest__20260101000000-5
 unset -f dispatch_main
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 

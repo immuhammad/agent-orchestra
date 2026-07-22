@@ -84,11 +84,14 @@ broker_escalate() { # $1 agent, $2 msg path, $3 attempts
 broker_check() {
   mkdir -p "$BROKER_STATE_DIR"
   local now pending_tmp agent inbox target pane_id state m ack base af attempts last_wake age
+  local agent_woke agent_escalated
   now="$(broker_now)"
   pending_tmp="$(mktemp "${BROKER_PENDING_LIST}.XXXXXX")" || return 0
   for agent in $BROKER_AGENTS; do
     inbox="$BROKER_INBOX_ROOT/$agent"
     [ -d "$inbox" ] || continue
+    agent_woke=0
+    agent_escalated=0
     target="$(pane_for_agent "$agent")"
     pane_id=""; state=""
     if [ -n "$target" ]; then
@@ -129,22 +132,39 @@ broker_check() {
         continue  # a wake is in flight; give the .ack its deadline
       fi
       if [ "$attempts" -ge 2 ]; then
-        broker_escalate "$agent" "$m" "$attempts"
+        # issue #127: ONE FLAG per agent per pass, not one per stuck
+        # message -- the FLAG names the first; the rest are visible in
+        # the pending list.
+        if [ "$agent_escalated" -eq 0 ]; then
+          broker_escalate "$agent" "$m" "$attempts"
+          agent_escalated=1
+        fi
         echo "99 $now" > "$af"
         continue
       fi
-      if [ -z "$state" ]; then
+      if [ -z "$state" ] && [ "$agent_woke" -eq 0 ]; then
         # No hook ground truth (agy's pane): only type into a
         # heuristically-idle pane -- the one place the screen heuristic
         # legitimately survives (#125 audit: no hook-based replacement).
+        # Skipped once woken this pass: the wake itself makes the pane
+        # look busy to the heuristic.
         if [ -z "$target" ] || ! pane_is_idle "$target" "$agent"; then
           continue
         fi
       fi
       if [ -n "$target" ]; then
-        send_submit "$target" "check inbox"
+        # issue #127 (live-hit: 13 wakes typed into builder, one per
+        # stale message): an agent is woken AT MOST ONCE per pass -- a
+        # single 'check inbox' covers the WHOLE inbox -- but the shared
+        # wake is stamped against EVERY pending message's attempt file,
+        # since it delivers all of them and each still gets its own
+        # ack-deadline/escalation clock.
+        if [ "$agent_woke" -eq 0 ]; then
+          send_submit "$target" "check inbox"
+          agent_woke=1
+          echo "watch.sh: broker woke $agent ($(basename "$m") + all pending, attempt $(( attempts + 1 )))"
+        fi
         echo "$(( attempts + 1 )) $now" > "$af"
-        echo "watch.sh: broker woke $agent for $(basename "$m") (attempt $(( attempts + 1 )))"
       fi
     done
     if [ -d "$inbox/archive" ]; then
