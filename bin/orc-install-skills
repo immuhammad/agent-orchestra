@@ -4,14 +4,38 @@
 # and .agents/skills/ (agy / Antigravity CLI) get a copy, since a skill
 # is just a directory with a SKILL.md (YAML frontmatter + markdown) and
 # both tools auto-register it as a slash command from their own
-# directory (verified for agy under issue #107: a canary skill dropped
-# into .agents/skills/ auto-registered its /<name> command in a fresh
-# agy session). One source tree, installed twice, so a protocol-shaped
-# skill (code-review) never drifts between the two copies.
+# directory (verified for agy: a canary skill dropped into
+# .agents/skills/ auto-registered its /<name> command in a fresh agy
+# session). One source tree, installed twice, so a protocol-shaped skill
+# (code-review) never drifts between the two copies.
+#
+# Idempotent and convergent (issue #8): a real install run first PRUNES
+# any target-side skill directory no longer present in this repo's
+# skills/ source tree, then installs/refreshes every current skill --
+# re-running always converges the target to exactly match skills/,
+# regardless of the target's starting state.
+#
+# --check mode (issue #8): verifies WITHOUT writing anything, following
+# lib/check-hook-wiring.sh's pattern (derive the expected set from the
+# tracked source AT CHECK TIME, never a hardcoded list). Reports every
+# MISSING skill (in skills/, not installed) and every STALE skill
+# (installed, no longer in skills/) to stderr, one line per finding,
+# never silent. Exit 0: target matches skills/ exactly in both
+# .claude/skills/ and .agents/skills/. Exit 2: any drift found.
+#
+# Usage:
+#   bin/orc-install-skills [target_dir]          install (default: cwd)
+#   bin/orc-install-skills --check [target_dir]   check only, no writes
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 SKILLS_SRC="$(cd "$DIR/../skills" && pwd)"
+
+CHECK=0
+if [ "${1:-}" = "--check" ]; then
+  CHECK=1
+  shift
+fi
 TARGET="${1:-$PWD}"
 
 if [ ! -d "$TARGET" ]; then
@@ -19,15 +43,49 @@ if [ ! -d "$TARGET" ]; then
   exit 1
 fi
 
+EXPECTED="$(cd "$SKILLS_SRC" && ls -1)"
+
+if [ "$CHECK" -eq 1 ]; then
+  DRIFT=0
+  for dest in "$TARGET/.claude/skills" "$TARGET/.agents/skills"; do
+    while IFS= read -r name; do
+      [ -z "$name" ] && continue
+      if [ ! -d "$dest/$name" ]; then
+        echo "orc-install-skills: MISSING -- $dest/$name (present in $SKILLS_SRC, not installed). Run 'bin/orc-install-skills $TARGET' to fix." >&2
+        DRIFT=2
+      fi
+    done <<< "$EXPECTED"
+    if [ -d "$dest" ]; then
+      while IFS= read -r existing; do
+        [ -z "$existing" ] && continue
+        if [ ! -d "$SKILLS_SRC/$existing" ]; then
+          echo "orc-install-skills: STALE -- $dest/$existing (installed, but no longer in $SKILLS_SRC). Run 'bin/orc-install-skills $TARGET' to prune it." >&2
+          DRIFT=2
+        fi
+      done < <(ls -1 "$dest" 2>/dev/null)
+    fi
+  done
+  if [ "$DRIFT" -eq 0 ]; then
+    echo "orc-install-skills: check passed -- $TARGET/.claude/skills/ and $TARGET/.agents/skills/ both match $SKILLS_SRC exactly."
+  fi
+  exit "$DRIFT"
+fi
+
 for dest in "$TARGET/.claude/skills" "$TARGET/.agents/skills"; do
   mkdir -p "$dest"
-  for skill_dir in "$SKILLS_SRC"/*/; do
-    name="$(basename "$skill_dir")"
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
+    if [ ! -d "$SKILLS_SRC/$existing" ]; then
+      rm -rf "${dest:?}/$existing"
+    fi
+  done < <(ls -1 "$dest" 2>/dev/null)
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
     rm -rf "${dest:?}/$name"
-    cp -R "$skill_dir" "$dest/$name"
-  done
+    cp -R "$SKILLS_SRC/$name" "$dest/$name"
+  done <<< "$EXPECTED"
 done
 
-echo "orc-install-skills: installed $(ls "$SKILLS_SRC" | wc -l | tr -d ' ') skills to:"
+echo "orc-install-skills: installed $(echo "$EXPECTED" | wc -l | tr -d ' ') skills to:"
 echo "  $TARGET/.claude/skills/"
 echo "  $TARGET/.agents/skills/"

@@ -29,7 +29,7 @@ them in dispatch messages so they fire every time.
 
 | Role      | Stage                                | Auto-use skills |
 |-----------|---------------------------------------|------------------|
-| Builder   | BUILD/TEST                            | test-driven-development, systematic-debugging, verification-before-completion, using-git-worktrees |
+| Builder   | BUILD/TEST                            | test-driven-development, systematic-debugging, verification-before-completion, using-git-worktrees, dispatching-parallel-agents, subagent-driven-development |
 | Builder   | before dispatching to reviewer        | requesting-code-review |
 | Builder   | after reviewer's verdict (fix-loop)   | receiving-code-review |
 | Reviewer  | REVIEW                                | code-review (applies `review-protocol.md`) |
