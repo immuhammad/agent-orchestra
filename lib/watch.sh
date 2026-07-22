@@ -556,6 +556,7 @@ watch_main() {
   while true; do
     merge_watch_check
     review_watch_check
+    broker_translate_agy_state
     broker_check
     pane_liveness_check
 

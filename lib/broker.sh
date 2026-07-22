@@ -51,6 +51,51 @@ BROKER_AGENTS="${BROKER_AGENTS:-orchestra builder agy}"
 BROKER_EVENTS_MAX_LINES="${BROKER_EVENTS_MAX_LINES:-1000}"
 BROKER_EVENTS_KEEP_LINES="${BROKER_EVENTS_KEEP_LINES:-500}"
 
+# issue #130 (from agy's own #129 investigation): Antigravity has no
+# lifecycle hooks, but its statusline scratch file (the same one
+# gatekeeper reads quota from) carries agent_state + session_id. Polling
+# that into the standard pane-state file gives agy's pane the same
+# ground truth as Claude panes -- the screen heuristic drops to a
+# rarely-taken fallback. Unlike hook-written states (event truth, never
+# expires), this is a POLLED copy of another program's file, so
+# freshness gates the SOURCE: a missing/stale/unreadable statusline
+# CLEARS the translated state outright, restoring the heuristic's
+# authority, rather than trusting a snapshot of unknown age.
+AGY_STATUSLINE_FILE="${AGY_STATUSLINE_FILE:-$HOME/.gemini/antigravity-cli/scratch/agy-statusline.json}"
+AGY_STATUSLINE_MAX_AGE_S="${AGY_STATUSLINE_MAX_AGE_S:-300}"
+
+broker_translate_agy_state() {
+  local target pane_id f state sid age
+  target="$(pane_for_agent agy)"
+  [ -n "$target" ] || return 0
+  pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
+  [ -n "$pane_id" ] || return 0
+  f="$AGY_STATUSLINE_FILE"
+  if [ ! -f "$f" ]; then
+    pane_state_clear "$pane_id"
+    return 0
+  fi
+  age=$(( $(broker_now) - $(broker_mtime "$f") ))
+  if [ "$age" -gt "$AGY_STATUSLINE_MAX_AGE_S" ]; then
+    pane_state_clear "$pane_id"
+    return 0
+  fi
+  state="$(jq -r '.agent_state // empty' "$f" 2>/dev/null)"
+  sid="$(jq -r '.session_id // empty' "$f" 2>/dev/null)"
+  if [ -z "$state" ]; then
+    pane_state_clear "$pane_id"
+    return 0
+  fi
+  # Value space (observed live: "idle"): only an explicit idle reads
+  # idle; every other non-empty value is treated as busy -- failing
+  # toward "don't type into it", the room's standing posture.
+  case "$state" in
+    idle) state="idle" ;;
+    *)    state="busy" ;;
+  esac
+  pane_state_write "$pane_id" "$state" "$sid"
+}
+
 broker_now() { date '+%s'; }
 
 # stat portability: GNU (-c %Y) first, BSD (-f %m) fallback. Order is
