@@ -260,21 +260,45 @@ REVIEW_WATCH_STATE="${REVIEW_WATCH_STATE:-$CANON_DIR/review-watch-state}"
 # stops appearing here on the next tick -- no separate state check needed,
 # the same structural guarantee merge_watch_check relies on for "already
 # merged".
+#
+# BOUNDARY (review round 2, agy finding 2): this scope cuts both ways. A
+# REQUEST-CHANGES comment posted AFTER a PR has already gone ready is
+# deliberately never delivered -- the PR no longer matches open+draft, so
+# it simply isn't in this list. This is in-protocol, not an oversight: a
+# PR only ever goes ready via this same script's own APPROVE branch, and
+# from that point on it's human-bound (Gate 2), not draft-review-loop-
+# bound -- there is no "reject an already-ready PR back to draft" state
+# in AGENTS.md's flow for review-watch to observe or act on.
 rw_fetch_open_draft_prs() {
   gh pr list --state open --json number,title,body,headRefName,isDraft \
     --jq '.[] | select(.isDraft) | [.number, (.title // "" | gsub("\n";" ")), (.body // "" | gsub("\n";" ")), .headRefName] | @tsv' 2>/dev/null
 }
 
-# rw_fetch_pr_comments <pr> -- prints "<createdAt>\t<body, newlines -> \x01>"
-# per comment, one per line, in gh's own (chronological, oldest-first)
-# order -- verified empirically against a real reviewed PR before writing
-# this. \x01 stands in for a real newline so a multi-line comment body
-# still survives the TSV/line-based pipeline intact; rw_latest_verdict
-# restores it before anchoring the match. Split out for the same reason as
-# mw_fetch_merged_prs.
+# rw_fetch_pr_comments <pr> -- prints "<createdAt>\t<body, newlines -> a
+# literal U+0001 (SOH)>" per comment, one per line, in gh's own
+# (chronological, oldest-first) order -- verified empirically against a
+# real reviewed PR before writing this. The SOH byte stands in for a real
+# newline so a multi-line comment body still survives the TSV/line-based
+# pipeline intact; rw_latest_verdict restores it (`tr '\001' '\n'`) before
+# anchoring the match -- this is what makes the anchor apply to the
+# comment's TRUE first line only, not a flattened whole-body string a
+# later line's own "APPROVE:"/"REQUEST-CHANGES:" prefix could otherwise
+# be mistaken to start.
+#
+# review round 2 (agy, PR #111 finding 1): built via jq's own `([1] |
+# implode)` (an array containing the integer codepoint 1, turned into a
+# 1-character string at RUNTIME) rather than a jq string-escape spelling
+# of that same codepoint, or a raw control byte typed directly into this
+# file -- both of the latter render as invisible/empty in ordinary text
+# tools (confirmed live: it fooled a source read AND a code review, both
+# reported the sentinel as silently missing when a raw byte was actually
+# sitting there and working correctly). `implode` keeps this script's own
+# source 100% printable ASCII with identical runtime behavior, so nothing
+# here is invisible to a diff, an editor, or the next reader. Split out
+# for the same reason as mw_fetch_merged_prs.
 rw_fetch_pr_comments() {
   gh pr view "$1" --json comments \
-    --jq '.comments[] | [.createdAt, (.body | gsub("\n"; ""))] | @tsv' 2>/dev/null
+    --jq '.comments[] | [.createdAt, (.body | gsub("\n"; ([1] | implode)))] | @tsv' 2>/dev/null
 }
 
 # rw_latest_verdict <pr> -- prints "APPROVE" or "REQUEST-CHANGES" for the
