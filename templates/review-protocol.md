@@ -45,6 +45,11 @@ looks fine:
    `decisions.log`, and the never-force-push / never-merge-directly hard
    rules in `AGENTS.md`? A change that works but routes around a guard
    instead of through it is a defect even if it "passes."
+7. **Portability.** Committed files must contain no machine/user-absolute
+   paths, no hardcoded home directories, no single-machine assumptions.
+   Grep the diff for `Users/`, `home/`, and absolute install roots as a
+   mandatory probe — a change that only works on the author's machine is
+   still a defect, regardless of how clean the rest of the diff is.
 
 ## Risky diffs get a dedicated security pass
 
