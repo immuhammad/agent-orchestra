@@ -23,10 +23,12 @@ assert_eq() {
 TMP="$(mktemp -d)"
 cleanup() {
   rm -rf "$TMP"
-  # An aborted run (set -e mid-block, SIGKILL) never reaches a block's
-  # inline kill-session -- reap every session THIS run created on the way
-  # out. Names end in our PID (plus the one derived -liveness suffix), so
-  # parallel runs and the live control-room are untouched.
+  # A set -e mid-block failure (or INT/TERM routed through exit below)
+  # never reaches a block's inline kill-session -- reap every session
+  # THIS run created on the way out. Names end in our PID (plus the one
+  # derived -liveness suffix), so parallel runs and the live control-room
+  # are untouched. SIGKILL is NOT covered here (no trap can catch it);
+  # reap_dead_orctest_sessions below converges those on the NEXT run.
   for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null \
                | grep -E "^orctest-(.*-)?$$(-liveness)?\$" || true); do
     tmux kill-session -t "$s" 2>/dev/null || true
@@ -36,6 +38,45 @@ trap cleanup EXIT
 # An untrapped INT/TERM would skip the EXIT trap entirely -- route them
 # through exit so an interrupted run still reaps its sessions.
 trap 'exit 130' INT TERM
+
+# Self-heal on the way IN (agy PR #145 round 1): no trap catches SIGKILL,
+# so a kill -9'd run strands its sessions until someone cleans up by
+# hand. Reap any orctest-* session whose embedded owner PID is dead;
+# anything with a live PID (parallel runs, this run) always survives.
+reap_dead_orctest_sessions() {
+  tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^orctest-' \
+  | while IFS= read -r s; do
+    pid="${s%-liveness}"   # derived suffix off first
+    pid="${pid##*-}"       # trailing field = the owning PID
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null && continue
+    tmux kill-session -t "$s" 2>/dev/null || true
+  done
+  return 0
+}
+reap_dead_orctest_sessions
+
+echo "== PR #145 round 1: dead-PID orphan reaper =="
+# A max-PID orphan stands in for a SIGKILL-stranded run (same stand-in
+# gatekeeper.test.sh used for #37); a live decoy proves PID-scoping.
+REAP_DEAD="orctest-reapme-2147483647"
+REAP_LIVE="orctest-decoy-$$"
+tmux new-session -d -s "$REAP_DEAD" >/dev/null 2>&1
+tmux new-session -d -s "${REAP_DEAD}-liveness" >/dev/null 2>&1
+tmux new-session -d -s "$REAP_LIVE" >/dev/null 2>&1
+reap_dead_orctest_sessions
+if ! tmux has-session -t "$REAP_DEAD" 2>/dev/null \
+   && ! tmux has-session -t "${REAP_DEAD}-liveness" 2>/dev/null; then
+  pass "dead-PID orphans reaped (plain + -liveness shapes)"
+else
+  fail "dead-PID orphan sessions should have been reaped"
+fi
+if tmux has-session -t "$REAP_LIVE" 2>/dev/null; then
+  pass "live-PID session survives the reaper"
+else
+  fail "live-PID session must survive the reaper"
+fi
+tmux kill-session -t "$REAP_LIVE" 2>/dev/null || true
 
 echo "== orc-config.sh: scalars =="
 (
