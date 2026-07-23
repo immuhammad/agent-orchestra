@@ -1,0 +1,120 @@
+#!/bin/bash
+# bin/orc-protect [on|off|status] [target_dir] — OS-level immutability for
+# the harness's protected paths (guard-layer redesign #141, layer 1).
+#
+# The PreToolUse guards used to chase protected-path writes by re-parsing
+# shell — a losing game (#98/#84/#139/#140). This helper moves the hard
+# stop DOWN to the filesystem: macOS `chflags uchg` / Linux `chattr +i`.
+# A flagged path rejects every write at the kernel (EPERM) no matter how
+# the command was spelled — bash -c, trailing redirects, tilde tricks,
+# the Write tool, all irrelevant.
+#
+# Scope + honest limits:
+# - Protects THIS checkout's instances. A worktree has its own copies of
+#   tracked files; those land only via PR, gated by branch protection +
+#   review, so the room checkout is the instance that matters here.
+# - uchg/+i is owner-clearable: it stops an agent's accidental or
+#   shortcut write, not a determined adversary that clears flags first.
+#   That class is handled by prompt rules + review, not this tool.
+# - `.git/` protected_paths entries are SKIPPED: git itself writes .git/
+#   constantly. That path is covered by GitHub branch protection
+#   (server-side) and the thin guard's rm -rf rule instead.
+# - Legit edits (template re-sync, config changes, a git pull that
+#   touches orchestrator.yaml): `orc-protect off`, edit, `orc-protect on`.
+#
+# Targets: orc_harness_config_dirs (.claude/ .agents/) + orchestrator.yaml
+# + orchestrator.yaml's protected_paths entries — existing paths only,
+# skips reported to stderr, never silent.
+#
+# Usage:
+#   bin/orc-protect on [target_dir]      set immutability flags
+#   bin/orc-protect off [target_dir]     clear them
+#   bin/orc-protect status [target_dir]  report each target; exit 0 when
+#                                        all protected, exit 2 otherwise
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+. "$DIR/../lib/orc-config.sh"
+
+MODE="${1:-status}"
+TARGET_DIR="${2:-$PWD}"
+case "$MODE" in
+  on|off|status) ;;
+  *) echo "orc-protect: unknown mode '$MODE' (want on|off|status)" >&2; exit 1 ;;
+esac
+cd "$TARGET_DIR" 2>/dev/null || { echo "orc-protect: no such directory: $TARGET_DIR" >&2; exit 1; }
+
+OS="$(uname -s)"
+
+flag_on() {
+  if [ "$OS" = Darwin ]; then chflags -R uchg "$1"; else chattr -R +i "$1"; fi
+}
+flag_off() {
+  if [ "$OS" = Darwin ]; then chflags -R nouchg "$1"; else chattr -R -i "$1"; fi
+}
+flag_stat() {  # prints "protected" or "open" for the target's own node
+  if [ "$OS" = Darwin ]; then
+    case "$(stat -f '%Sf' "$1" 2>/dev/null)" in
+      *uchg*) echo protected ;;
+      *)      echo open ;;
+    esac
+  else
+    if lsattr -d "$1" 2>/dev/null | awk '{print $1}' | grep -q i; then
+      echo protected
+    else
+      echo open
+    fi
+  fi
+}
+
+targets() {
+  {
+    orc_harness_config_dirs
+    echo "orchestrator.yaml"
+    orc_protected_paths
+  } | sed -e 's:^\./::' -e 's:/$::' | sort -u | while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      .git|.git/*)
+        echo "orc-protect: skipping '$p' (git must write .git/; covered by branch protection + the thin guard's rm -rf rule)" >&2
+        continue ;;
+    esac
+    if [ ! -e "$p" ]; then
+      echo "orc-protect: skipping '$p' (not present)" >&2
+      continue
+    fi
+    printf '%s\n' "$p"
+  done
+}
+
+rc=0
+found=0
+while IFS= read -r t; do
+  found=1
+  case "$MODE" in
+    on)
+      if flag_on "$t" 2>/dev/null; then
+        echo "orc-protect: PROTECTED $t"
+      else
+        echo "orc-protect: FAILED to protect '$t' (missing privilege? unprivileged Linux cannot set +i)" >&2
+        rc=1
+      fi ;;
+    off)
+      if flag_off "$t" 2>/dev/null; then
+        echo "orc-protect: open      $t"
+      else
+        echo "orc-protect: FAILED to unprotect '$t'" >&2
+        rc=1
+      fi ;;
+    status)
+      s="$(flag_stat "$t")"
+      echo "orc-protect: $s $t"
+      [ "$s" = protected ] || rc=2 ;;
+  esac
+done < <(targets)
+
+if [ "$found" -eq 0 ]; then
+  echo "orc-protect: no protectable targets found under $TARGET_DIR" >&2
+  exit 1
+fi
+exit "$rc"
