@@ -100,7 +100,7 @@ evaluated on adoption, not bulk-imported.
   (pruned after `dispatch.archive_retention_days`); "check inbox" means
   the LIVE dir only — never re-read the archive. Screen heuristics
   survive ONLY for agy's pane (a TUI with no Claude hooks).
-- Pane map (window index 0, tiled) matches `bin/orc`'s layout:
+- Pane map (window index 0, 3 agent panes on top / 2 monitor panes below) matches `bin/orc`'s layout:
   0=orchestra 1=builder 2=reviewer 3=gatekeeper 4=watch — Scribe has no
   standing pane; a dispatch spawns it as a one-shot headless run instead
   of nudging an existing session. Target panes by index (`<session>:0.N`),
