@@ -59,15 +59,67 @@ else
   fail "orc init --answers should exit 0 on a valid answers file, got status=$STATUS: $OUT"
 fi
 ALL_PRESENT=1
-for f in orchestrator.yaml AGENTS.md CLAUDE.md GEMINI.md SOUL.md review-protocol.md \
+for f in orchestrator.yaml AGENTS.md CLAUDE.md GEMINI.md review-protocol.md \
+  souls/orchestra.md souls/builder.md souls/reviewer.md souls/scribe.md \
   .harness/handoff.md .harness/decisions.log .claude/settings.json .agents/hooks.json \
   .claude/skills/test-driven-development/SKILL.md .agents/skills/code-review/SKILL.md; do
   [ -f "$TARGET1/$f" ] || ALL_PRESENT=0
 done
 if [ "$ALL_PRESENT" -eq 1 ]; then
-  pass "every expected file (config, docs, hooks, skills, both targets) was written"
+  pass "every expected file (config, docs, hooks, skills, souls, both targets) was written"
 else
   fail "one or more expected files were missing after init"
+fi
+if [ ! -e "$TARGET1/SOUL.md" ]; then
+  pass "issue #12: the stale SOUL.md placeholder is no longer written"
+else
+  fail "SOUL.md placeholder should not be written anymore -- superseded by souls/<role>.md"
+fi
+
+echo "== issue #12: each soul card's model lane reflects the answers, per-role, not a shared/hardcoded value =="
+if grep -q 'Model lane: opus (effort: high)' "$TARGET1/souls/orchestra.md" \
+  && grep -q 'pane 0.0' "$TARGET1/souls/orchestra.md"; then
+  pass "orchestra's soul reflects ROLE_ORCHESTRA_MODEL/EFFORT and its pane index"
+else
+  fail "orchestra's soul does not reflect the answers: $(grep 'Model lane' "$TARGET1/souls/orchestra.md")"
+fi
+if grep -q 'Model lane: sonnet (effort: default)' "$TARGET1/souls/builder.md" \
+  && grep -q 'pane 0.1' "$TARGET1/souls/builder.md"; then
+  pass "builder's soul takes the IMPLEMENTER lane (the one actually exec'd for that pane), not tester's"
+else
+  fail "builder's soul does not reflect the implementer answers: $(grep 'Model lane' "$TARGET1/souls/builder.md")"
+fi
+if grep -q 'Model lane: agy (effort: high)' "$TARGET1/souls/reviewer.md" \
+  && grep -q 'pane 0.2' "$TARGET1/souls/reviewer.md"; then
+  pass "reviewer's soul reflects ROLE_REVIEWER_MODEL/EFFORT and its pane index"
+else
+  fail "reviewer's soul does not reflect the answers: $(grep 'Model lane' "$TARGET1/souls/reviewer.md")"
+fi
+if grep -q 'Model lane: haiku (effort: low)' "$TARGET1/souls/scribe.md" \
+  && grep -q 'no standing pane, no SessionStart hook' "$TARGET1/souls/scribe.md"; then
+  pass "scribe's soul reflects ROLE_SCRIBE_MODEL/EFFORT and states it has no pane"
+else
+  fail "scribe's soul does not reflect the answers: $(grep 'Model lane' "$TARGET1/souls/scribe.md")"
+fi
+if ! grep -q '<MODEL>\|<EFFORT>\|<PANE>' "$TARGET1"/souls/*.md; then
+  pass "no unsubstituted <MODEL>/<EFFORT>/<PANE> placeholders remain in any rendered soul"
+else
+  fail "a soul card still has an unsubstituted placeholder: $(grep -l '<MODEL>\|<EFFORT>\|<PANE>' "$TARGET1"/souls/*.md)"
+fi
+
+echo "== issue #12: reviewer's soul is ALSO appended to GEMINI.md -- agy's only confirmed native context channel =="
+# .agents/rules/ was checked live and is NOT a confirmed agy mechanism
+# (see decisions.log) -- GEMINI.md is, so reviewer's card rides there too,
+# not just souls/reviewer.md.
+if grep -q '## SOUL' "$TARGET1/GEMINI.md" && grep -q 'I am Reviewer' "$TARGET1/GEMINI.md"; then
+  pass "GEMINI.md carries the rendered reviewer soul content"
+else
+  fail "expected GEMINI.md to carry the reviewer soul under a ## SOUL heading"
+fi
+if grep -q 'Model lane: agy (effort: high)' "$TARGET1/GEMINI.md"; then
+  pass "GEMINI.md's appended soul reflects the substituted answers, not raw placeholders"
+else
+  fail "GEMINI.md's appended soul should reflect ROLE_REVIEWER_MODEL/EFFORT"
 fi
 
 echo "== orchestrator.yaml round-trips through orc-config.sh's own readers =="

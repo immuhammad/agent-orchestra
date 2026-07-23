@@ -305,8 +305,22 @@ nudge_agent() {
 # who writes it.
 scribe_spawn_headless() {
   local msg_file="$1" ack_file="$2" msg_body prompt project_name allowed_tools log_file
-  local spawn_id scratch_dir
+  local spawn_id scratch_dir soul_preamble soul_file
   msg_body="$(cat "$msg_file" 2>/dev/null)"
+
+  # issue #12: scribe has no standing pane/SessionStart hook to inject a
+  # SOUL.md card into (unlike orchestra/builder, see hooks/session-
+  # start.sh) -- its identity card rides in the spawn prompt itself
+  # instead. Same "no file, no line, no nag" precedent as the Claude-lane
+  # injection: an older room without souls/scribe.md just gets the plain
+  # prompt it always had.
+  soul_preamble=""
+  soul_file="$(dirname "$CANON_DIR")/souls/scribe.md"
+  if [ -f "$soul_file" ]; then
+    soul_preamble="$(cat "$soul_file")
+
+"
+  fi
   # issue #18 B3: this used to hardcode "career-ops-harness" (this
   # harness's original single-consumer project) -- project-agnostic now,
   # reading THIS project's own name from orchestrator.yaml like every
@@ -335,7 +349,7 @@ scribe_spawn_headless() {
   # prose (e.g. "doesn't") opens an unterminated single-quote from its
   # point of view -- breaks the WHOLE script's parse, not just this
   # function (found the hard way writing this very function).
-  prompt="You are the scribe agent for ${project_name}, spawned one-shot to handle a single dispatched task (issue #89: scribe has no standing pane -- this headless run IS the scribe for this one message).
+  prompt="${soul_preamble}You are the scribe agent for ${project_name}, spawned one-shot to handle a single dispatched task (issue #89: scribe has no standing pane -- this headless run IS the scribe for this one message).
 
 Dispatch message:
 $msg_body

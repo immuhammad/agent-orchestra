@@ -29,7 +29,7 @@ step-by-step.
 - `bin/orc` — entry point
 - `lib/` — send-lib, tui-lib, handoff-lib, harness-root, guards
 - `hooks/` — session-start, check-handoff, pre-compact-checkpoint, rate-limit-handoff
-- `templates/` — AGENTS.md, CLAUDE.md, GEMINI.md, orchestrator.yaml, handoff seed, review-protocol.md, SOUL.md placeholder
+- `templates/` — AGENTS.md, CLAUDE.md, GEMINI.md, orchestrator.yaml, handoff seed, review-protocol.md, souls/ (per-role SOUL.md identity cards)
 - `skills/` — capped skill pack (test-driven-development, systematic-debugging,
   verification-before-completion, using-git-worktrees, requesting/receiving-code-review,
   brainstorming, writing-plans), dual-installed to `.claude/skills/` and `.agents/skills/`

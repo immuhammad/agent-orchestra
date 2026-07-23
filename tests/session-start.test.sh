@@ -162,6 +162,40 @@ else
   fail "expected no new FLAG .msg on a clear re-fire, found $MSG_COUNT_AFTER_CLEAR"
 fi
 
+echo "== issue #12: souls/<role>.md, when present, is injected into additionalContext on startup =="
+SOUL_SANDBOX="$TMP/soul-sandbox"
+mkdir -p "$SOUL_SANDBOX/.harness/inbox/orchestra" "$SOUL_SANDBOX/souls"
+echo "project: soul-test" > "$SOUL_SANDBOX/orchestrator.yaml"
+printf 'SOUL-MARKER-BUILDER: I am the builder card.\n' > "$SOUL_SANDBOX/souls/builder.md"
+printf 'SOUL-MARKER-ORCHESTRA: I am the orchestra card.\n' > "$SOUL_SANDBOX/souls/orchestra.md"
+SOUL_OUT="$(cd "$SOUL_SANDBOX" && ORC_ROLE=builder ORC_SESSION_CLASS=fresh TMUX_PANE="%301" bash "$HOOK" <<< '{"source":"startup","session_id":"sid-soul-1"}' 2>/dev/null)"
+if echo "$SOUL_OUT" | grep -q "SOUL-MARKER-BUILDER"; then
+  pass "builder's own soul card content is injected into additionalContext"
+else
+  fail "expected SOUL-MARKER-BUILDER in additionalContext, got: $SOUL_OUT"
+fi
+if ! echo "$SOUL_OUT" | grep -q "SOUL-MARKER-ORCHESTRA"; then
+  pass "a DIFFERENT role's soul (orchestra) is not leaked into builder's context"
+else
+  fail "builder's additionalContext should not contain orchestra's soul: $SOUL_OUT"
+fi
+
+echo "== issue #12: no souls/<role>.md on disk -> no SOUL line, no error (untracked/older-room precedent) =="
+NOSOUL_SANDBOX="$TMP/nosoul-sandbox"
+mkdir -p "$NOSOUL_SANDBOX/.harness/inbox/orchestra"
+echo "project: nosoul-test" > "$NOSOUL_SANDBOX/orchestrator.yaml"
+NOSOUL_OUT="$(cd "$NOSOUL_SANDBOX" && ORC_ROLE=builder ORC_SESSION_CLASS=fresh TMUX_PANE="%302" bash "$HOOK" <<< '{"source":"startup","session_id":"sid-nosoul-1"}' 2>/dev/null)"
+if ! echo "$NOSOUL_OUT" | grep -q "SOUL:"; then
+  pass "no souls/builder.md on disk -> no SOUL: line in additionalContext"
+else
+  fail "expected no SOUL: line with no souls file present, got: $NOSOUL_OUT"
+fi
+if echo "$NOSOUL_OUT" | python3 -m json.tool >/dev/null 2>&1; then
+  pass "no-soul-file output still parses as valid JSON"
+else
+  fail "expected valid JSON even with no soul file present, got: $NOSOUL_OUT"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

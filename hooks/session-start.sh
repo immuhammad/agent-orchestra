@@ -41,6 +41,7 @@ BASE_CONTEXT="HARNESS ACTIVE. Read .harness/handoff.md (current task state, ephe
 # No ORC_ROLE/ORC_SESSION_CLASS at all means a session started outside
 # `orc up` -- same "untracked, never nagged" precedent as ORC_ROLE below.
 LIFECYCLE_CONTEXT=""
+SOUL_CONTEXT=""
 ROLE="${ORC_ROLE:-}"
 CLASS="${ORC_SESSION_CLASS:-}"
 HOOK_SOURCE="$(echo "$INPUT" | jq -r '.source // empty' 2>/dev/null || echo '')"
@@ -64,6 +65,19 @@ if [ -n "$ROLE" ] && [ -n "$CLASS" ]; then
         [ -n "${TMUX_PANE:-}" ] && pane_state_write "$TMUX_PANE" idle "$SESSION_ID" "$CLASS"
         [ -n "$SESSION_ID" ] && sl_write_role_session "$ROLE" "$SESSION_ID"
 
+        # issue #12: per-role SOUL.md identity card -- CANON_DIR is the
+        # project's .harness dir (see harness-root.sh), so its parent is
+        # the project root souls/ lives in, sibling to AGENTS.md. Read
+        # fresh every startup/resume (the card is meant to be re-read each
+        # session, per the issue title) rather than cached in state. A
+        # room that never ran `orc init`'s soul step (or an older room)
+        # just has no file here -- silently no SOUL line, same "untracked,
+        # never nagged" precedent as no-ORC_ROLE above.
+        SOUL_FILE="$(dirname "$CANON_DIR")/souls/${ROLE}.md"
+        if [ -f "$SOUL_FILE" ]; then
+          SOUL_CONTEXT=" SOUL: $(cat "$SOUL_FILE")"
+        fi
+
         case "$CLASS" in
           resumed)
             LIFECYCLE_CONTEXT=" SESSION LIFECYCLE: RESUMED -- this pane's prior session (${SESSION_ID:-unknown}) was continued successfully."
@@ -81,4 +95,4 @@ if [ -n "$ROLE" ] && [ -n "$CLASS" ]; then
   esac
 fi
 
-jq -n --arg ctx "${BASE_CONTEXT}${LIFECYCLE_CONTEXT}" '{additionalContext: $ctx}'
+jq -n --arg ctx "${BASE_CONTEXT}${SOUL_CONTEXT}${LIFECYCLE_CONTEXT}" '{additionalContext: $ctx}'
