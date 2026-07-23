@@ -87,7 +87,7 @@ else
   fail "expected exit 0 with no ORC_ROLE, got status=$STATUS: $OUT"
 fi
 
-echo "== unrecognized role (agy/scribe): never blocked =="
+echo "== unrecognized role (scribe): never blocked =="
 OUT="$(run_hook scribe)"
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
@@ -95,6 +95,20 @@ if [ "$STATUS" -eq 0 ]; then
 else
   fail "expected exit 0 for role=scribe, got status=$STATUS: $OUT"
 fi
+
+echo "== agy and reviewer roles: stop BLOCKED if inbox has unacked msg =="
+mkdir -p "$CANON/inbox/agy" "$CANON/inbox/reviewer"
+echo "do the thing" > "$CANON/inbox/agy/20260101000000-7.msg"
+echo "do the thing" > "$CANON/inbox/reviewer/20260101000000-7.msg"
+for test_role in agy reviewer; do
+  OUT="$(run_hook "$test_role")"
+  STATUS=$?
+  if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q "20260101000000-7.msg"; then
+    pass "unacked msg for $test_role -> exit 2"
+  else
+    fail "expected exit 2 for $test_role, got status=$STATUS: $OUT"
+  fi
+done
 
 echo "== quota-stop flag up: parked sessions are never forced through their inbox =="
 echo '{"pool":"5h"}' > "$CANON/state/quota-stop"
