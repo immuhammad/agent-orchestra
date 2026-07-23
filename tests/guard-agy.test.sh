@@ -161,6 +161,33 @@ expect_allowed_in "grep mentioning a protected path in its pattern text is allow
   "$TMP7" "grep vendor/legacy vendor/legacy/file.txt"
 rm -rf "$TMP7"
 
+echo "== issue #15 agy REQUEST-CHANGES finding 1: a variable in a cd argument must fail closed, not silently evaluate writes against the wrong (unchanged) cwd =="
+expect_denied "DIR=.claude && cd \$DIR && echo hi > settings.json fails closed (real shell expands \$DIR into .claude, guard must not silently miss it)" \
+  'DIR=.claude && cd $DIR && echo hi > settings.json'
+
+echo "== issue #15 agy REQUEST-CHANGES finding 2: an embedded (non-edge) quote in a cd argument must fail closed =="
+expect_denied "cd .clau\"de\" && echo hi > settings.json fails closed (real shell removes the inline quotes and enters .claude)" \
+  'cd .clau"de" && echo hi > settings.json'
+
+echo "== issue #15 fix-round regression: guard-agy.sh must never CRASH (no JSON at all) on an ordinary failed cd -- always emit a clean decision =="
+OUT="$(run_guard_agy 'cd this-directory-does-not-exist-anywhere && echo hi > foo.txt')"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && echo "$OUT" | jq -e '.decision' >/dev/null 2>&1; then
+  pass "an ordinary failed cd (no special chars) still emits valid JSON, no crash"
+else
+  fail "guard-agy.sh crashed or emitted invalid JSON on a plain failed cd (status=$STATUS): $OUT"
+fi
+DECISION="$(echo "$OUT" | jq -r '.decision' 2>/dev/null)"
+if [ "$DECISION" = "deny" ]; then
+  pass "an unresolvable cd (even with no special chars) fails closed rather than silently continuing at the wrong cwd"
+else
+  fail "expected deny for an unresolvable cd target, got: $OUT"
+fi
+
+echo "== issue #15 fix-round regression: a normal, resolvable cd (properly quoted, no embedded quotes) still works =="
+expect_allowed "cd into a real, edge-quoted directory with an unrelated write still allowed" \
+  'cd "lib" && echo hi > /tmp/not-a-real-write-target-just-parsed.txt'
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

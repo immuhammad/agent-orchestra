@@ -125,8 +125,31 @@ while IFS= read -r seg; do
     cd_arg="${cd_arg%\"}"; cd_arg="${cd_arg#\"}"
     cd_arg="${cd_arg%\'}"; cd_arg="${cd_arg#\'}"
     if [ -n "$cd_arg" ] && [ "$cd_arg" != "-" ]; then
-      new_cwd="$(cd "$guard_agy_cwd" 2>/dev/null && cd "$cd_arg" 2>/dev/null && pwd)"
-      [ -n "$new_cwd" ] && guard_agy_cwd="$new_cwd"
+      # agy PR #138 round 1 findings 1+2: a variable/substitution/
+      # embedded quote in cd_arg can make THIS guard's own `cd`
+      # attempt fail while the REAL shell's `cd` (which expands
+      # variables and removes quotes) succeeds -- guard_agy_cwd then
+      # silently stays wrong, so a later relative write is evaluated
+      # against the WRONG directory (e.g. `DIR=.claude && cd $DIR &&
+      # echo hi > settings.json`, or `cd .clau"de" && ...`). Fail
+      # closed on any cd_arg shape this parser can't confidently
+      # replicate, rather than attempting an ambiguous cd.
+      case "$cd_arg" in
+        *'$'*|*'`'*|*'"'*|*"'"*)
+          _guard_agy_deny "guard-agy.sh: cd target could not be verified (variable, substitution, or embedded quote in 'cd $cd_arg'), failing closed"
+          ;;
+      esac
+      # `|| true` on the inner chain: a plain `var="$(cmd)"` assignment
+      # trips `set -e` on ANY non-zero exit from cmd (well-known bash
+      # gotcha, already documented elsewhere in this codebase) -- an
+      # ORDINARY failed cd (typo'd dir, no special chars) must not
+      # crash this script with no output; it must still fail closed
+      # via the explicit deny below instead.
+      new_cwd="$(cd "$guard_agy_cwd" 2>/dev/null && cd "$cd_arg" 2>/dev/null && pwd || true)"
+      if [ -z "$new_cwd" ]; then
+        _guard_agy_deny "guard-agy.sh: cd target '$cd_arg' could not be resolved, failing closed"
+      fi
+      guard_agy_cwd="$new_cwd"
     fi
   fi
 
