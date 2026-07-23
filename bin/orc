@@ -25,6 +25,20 @@ ORC_SESSION="${ORC_SESSION:-$(orc_session_name "$(basename "$(pwd)")")}"
 # it down without this process getting replaced by `tmux attach` (exec).
 orc_build_session() {
   local session="$ORC_SESSION"
+
+  # agy PR #133 round 1: "$session" is interpolated into tmux target
+  # strings throughout this function and -- via the attach-snap hook
+  # below -- into a command string /bin/sh executes when the hook fires:
+  # a space word-splits that command, a single quote closes the sh
+  # string early = arbitrary shell injection at hook-fire time.
+  # orc_session_name sanitizes every derived name to this same charset,
+  # so only a hand-set ORC_SESSION can ever get here -- refused LOUDLY
+  # before any tmux call rather than trusted into an sh string.
+  if ! [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "orc: REFUSE -- session name '$session' contains characters outside [A-Za-z0-9_-]. Session names reach /bin/sh via the fallback's client-attached sizing hook and tmux target syntax everywhere else; fix orchestrator.yaml's 'project' (auto-sanitized) or the ORC_SESSION override (used verbatim)." >&2
+    return 1
+  fi
+
   local project integration_branch orchestra_model implementer_model
 
   project="$(orc_get_scalar project)"
@@ -114,9 +128,20 @@ orc_build_session() {
   # target both hardcode these positions) -- only the SIZE arguments and
   # the trailing `select-layout tiled` (which discarded them) changed.
   #
-  # Falls back to the ORIGINAL even-tiled layout, loudly (never silently),
-  # on a terminal too small to give the agent row a floor of
-  # MIN_AGENT_ROWS -- an `-l`/`-p` split size that would be non-positive is
+  # Falls back to a PERCENT-proportioned build of the SAME 3-top/2-bottom
+  # shape, loudly (never silently), on a terminal too small (or
+  # undetectable) to give the agent row a floor of
+  # MIN_AGENT_ROWS. The fallback used to finish with `select-layout
+  # tiled`, which REARRANGES the 5 panes into a 2+2+1 grid -- orchestra/
+  # builder on top, agy/gatekeeper mid, watch full-width bottom -- so any
+  # run that hit the fallback (e.g. `orc up` driven through a pipe or an
+  # agent, where stdout is no tty) silently abandoned the row structure
+  # the room contract draws (live-hit twice: 2026-07-22 diagnosis and
+  # again on the 2026-07-23 rebuild). Percent sizes (`-l N%`, verified on
+  # tmux 3.4 + 3.7b in the #87 round -- unlike `-p`, see below) need no
+  # real terminal size, and tmux rescales the layout proportionally when
+  # a client attaches, so the fallback now degrades only in SIZING
+  # fidelity, never in shape. An `-l`/`-p` split size that would be non-positive is
   # a hard tmux error, not a soft clamp, so this must be decided BEFORE
   # issuing any split, not discovered from a failed command.
   # review round 2 (agy, CI-only failure on the Linux runner, reproduced
@@ -200,16 +225,42 @@ orc_build_session() {
     if [ "$term_cols" -le 0 ] || [ "$term_lines" -le 0 ]; then
       size_desc="unknown (no tty, no ORC_TERM_COLS/LINES override)"
     fi
-    echo "orc: WARNING -- terminal size ${size_desc} -- too small (or undetectable) for the weighted agent-panes layout (need >= ${min_agent_rows} rows for the agent panes after reserving ${monitor_rows} for the monitor row) -- falling back to the even tiled layout. Agent panes will be short; resize your terminal and restart the room ('orc up' again after killing the session) for more headroom." >&2
+    echo "orc: WARNING -- terminal size ${size_desc} -- too small (or undetectable) for the weighted agent-panes layout (need >= ${min_agent_rows} rows for the agent panes after reserving ${monitor_rows} for the monitor row) -- falling back to percent-proportioned sizing (same 3-top/2-bottom shape, guessed sizes). Agent panes will be short; resize your terminal and restart the room ('orc up' again after killing the session) for more headroom." >&2
     tmux new-session -d -s "$session" -n main
     tmux rename-window -t "$session:main" "control-room"
     tmux set -t "$session:0" pane-border-status top
 
-    tmux split-window -v -t "$session:0"
-    tmux split-window -h -t "$session:0.0"
-    tmux split-window -h -t "$session:0.0"
-    tmux split-window -h -t "$session:0.3"
-    tmux select-layout -t "$session:0" tiled
+    # Same split TARGETS as the weighted branch (index->role contract),
+    # sized in percent of the pane being split: 25% bottom strip, then
+    # 33% + 50%-of-the-remainder = three equal top columns, then a half
+    # split for the monitor pair. NO trailing select-layout -- that is
+    # what used to discard this shape.
+    tmux split-window -v -l 25% -t "$session:0"
+    tmux split-window -h -l 33% -t "$session:0.0"
+    tmux split-window -h -l 50% -t "$session:0.0"
+    tmux split-window -h -l 50% -t "$session:0.3"
+
+    # The percent guesses above rescale UNPREDICTABLY when the first real
+    # client attaches -- observed live on both 2026-07-23 rebuilds: the
+    # 25% strip landed at 23 of 59 rows (agents squeezed to 35) and the
+    # monitor strip had to be resize-pane'd back down by hand. tmux DOES
+    # learn the real terminal size the moment a client attaches, so arm a
+    # ONE-SHOT client-attached hook that snaps the monitor strip to the
+    # same absolute monitor_rows the weighted branch uses. Two non-obvious
+    # choices, both verified empirically:
+    #   - `run-shell -b`, NOT a direct resize-pane in the hook: the hook
+    #     fires BEFORE tmux rescales the window to the attaching client,
+    #     so an inline resize gets mangled by the rescale that follows it;
+    #     a backgrounded shell re-enters the server AFTER the attach
+    #     transaction completes (measured: strip 31 inline vs 14 via -b).
+    #   - self-unsetting (`set-hook -u` in the same hook value): one
+    #     attach makes one sizing decision, so later re-attaches and
+    #     manual live pane tuning are never fought by a leftover hook.
+    # The resize is guarded to clients tall enough to keep the SAME
+    # min_agent_rows floor the weighted branch enforces; on a shorter (or
+    # unreadable -- the [ ] error is squelched, test goes false) client
+    # the percent proportions stand, and the hook still disarms.
+    tmux set-hook -t "$session" client-attached "run-shell -b 'if [ \"#{client_height}\" -ge $(( monitor_rows + min_agent_rows + 1 )) ] 2>/dev/null; then tmux resize-pane -t $session:0.3 -y $monitor_rows; fi' ; set-hook -u -t \"$session\" client-attached"
   fi
 
   tmux select-pane -t "$session:0.0" -T "orchestra"
