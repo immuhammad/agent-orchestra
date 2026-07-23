@@ -241,10 +241,21 @@ orc_get_nested() {
 # '.' and ':' are sanitized to '-' since tmux reserves both as separators
 # in its own session:window.pane target syntax (a literal '.' or ':' in a
 # session name would make `$session:0.0`-style targets ambiguous).
+#
+# agy PR #133 round 1: sanitization widened from just '.'/':' to EVERY
+# character outside [A-Za-z0-9_-]. The session name is interpolated into
+# dozens of tmux target strings and -- since the attach-snap hook -- into
+# a command string `/bin/sh` executes at hook-fire time: a space in the
+# project name word-splits that command apart, and a single quote closes
+# the sh string early = arbitrary shell injection. A closed charset at
+# the source makes every downstream interpolation safe by construction
+# (orc_build_session additionally REFUSES a hand-set ORC_SESSION that
+# bypasses this derivation). '\n' stays in tr's keep-set so the trailing
+# newline of echo survives instead of becoming a '-'.
 orc_session_name() {
   local fallback="${1:-harness}"
   local name
   name="$(orc_get_scalar project)"
   name="${name:-$fallback}"
-  echo "$name" | tr '.:' '--'
+  echo "$name" | tr -c 'A-Za-z0-9_\n-' '-'
 }

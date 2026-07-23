@@ -25,6 +25,20 @@ ORC_SESSION="${ORC_SESSION:-$(orc_session_name "$(basename "$(pwd)")")}"
 # it down without this process getting replaced by `tmux attach` (exec).
 orc_build_session() {
   local session="$ORC_SESSION"
+
+  # agy PR #133 round 1: "$session" is interpolated into tmux target
+  # strings throughout this function and -- via the attach-snap hook
+  # below -- into a command string /bin/sh executes when the hook fires:
+  # a space word-splits that command, a single quote closes the sh
+  # string early = arbitrary shell injection at hook-fire time.
+  # orc_session_name sanitizes every derived name to this same charset,
+  # so only a hand-set ORC_SESSION can ever get here -- refused LOUDLY
+  # before any tmux call rather than trusted into an sh string.
+  if ! [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "orc: REFUSE -- session name '$session' contains characters outside [A-Za-z0-9_-]. Session names reach /bin/sh via the fallback's client-attached sizing hook and tmux target syntax everywhere else; fix orchestrator.yaml's 'project' (auto-sanitized) or the ORC_SESSION override (used verbatim)." >&2
+    return 1
+  fi
+
   local project integration_branch orchestra_model implementer_model
 
   project="$(orc_get_scalar project)"

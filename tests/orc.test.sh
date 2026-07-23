@@ -81,6 +81,17 @@ EOF
 assert_eq "session name sanitizes tmux's own separators (. and :)" "client-acme-prod" "$(cat "$TMP/session-sanitized.out")"
 rm -f "$TMP/orchestrator.yaml"
 
+(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: my cool'project
+EOF
+  source "$DIR/../lib/orc-config.sh"
+  orc_session_name fallback
+) > "$TMP/session-hostile.out"
+assert_eq "session name sanitizes EVERY char outside [A-Za-z0-9_-] (agy PR #133: spaces word-split and quotes shell-inject the /bin/sh string inside the attach-snap hook)" "my-cool-project" "$(cat "$TMP/session-hostile.out")"
+rm -f "$TMP/orchestrator.yaml"
+
 echo "== orc-config.sh: protected_paths (block list) =="
 (
   cd "$TMP"
@@ -422,6 +433,33 @@ else
 fi
 tmux kill-session -t "$SNAP_OUTER" 2>/dev/null || true
 tmux kill-session -t "$SNAP_SESSION" 2>/dev/null || true
+
+echo "== agy PR #133 round 1: a hand-set ORC_SESSION outside [A-Za-z0-9_-] is REFUSED before any tmux call (it reaches /bin/sh via the attach-snap hook) =="
+# orc_session_name sanitizes every DERIVED name, so only a verbatim
+# ORC_SESSION override can carry a space or quote into orc_build_session.
+# The hostile value below carries both failure modes agy demonstrated:
+# word-splitting (space) and sh-string breakout (single quote).
+HOSTILE_NAME="bad name'; echo pwned"
+HOSTILE_TMP="$(mktemp -d)"
+HOSTILE_RC=0
+(
+  cd "$TMP"
+  ORC_SESSION="$HOSTILE_NAME" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    ORC_TERM_COLS=238 ORC_TERM_LINES=60 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$HOSTILE_TMP/build.out" 2> "$HOSTILE_TMP/build.err"
+) || HOSTILE_RC=$?
+if [ "$HOSTILE_RC" -ne 0 ]; then
+  pass "hostile session name: orc_build_session exits nonzero"
+else
+  fail "hostile session name: orc_build_session should refuse (exit nonzero), got exit 0"
+fi
+if grep -qi 'REFUSE' "$HOSTILE_TMP/build.err" 2>/dev/null; then
+  pass "hostile session name: REFUSE reported loudly on stderr"
+else
+  fail "hostile session name: expected a loud REFUSE on stderr, got: $(cat "$HOSTILE_TMP/build.err" 2>/dev/null)"
+fi
+HOSTILE_SESSIONS="$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c 'bad name' || true)"
+assert_eq "hostile session name: no tmux session was created" "0" "$HOSTILE_SESSIONS"
 
 echo "== issue #59: liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
 if grep -v '^[[:space:]]*#' "$DIR/../bin/orc" | grep -q 'nohup'; then
