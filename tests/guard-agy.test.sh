@@ -196,6 +196,19 @@ echo "== issue #15 fix-round: bare cd (no argument) is the SAME failure class as
 expect_denied "a bare cd with no argument fails closed" \
   'cd && echo hi > settings.json'
 
+echo "== issue #15 agy REQUEST-CHANGES round 3 + Orchestra design call: cd-tracking flipped denylist->allowlist -- tilde expansion (and any other unlisted shell metacharacter) fails closed =="
+TMP9="$(mktemp -d)"
+mkdir -p "$TMP9/~/.claude"
+expect_denied_in "cd ~/.claude fails closed even with a REAL literal '~' decoy dir present (guard must not just fall back on 'target does not exist' -- the decoy exists, only the tilde-awareness itself can catch this)" \
+  "$TMP9" 'cd ~/.claude && echo hi > settings.json'
+rm -rf "$TMP9"
+expect_denied "a cd argument containing a space fails closed (allowlist, not a denylist -- err strict per Orchestra's design call)" \
+  'cd "some dir" && echo hi > settings.json'
+expect_denied "a cd argument containing a glob star fails closed" \
+  'cd some*dir && echo hi > settings.json'
+expect_denied "a cd argument containing a brace-expansion character fails closed" \
+  'cd some{a,b}dir && echo hi > settings.json'
+
 echo "== issue #15 fix-round regression: a normal, resolvable cd (properly quoted, no embedded quotes) still works =="
 expect_allowed "cd into a real, edge-quoted directory with an unrelated write still allowed" \
   'cd "lib" && echo hi > /tmp/not-a-real-write-target-just-parsed.txt'

@@ -138,18 +138,28 @@ while IFS= read -r seg; do
         _guard_agy_deny "guard-agy.sh: cd with no argument or 'cd -' targets \$HOME/\$OLDPWD, which this guard cannot predict across arbitrary commands, failing closed"
         ;;
     esac
-    # agy PR #138 round 1 findings 1+2: a variable/substitution/
-    # embedded quote in cd_arg can make THIS guard's own `cd`
-    # attempt fail while the REAL shell's `cd` (which expands
-    # variables and removes quotes) succeeds -- guard_agy_cwd then
-    # silently stays wrong, so a later relative write is evaluated
-    # against the WRONG directory (e.g. `DIR=.claude && cd $DIR &&
-    # echo hi > settings.json`, or `cd .clau"de" && ...`). Fail
-    # closed on any cd_arg shape this parser can't confidently
-    # replicate, rather than attempting an ambiguous cd.
+    # agy PR #138 rounds 1-3 (Orchestra design call after round 3):
+    # three straight rounds each found a DIFFERENT shell expansion
+    # this parser evaluates literally but a real shell expands
+    # (variables/substitution/embedded quotes round 1, cd -/bare cd
+    # round 2, ~ round 3 -- with a decoy directory pre-created at the
+    # LITERAL path, so "the cd failed to resolve" is not a safety net
+    # either). Three rounds of the same class is the signal the
+    # DENYLIST design itself was wrong, not just incomplete -- there
+    # is no bounded set of "dangerous" shapes to enumerate. Flipped to
+    # an ALLOWLIST instead: cd_arg may proceed ONLY if it consists
+    # entirely of a conservative, definitely-shell-metacharacter-free
+    # charset (letters, digits, `.`, `/`, `-`, `_`) -- anything else
+    # denies outright, whether or not it's a "known" dangerous shape.
+    # Same fail-closed posture as orc_session_name's charset
+    # validation (PR #133) elsewhere in this codebase. Deliberately
+    # strict (no spaces, no glob/brace chars) per Orchestra's explicit
+    # steer: err strict for the reviewer guard specifically -- a
+    # legitimate cd this rejects is a rare, recoverable false positive;
+    # a cd this wrongly ALLOWS is a protected-path bypass.
     case "$cd_arg" in
-      *'$'*|*'`'*|*'"'*|*"'"*)
-        _guard_agy_deny "guard-agy.sh: cd target could not be verified (variable, substitution, or embedded quote in 'cd $cd_arg'), failing closed"
+      *[!A-Za-z0-9_./-]*)
+        _guard_agy_deny "guard-agy.sh: cd target 'cd $cd_arg' contains a character outside the safe charset (letters, digits, . / - _ only), failing closed"
         ;;
     esac
     # `|| true` on the inner chain: a plain `var="$(cmd)"` assignment
