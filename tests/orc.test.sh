@@ -376,6 +376,63 @@ else
   pass "bin/orc no longer uses nohup"
 fi
 
+echo "== issue #6: orchestra/builder pane launches go through sl_build_launch_cmd (session lifecycle classification), not a bare hardcoded claude invocation =="
+if grep -q 'source "\$ORC_LIB_DIR/session-lifecycle.sh"' "$DIR/../bin/orc"; then
+  pass "bin/orc sources lib/session-lifecycle.sh"
+else
+  fail "expected bin/orc to source lib/session-lifecycle.sh"
+fi
+if grep -q 'sl_build_launch_cmd orchestra ' "$DIR/../bin/orc" && grep -q 'sl_build_launch_cmd builder ' "$DIR/../bin/orc"; then
+  pass "bin/orc builds the orchestra and builder pane launch commands via sl_build_launch_cmd"
+else
+  fail "expected orc_build_session to call sl_build_launch_cmd for both orchestra and builder"
+fi
+if grep -qE "send-keys -t \"\\\$session:0\\.0\" \"ORC_ROLE=orchestra claude" "$DIR/../bin/orc"; then
+  fail "bin/orc should no longer hardcode a bare ORC_ROLE=orchestra claude launch (issue #6: every launch is classified)"
+else
+  pass "bin/orc no longer hardcodes a bare unclassified orchestra launch"
+fi
+
+echo "== issue #6: orc_build_session, no prior role-session recorded -> pane 0/1 launch commands are classified FRESH =="
+CLASS_SESSION="orctest-lifecycle-$$"
+CLASS_TMP="$(mktemp -d)"
+CLASS_STUB_DIR="$(mktemp -d)"
+# A real fake `claude` on PATH so a genuinely-executed launch line (should
+# this test ever stop skipping pane commands) never hits a real binary --
+# not exercised here (ORC_SKIP_PANE_COMMANDS=1 below), but keeps this test
+# self-contained if that ever changes.
+cat > "$CLASS_STUB_DIR/claude" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$CLASS_STUB_DIR/claude"
+(
+  cd "$CLASS_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: lifecycle-test-project
+roles:
+  orchestra:
+    model: opus
+  implementer:
+    model: sonnet
+EOF
+  PATH="$CLASS_STUB_DIR:$PATH" ORC_SESSION="$CLASS_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; echo \"ORCH_CMD=\$(sl_build_launch_cmd orchestra opus --dangerously-skip-permissions)\"; echo \"BUILD_CMD=\$(sl_build_launch_cmd builder sonnet --dangerously-skip-permissions)\"" > lifecycle.out 2> lifecycle.err
+)
+ORCH_LINE="$(grep '^ORCH_CMD=' "$CLASS_TMP/lifecycle.out" | sed 's/^ORCH_CMD=//')"
+BUILD_LINE="$(grep '^BUILD_CMD=' "$CLASS_TMP/lifecycle.out" | sed 's/^BUILD_CMD=//')"
+if echo "$ORCH_LINE" | grep -q 'ORC_SESSION_CLASS=fresh' && echo "$ORCH_LINE" | grep -q -- '--model opus'; then
+  pass "a fresh room's orchestra pane launch command is classified FRESH with the right model"
+else
+  fail "expected orchestra's launch command to be ORC_SESSION_CLASS=fresh --model opus, got: $ORCH_LINE"
+fi
+if echo "$BUILD_LINE" | grep -q 'ORC_SESSION_CLASS=fresh' && echo "$BUILD_LINE" | grep -q -- '--model sonnet'; then
+  pass "a fresh room's builder pane launch command is classified FRESH with the right model"
+else
+  fail "expected builder's launch command to be ORC_SESSION_CLASS=fresh --model sonnet, got: $BUILD_LINE"
+fi
+rm -rf "$CLASS_TMP" "$CLASS_STUB_DIR"
+
 echo "== issue #59: liveness watchdog launches via a tmux session, same mechanism as the other three loops =="
 LIVE_SESSION="orctest-liveness-$$"
 LIVE_TMP="$(mktemp -d)"

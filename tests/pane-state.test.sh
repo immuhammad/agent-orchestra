@@ -162,6 +162,60 @@ else
   pass "malformed entry correctly rejected"
 fi
 
+echo "== issue #6: classification is a 4th, optional field =="
+pane_state_write "%80" idle "sess-a" "fresh"
+if [ "$(pane_state_classification "%80" 2>/dev/null)" = "fresh" ]; then
+  pass "classification round-trips through write/read"
+else
+  fail "expected pane_state_classification to return 'fresh'"
+fi
+if [ "$(pane_state_read "%80" 2>/dev/null)" = "idle" ]; then
+  pass "a 4th field does not disturb the ordinary state read"
+else
+  fail "pane_state_read regressed when a classification field is present"
+fi
+if [ "$(pane_state_session "%80" 2>/dev/null)" = "sess-a" ]; then
+  pass "a 4th field does not disturb the session_id read"
+else
+  fail "pane_state_session regressed when a classification field is present"
+fi
+
+echo "== issue #6: an omitted classification CARRIES FORWARD the previous one (busy/idle writes must not erase it) =="
+pane_state_write "%80" busy "sess-a"
+if [ "$(pane_state_classification "%80" 2>/dev/null)" = "fresh" ]; then
+  pass "a later write with no 4th arg preserves the earlier classification"
+else
+  fail "expected classification 'fresh' to survive a busy write with no 4th arg, got '$(pane_state_classification "%80" 2>/dev/null)'"
+fi
+if [ "$(pane_state_read "%80" 2>/dev/null)" = "busy" ]; then
+  pass "the state itself still updates normally while classification carries forward"
+else
+  fail "expected state to update to busy"
+fi
+
+echo "== issue #6: an explicit new classification overwrites the carried-forward one =="
+pane_state_write "%80" idle "sess-b" "rebuilt"
+if [ "$(pane_state_classification "%80" 2>/dev/null)" = "rebuilt" ]; then
+  pass "an explicit classification argument overwrites the prior value"
+else
+  fail "expected classification 'rebuilt' after an explicit overwrite"
+fi
+
+echo "== issue #6: pane_state_classification on a pane with no classification ever recorded -> fails cleanly =="
+pane_state_write "%81" idle "sess-c"
+if pane_state_classification "%81" >/dev/null 2>&1; then
+  fail "expected pane_state_classification to fail with no classification recorded"
+else
+  pass "pane_state_classification fails cleanly with no recorded classification"
+fi
+
+echo "== issue #6: pane_state_classification on an entirely unknown pane -> fails cleanly =="
+if pane_state_classification "%no-such-pane" >/dev/null 2>&1; then
+  fail "expected pane_state_classification to fail for an unknown pane_id"
+else
+  pass "pane_state_classification fails cleanly for an unknown pane_id"
+fi
+
 echo "== pane_state_write: empty pane_id is a no-op, not an error =="
 if pane_state_write "" "busy" 2>&1; then
   pass "pane_state_write with an empty pane_id returns success (no-op)"

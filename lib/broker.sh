@@ -225,21 +225,34 @@ broker_check() {
 }
 
 # broker_states_summary -- one-line ground-truth readout for the watch
-# header: "orchestra:idle builder:busy agy:?" ('?' = no hook state; agy
-# always reads '?' by construction).
+# header: "orchestra:idle(resumed) builder:busy agy:?" ('?' = no hook
+# state; agy always reads '?' by construction). The parenthesized suffix
+# (issue #6 point 4: session lifecycle classification recorded in the
+# pane's own state file so watch can render it) is appended ONLY when a
+# classification is on file for that pane -- most panes most of the time,
+# after a busy/idle transition or two, still show one (pane_state_write's
+# carry-forward keeps it), but a pane whose session predates this feature
+# has none, and omitting the suffix there keeps the header exactly as it
+# read before this feature existed.
 broker_states_summary() {
-  local agent target pane_id state out=""
+  local agent target pane_id state classification out=""
   for agent in $BROKER_AGENTS; do
     target="$(pane_for_agent "$agent")"
     state="?"
+    classification=""
     if [ -n "$target" ]; then
       pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
       if [ -n "$pane_id" ]; then
         state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '?')"
         [ -z "$state" ] && state="?"
+        classification="$(pane_state_classification "$pane_id" 2>/dev/null || echo '')"
       fi
     fi
-    out="${out}${agent}:${state} "
+    if [ -n "$classification" ]; then
+      out="${out}${agent}:${state}(${classification}) "
+    else
+      out="${out}${agent}:${state} "
+    fi
   done
   echo "${out% }"
 }

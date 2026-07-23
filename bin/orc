@@ -13,6 +13,8 @@ ORC_LIB_DIR="$(cd "$ORC_SCRIPT_DIR/../lib" && pwd)"
 source "$ORC_LIB_DIR/orc-config.sh"
 # shellcheck source=../lib/room-branch-lib.sh
 source "$ORC_LIB_DIR/room-branch-lib.sh"
+# shellcheck source=../lib/session-lifecycle.sh
+source "$ORC_LIB_DIR/session-lifecycle.sh"
 
 # issue #18 item 7 + issue #19: derive the session name from THIS
 # project's own orchestrator.yaml (orc_session_name, lib/orc-config.sh) so
@@ -228,8 +230,8 @@ orc_build_session() {
     # session started outside this room) is correctly treated as unknown,
     # never nagged. agy isn't a Claude Code session (never fires Claude
     # Code hooks at all), so it gets no ORC_ROLE.
-    tmux send-keys -t "$session:0.0" "ORC_ROLE=orchestra claude --model $orchestra_model --dangerously-skip-permissions" C-m
-    tmux send-keys -t "$session:0.1" "ORC_ROLE=builder claude --model $implementer_model --dangerously-skip-permissions" C-m
+    tmux send-keys -t "$session:0.0" "$(sl_build_launch_cmd orchestra "$orchestra_model" --dangerously-skip-permissions)" C-m
+    tmux send-keys -t "$session:0.1" "$(sl_build_launch_cmd builder "$implementer_model" --dangerously-skip-permissions)" C-m
     tmux send-keys -t "$session:0.2" 'agy --dangerously-skip-permissions' C-m
     # issue #105 Task 3: the supervisor respawns gatekeeper.sh with bounded
     # backoff if it ever exits, instead of leaving pane 3 with a dead
