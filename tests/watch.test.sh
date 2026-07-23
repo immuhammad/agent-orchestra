@@ -870,6 +870,26 @@ else
   fail "issue #134: idle pane should not dispatch anything: $(cat "$STUCK_CALLS")"
 fi
 
+echo "== agy PR #136 round 1: an idle pane with NOTHING tracked must not rewrite STUCK_STATE_FILE on every tick (SSD wear / mtime thrash in a tight polling loop) =="
+WSC_WRITE_CALLS="$TMP/wsc-write-calls.log"
+: > "$WSC_WRITE_CALLS"
+# Spy on wsc_write while preserving its real behavior: rename the real
+# implementation aside, then wrap it -- `command wsc_write` would NOT
+# reach it (command explicitly bypasses shell function lookup, and there
+# is no external wsc_write binary), so this is the correct bash spy shape.
+eval "$(declare -f wsc_write | sed '1s/wsc_write/_orig_wsc_write_134/')"
+wsc_write() { echo "call" >> "$WSC_WRITE_CALLS"; _orig_wsc_write_134 "$@"; }
+pane_stuck_check
+pane_stuck_check
+pane_stuck_check
+eval "$(declare -f _orig_wsc_write_134 | sed '1s/_orig_wsc_write_134/wsc_write/')"
+unset -f _orig_wsc_write_134
+if [ ! -s "$WSC_WRITE_CALLS" ]; then
+  pass "issue #134: an untracked idle pane never triggers a state-file write, no matter how many ticks pass"
+else
+  fail "issue #134: PERFORMANCE: idle pane with nothing tracked should never call wsc_write, got $(wc -l < "$WSC_WRITE_CALLS" | tr -d ' ') calls"
+fi
+
 printf 'busy %s sid-fresh -\n' "$(date '+%s')" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
 pane_stuck_check
 if [ ! -s "$STUCK_CALLS" ]; then

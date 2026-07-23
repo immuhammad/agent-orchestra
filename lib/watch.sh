@@ -540,9 +540,15 @@ pane_stuck_check() {
 
     if [ "$state" != "busy" ]; then
       # Episode over (or never started) -- drop any tracking so the next
-      # busy stretch starts clean. wsc_write's `del` is a no-op if there
-      # was nothing to remove.
-      wsc_write --arg a "$agent" 'del(.[$a])'
+      # busy stretch starts clean. agy PR #136 round 1: only write if this
+      # agent is ACTUALLY tracked -- jq's `del` on a missing key is a
+      # harmless no-op, but wsc_write still does a full mktemp+jq+mv every
+      # call, and this branch runs for every idle agent on every watch
+      # tick. An unconditional call here means constant disk churn while
+      # the room is simply idle, for zero effect.
+      if [ "$(wsc_read --arg a "$agent" 'has($a)')" = "true" ]; then
+        wsc_write --arg a "$agent" 'del(.[$a])'
+      fi
       continue
     fi
 
