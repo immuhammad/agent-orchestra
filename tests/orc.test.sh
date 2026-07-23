@@ -21,7 +21,21 @@ assert_eq() {
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+cleanup() {
+  rm -rf "$TMP"
+  # An aborted run (set -e mid-block, SIGKILL) never reaches a block's
+  # inline kill-session -- reap every session THIS run created on the way
+  # out. Names end in our PID (plus the one derived -liveness suffix), so
+  # parallel runs and the live control-room are untouched.
+  for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+               | grep -E "^orctest-(.*-)?$$(-liveness)?\$" || true); do
+    tmux kill-session -t "$s" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
+# An untrapped INT/TERM would skip the EXIT trap entirely -- route them
+# through exit so an interrupted run still reaps its sessions.
+trap 'exit 130' INT TERM
 
 echo "== orc-config.sh: scalars =="
 (
