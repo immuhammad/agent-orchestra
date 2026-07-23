@@ -45,21 +45,45 @@ pane_state_sanitize() {
   echo "$id"
 }
 
-# pane_state_write <pane_id> <busy|idle|failsafe> [session_id] -- called by
-# hooks/pane-state.sh and hooks/rate-limit-handoff.sh.
-# One line: "<state> <epoch_seconds> [session_id]". Single-writer-per-file
-# (only that pane's own hook process ever writes its own file), so no
-# locking needed. An invalid pane_id (see pane_state_sanitize) is silently
-# refused, not written anywhere -- best-effort feature, never worth failing
-# a hook over, and never worth trusting an unvalidated value for a
-# filesystem write.
+# pane_state_write <pane_id> <busy|idle|failsafe> [session_id] [classification]
+# -- called by hooks/pane-state.sh, hooks/rate-limit-handoff.sh, and (issue
+# #6) hooks/session-start.sh, which is the only caller that ever passes a
+# 4th field.
+# One line: "<state> <epoch_seconds> [session_id] [classification]".
+# Single-writer-per-file (only that pane's own hook process ever writes its
+# own file), so no locking needed. An invalid pane_id (see
+# pane_state_sanitize) is silently refused, not written anywhere --
+# best-effort feature, never worth failing a hook over, and never worth
+# trusting an unvalidated value for a filesystem write.
+#
+# issue #6: classification (resumed|rebuilt|fresh) is decided ONCE, at
+# SessionStart, by hooks/session-start.sh -- every OTHER write for this
+# pane (UserPromptSubmit/PreToolUse/Stop busy/idle transitions) calls this
+# with no 4th arg and must not erase it. An omitted classification
+# therefore CARRIES FORWARD whatever was already on file for this pane_id,
+# rather than being blanked -- the one property that makes write-order
+# between session-start.sh and hooks/pane-state.sh's own SessionStart
+# write (idle, no classification) safe regardless of which runs first.
 pane_state_write() {
-  local pane_id="$1" state="$2" session_id="${3:-}" file safe_id
+  local pane_id="$1" state="$2" session_id="${3:-}" classification="${4:-}" file safe_id
   [ -z "$pane_id" ] && return 0
   safe_id="$(pane_state_sanitize "$pane_id")" || return 0
   mkdir -p "$PANE_STATE_DIR"
   file="$PANE_STATE_DIR/$safe_id"
-  echo "$state $(date '+%s') $session_id" > "$file"
+  if [ -z "$classification" ] && [ -f "$file" ]; then
+    classification="$(awk '{print $4}' "$file" 2>/dev/null || echo '')"
+    [ "$classification" = "-" ] && classification=""
+  fi
+  # agy PR #135 round 1: an empty field is written as a literal '-'
+  # placeholder, never a bare empty string. awk's DEFAULT field splitting
+  # collapses consecutive whitespace into a single delimiter, so an empty
+  # session_id with a non-empty classification ("idle 123  rebuilt", two
+  # spaces) reads back as 3 fields, not 4 -- pane_state_session's $3 gets
+  # the CLASSIFICATION value instead of nothing, and pane_state_
+  # classification's $4 reads empty, permanently losing it. A fixed
+  # placeholder keeps every field at its true position regardless of which
+  # ones are empty; readers strip '-' back to "absent".
+  echo "$state $(date '+%s') ${session_id:--} ${classification:--}" > "$file"
 }
 
 # pane_state_read <pane_id> [max_age_s] -- prints "busy", "idle", or
@@ -114,7 +138,7 @@ pane_state_session() {
   [ -f "$file" ] || return 1
   line="$(cat "$file" 2>/dev/null)"
   sid="$(echo "$line" | awk '{print $3}')"
-  [ -n "$sid" ] || return 1
+  [ -n "$sid" ] && [ "$sid" != "-" ] || return 1
   echo "$sid"
 }
 
@@ -139,6 +163,24 @@ pane_state_effective() {
     [ -f "$flag" ] || state="idle"
   fi
   echo "$state"
+}
+
+# pane_state_classification <pane_id> -- prints the resumed|rebuilt|fresh
+# classification recorded for a pane (issue #6), or nothing / returns 1 if
+# none was ever recorded (e.g. a pane whose session predates this feature,
+# or one started outside `orc up`). Consumers (lib/broker.sh's watch
+# header) treat a missing classification as "nothing to show", not an
+# error.
+pane_state_classification() {
+  local pane_id="$1" file line safe_id classification
+  [ -z "$pane_id" ] && return 1
+  safe_id="$(pane_state_sanitize "$pane_id")" || return 1
+  file="$PANE_STATE_DIR/$safe_id"
+  [ -f "$file" ] || return 1
+  line="$(cat "$file" 2>/dev/null)"
+  classification="$(echo "$line" | awk '{print $4}')"
+  [ -n "$classification" ] && [ "$classification" != "-" ] || return 1
+  echo "$classification"
 }
 
 # pane_state_clear <pane_id> -- removes the pane's state file. Called by

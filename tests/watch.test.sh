@@ -700,6 +700,38 @@ fi
 PANE_STATE_DIR="$PANE_STATE_DIR_SAVED"
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
+echo "== issue #6: broker_states_summary appends a (classification) suffix when one is on file =="
+PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
+PANE_STATE_DIR="$TMP/pane-state-lifecycle"
+mkdir -p "$PANE_STATE_DIR"
+tmux new-session -d -s "$TEST_SESSION" -n main
+tmux split-window -h -t "$TEST_SESSION:0"
+LC_PANE0_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+LC_PANE1_ID="$(tmux display-message -p -t "$TEST_SESSION:0.1" '#{pane_id}')"
+pane_for_agent() {
+  case "$1" in
+    lcorchestra) echo "$TEST_SESSION:0.0" ;;
+    lcbuilder)   echo "$TEST_SESSION:0.1" ;;
+    *) echo "" ;;
+  esac
+}
+BROKER_AGENTS="lcorchestra lcbuilder"
+pane_state_write "$LC_PANE0_ID" idle "sid-x" "resumed"
+pane_state_write "$LC_PANE1_ID" busy "sid-y"
+SUMMARY="$(broker_states_summary)"
+if echo "$SUMMARY" | grep -q "lcorchestra:idle(resumed)"; then
+  pass "issue #6: a pane with a recorded classification shows it in the summary"
+else
+  fail "issue #6: expected 'lcorchestra:idle(resumed)' in the summary, got: $SUMMARY"
+fi
+if echo "$SUMMARY" | grep -q "lcbuilder:busy \|lcbuilder:busy\$"; then
+  pass "issue #6: a pane with no classification on file renders exactly as before (no suffix)"
+else
+  fail "issue #6: expected 'lcbuilder:busy' with no suffix, got: $SUMMARY"
+fi
+PANE_STATE_DIR="$PANE_STATE_DIR_SAVED"
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
 echo "== pane-liveness: dead pane (plain shell) gets flagged exactly once =="
 tmux new-session -d -s "$TEST_SESSION" -n main
 tmux split-window -h -t "$TEST_SESSION:0"
