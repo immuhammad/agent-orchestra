@@ -63,7 +63,19 @@ sl_read_role_session() {
   file="$(sl_role_session_file "$role")"
   [ -f "$file" ] || return 0
   sid="$(tr -d '[:space:]' < "$file" 2>/dev/null || echo '')"
-  [ -n "$sid" ] && echo "$sid"
+  # agy PR #135 round 1: this value is interpolated straight into the
+  # shell command sl_build_launch_cmd hands `tmux send-keys` to TYPE into
+  # a live pane. The file on disk is trusted state we wrote, but reading
+  # it back is the last point before that trust turns into code a shell
+  # executes -- a tampered/corrupted file (or any future writer that
+  # doesn't go through sl_write_role_session) must never carry shell
+  # metacharacters that far. A real Claude Code session_id is always
+  # UUID-shaped, so this is not a functional restriction; same closed
+  # charset PR #133 used for orc_session_name, for the same reason.
+  case "$sid" in
+    ''|*[!A-Za-z0-9_-]*) return 0 ;;
+  esac
+  echo "$sid"
   return 0
 }
 

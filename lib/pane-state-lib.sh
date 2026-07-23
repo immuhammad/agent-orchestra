@@ -72,8 +72,18 @@ pane_state_write() {
   file="$PANE_STATE_DIR/$safe_id"
   if [ -z "$classification" ] && [ -f "$file" ]; then
     classification="$(awk '{print $4}' "$file" 2>/dev/null || echo '')"
+    [ "$classification" = "-" ] && classification=""
   fi
-  echo "$state $(date '+%s') $session_id $classification" > "$file"
+  # agy PR #135 round 1: an empty field is written as a literal '-'
+  # placeholder, never a bare empty string. awk's DEFAULT field splitting
+  # collapses consecutive whitespace into a single delimiter, so an empty
+  # session_id with a non-empty classification ("idle 123  rebuilt", two
+  # spaces) reads back as 3 fields, not 4 -- pane_state_session's $3 gets
+  # the CLASSIFICATION value instead of nothing, and pane_state_
+  # classification's $4 reads empty, permanently losing it. A fixed
+  # placeholder keeps every field at its true position regardless of which
+  # ones are empty; readers strip '-' back to "absent".
+  echo "$state $(date '+%s') ${session_id:--} ${classification:--}" > "$file"
 }
 
 # pane_state_read <pane_id> [max_age_s] -- prints "busy", "idle", or
@@ -128,7 +138,7 @@ pane_state_session() {
   [ -f "$file" ] || return 1
   line="$(cat "$file" 2>/dev/null)"
   sid="$(echo "$line" | awk '{print $3}')"
-  [ -n "$sid" ] || return 1
+  [ -n "$sid" ] && [ "$sid" != "-" ] || return 1
   echo "$sid"
 }
 
@@ -169,7 +179,7 @@ pane_state_classification() {
   [ -f "$file" ] || return 1
   line="$(cat "$file" 2>/dev/null)"
   classification="$(echo "$line" | awk '{print $4}')"
-  [ -n "$classification" ] || return 1
+  [ -n "$classification" ] && [ "$classification" != "-" ] || return 1
   echo "$classification"
 }
 

@@ -126,6 +126,47 @@ case "$CMD" in
   *) fail "expected the normal-exit non-relaunch path in: $CMD" ;;
 esac
 
+echo "== agy PR #135 round 1: a tampered/malformed role-session file must NOT reach the generated shell command unvalidated (injection) =="
+sl_write_role_session builder "sid-ok"
+# Overwrite the file directly with an injection payload, bypassing
+# sl_write_role_session entirely -- exactly the "file tampered with"
+# threat agy's finding describes.
+printf '%s' 'sid-1; touch /tmp/PWNED-session-lifecycle-test' > "$(sl_role_session_file builder)"
+GOT="$(sl_read_role_session builder)"
+if [ -z "$GOT" ]; then
+  pass "sl_read_role_session rejects a sid containing shell metacharacters, returns empty"
+else
+  fail "SECURITY: sl_read_role_session should reject an unsafe sid, got: '$GOT'"
+fi
+CMD="$(sl_build_launch_cmd builder sonnet --dangerously-skip-permissions)"
+case "$CMD" in
+  *'touch /tmp/PWNED'*) fail "SECURITY: the injection payload reached the generated launch command: $CMD" ;;
+  *) pass "an unsafe sid never reaches the generated launch command" ;;
+esac
+case "$CMD" in
+  *'ORC_SESSION_CLASS=fresh'*) pass "an unsafe/rejected sid falls back to a FRESH launch, not a broken --resume" ;;
+  *) fail "expected a fresh fallback when the recorded sid is rejected, got: $CMD" ;;
+esac
+rm -f /tmp/PWNED-session-lifecycle-test
+
+echo "== sl_read_role_session: accepts a genuine UUID-shaped session_id =="
+sl_write_role_session builder "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789"
+if [ "$(sl_read_role_session builder)" = "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789" ]; then
+  pass "a genuine UUID session_id round-trips unchanged"
+else
+  fail "expected a valid UUID sid to round-trip, got: $(sl_read_role_session builder)"
+fi
+
+echo "== sl_read_role_session: rejects other shell-meaningful characters individually (backtick, \$, |, &, quotes) =="
+for payload in 'sid`x`' 'sid$x' 'sid|x' 'sid&x' 'sid"x' "sid'x"; do
+  printf '%s' "$payload" > "$(sl_role_session_file builder)"
+  if [ -n "$(sl_read_role_session builder)" ]; then
+    fail "SECURITY: expected '$payload' to be rejected as an unsafe sid"
+  else
+    pass "rejected unsafe sid payload: $payload"
+  fi
+done
+
 echo "== sl_build_launch_cmd: syntactically valid shell (bash -n on the generated command) =="
 if bash -n <<< "$CMD" 2>/tmp/sl-synerr; then
   pass "generated resume-attempt command is syntactically valid shell"

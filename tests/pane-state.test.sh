@@ -209,6 +209,24 @@ else
   pass "pane_state_classification fails cleanly with no recorded classification"
 fi
 
+echo "== agy PR #135 round 1: empty session_id must NOT shift classification into the session_id column (awk collapses consecutive spaces) =="
+pane_state_write "%82" idle "" "rebuilt"
+if pane_state_session "%82" >/dev/null 2>&1; then
+  fail "SECURITY/CORRECTNESS: an empty session_id should read as 'no session', not the classification value"
+else
+  pass "empty session_id reads as absent, not shifted into the classification's slot"
+fi
+if [ "$(pane_state_classification "%82" 2>/dev/null)" = "rebuilt" ]; then
+  pass "classification survives an empty session_id (field position preserved)"
+else
+  fail "expected classification 'rebuilt' to survive an empty session_id, got '$(pane_state_classification "%82" 2>/dev/null)'"
+fi
+if [ "$(pane_state_read "%82" 2>/dev/null)" = "idle" ]; then
+  pass "state itself unaffected by the empty session_id"
+else
+  fail "expected state 'idle'"
+fi
+
 echo "== issue #6: pane_state_classification on an entirely unknown pane -> fails cleanly =="
 if pane_state_classification "%no-such-pane" >/dev/null 2>&1; then
   fail "expected pane_state_classification to fail for an unknown pane_id"
