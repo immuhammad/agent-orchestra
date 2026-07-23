@@ -183,6 +183,30 @@ pane_state_classification() {
   echo "$classification"
 }
 
+# pane_state_age <pane_id> -- seconds since the pane's last recorded state
+# transition, or nothing / returns 1 if missing/malformed/unknown (issue
+# #134: watch.sh's stuck-pane check reads this only when it already knows
+# state == busy, so this is "how long has this pane been busy" there --
+# but the underlying math is the same for any state, so it's not named
+# busy-specific). A repeat write to the SAME state (e.g. PreToolUse firing
+# busy again mid-turn) resets this to ~0, which is the desired signal: an
+# actively-working pane keeps refreshing its own age, while a genuinely
+# hung one (no further hook fires) has its age grow unbounded.
+pane_state_age() {
+  local pane_id="$1" file line safe_id ts now
+  [ -z "$pane_id" ] && return 1
+  safe_id="$(pane_state_sanitize "$pane_id")" || return 1
+  file="$PANE_STATE_DIR/$safe_id"
+  [ -f "$file" ] || return 1
+  line="$(cat "$file" 2>/dev/null)"
+  ts="$(echo "$line" | awk '{print $2}')"
+  case "$ts" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  now="$(date '+%s')"
+  echo $(( now - ts ))
+}
+
 # pane_state_clear <pane_id> -- removes the pane's state file. Called by
 # watch.sh's pane-liveness when a pane's CLI process is DEAD (dropped to a
 # plain shell): a dead pane's last-written state is a lie, and clearing it

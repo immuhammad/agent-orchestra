@@ -146,6 +146,27 @@ else
 fi
 pane_state_clear "%94"
 
+echo "== issue #134: pane_state_age -- seconds since the pane's last recorded state transition =="
+OLD_EPOCH=$(( $(date '+%s') - 500 ))
+printf 'busy %s sess-age -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/70"
+AGE="$(pane_state_age "%70" 2>/dev/null)"
+if [ -n "$AGE" ] && [ "$AGE" -ge 499 ] && [ "$AGE" -le 505 ]; then
+  pass "pane_state_age returns roughly now-minus-recorded-epoch (got ${AGE}s, expected ~500s)"
+else
+  fail "expected pane_state_age ~500, got '$AGE'"
+fi
+if pane_state_age "%no-such-pane" >/dev/null 2>&1; then
+  fail "expected pane_state_age to fail for an unknown pane_id"
+else
+  pass "pane_state_age fails cleanly for an unknown pane_id"
+fi
+echo "garbage-no-timestamp" > "$PANE_STATE_DIR/71"
+if pane_state_age "%71" >/dev/null 2>&1; then
+  fail "expected pane_state_age to reject a malformed (timestamp-less) entry"
+else
+  pass "pane_state_age rejects a malformed entry rather than misreading it"
+fi
+
 echo "== issue #125: pane_state_clear removes the entry =="
 pane_state_clear "%97"
 if pane_state_read "%97" >/dev/null 2>&1; then

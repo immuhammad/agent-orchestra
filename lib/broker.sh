@@ -235,23 +235,35 @@ broker_check() {
 # has none, and omitting the suffix there keeps the header exactly as it
 # read before this feature existed.
 broker_states_summary() {
-  local agent target pane_id state classification out=""
+  local agent target pane_id state classification age_suffix out=""
   for agent in $BROKER_AGENTS; do
     target="$(pane_for_agent "$agent")"
     state="?"
     classification=""
+    age_suffix=""
     if [ -n "$target" ]; then
       pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
       if [ -n "$pane_id" ]; then
         state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '?')"
         [ -z "$state" ] && state="?"
         classification="$(pane_state_classification "$pane_id" 2>/dev/null || echo '')"
+        # issue #134: a busy-age glance in the header, alongside the
+        # per-pane liveness check that flags a genuinely stuck one -- this
+        # is the ambient always-on signal, the FLAG is the proactive one.
+        if [ "$state" = "busy" ]; then
+          local age
+          age="$(pane_state_age "$pane_id" 2>/dev/null || echo '')"
+          case "$age" in
+            ''|*[!0-9]*) ;;
+            *) age_suffix=" $(( age / 60 ))m" ;;
+          esac
+        fi
       fi
     fi
     if [ -n "$classification" ]; then
-      out="${out}${agent}:${state}(${classification}) "
+      out="${out}${agent}:${state}(${classification})${age_suffix} "
     else
-      out="${out}${agent}:${state} "
+      out="${out}${agent}:${state}${age_suffix} "
     fi
   done
   echo "${out% }"
