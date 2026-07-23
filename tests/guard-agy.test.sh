@@ -18,6 +18,39 @@ run_guard_agy() {
   jq -n --arg cmd "$cmd" '{toolCall: {args: {CommandLine: $cmd}}}' | bash "$GUARD"
 }
 
+# run_guard_agy_in <cwd> <cmd> -- issue #15: same payload shape as
+# run_guard_agy, but runs the guard FROM <cwd> so an orchestrator.yaml
+# dropped there (or its absence) drives orc_protected_paths, matching
+# guard-write.test.sh's run_guard_write pattern.
+run_guard_agy_in() {
+  local cwd="$1" cmd="$2"
+  (cd "$cwd" && jq -n --arg cmd "$cmd" '{toolCall: {args: {CommandLine: $cmd}}}' | bash "$GUARD")
+}
+
+expect_denied_in() {
+  local desc="$1" cwd="$2" cmd="$3"
+  local out decision
+  out="$(run_guard_agy_in "$cwd" "$cmd")"
+  decision="$(echo "$out" | jq -r '.decision')"
+  if [ "$decision" = "deny" ]; then
+    pass "$desc"
+  else
+    fail "$desc (expected deny, got: $out)"
+  fi
+}
+
+expect_allowed_in() {
+  local desc="$1" cwd="$2" cmd="$3"
+  local out decision
+  out="$(run_guard_agy_in "$cwd" "$cmd")"
+  decision="$(echo "$out" | jq -r '.decision')"
+  if [ "$decision" = "allow" ]; then
+    pass "$desc"
+  else
+    fail "$desc (expected allow, got: $out)"
+  fi
+}
+
 expect_denied() {
   local desc="$1" cmd="$2"
   local out decision
@@ -73,6 +106,60 @@ expect_allowed "gh pr diff is allowed"                 "gh pr diff 50"
 expect_allowed "gh pr view is allowed"                  "gh pr view 50"
 expect_allowed "gh pr review (the actual review action) is allowed" "gh pr review 50 --approve -b 'LGTM'"
 expect_allowed "ordinary read command is allowed"      "ls -la"
+
+echo "== issue #15: protected_paths from orchestrator.yaml is enforced for agy (parameterized, like guard.sh/guard-write.sh) =="
+TMP1="$(mktemp -d)"
+printf 'protected_paths:\n  - vendor/legacy/\n' > "$TMP1/orchestrator.yaml"
+expect_denied_in "a write into a configured protected_paths entry is denied for agy" \
+  "$TMP1" "tee vendor/legacy/file.txt"
+expect_denied_in "a redirect into a configured protected_paths entry is denied for agy" \
+  "$TMP1" "echo hi > vendor/legacy/file.txt"
+expect_allowed_in "a write OUTSIDE the configured protected_paths entry is still allowed" \
+  "$TMP1" "echo hi > src/feature.txt"
+rm -rf "$TMP1"
+
+echo "== issue #15: no orchestrator.yaml / empty protected_paths -> no phantom blocks (issue #18 B-i precedent) =="
+TMP2="$(mktemp -d)"
+expect_allowed_in "no orchestrator.yaml at all -- an arbitrary write is allowed, not phantom-blocked" \
+  "$TMP2" "echo hi > vendor/legacy/file.txt"
+rm -rf "$TMP2"
+TMP3="$(mktemp -d)"
+printf 'project: test\n' > "$TMP3/orchestrator.yaml"
+expect_allowed_in "orchestrator.yaml with no protected_paths key -- nothing extra denied" \
+  "$TMP3" "echo hi > vendor/legacy/file.txt"
+rm -rf "$TMP3"
+
+echo "== issue #15: .claude//.agents/ stay protected BY DEFAULT for agy too (issue #31 precedent -- agy least bound, so most in need of this) =="
+TMP4="$(mktemp -d)"
+expect_denied_in "write into .claude/settings.json is denied for agy with NO orchestrator.yaml at all" \
+  "$TMP4" "echo hi > .claude/settings.json"
+expect_denied_in "write into .agents/hooks.json is denied for agy" \
+  "$TMP4" "echo hi > .agents/hooks.json"
+rm -rf "$TMP4"
+
+echo "== issue #15: cd-then-relative-write into a protected path is still caught (same bypass class guard.sh closes) =="
+TMP5="$(mktemp -d)"
+mkdir -p "$TMP5/vendor/legacy"
+printf 'protected_paths:\n  - vendor/legacy/\n' > "$TMP5/orchestrator.yaml"
+expect_denied_in "cd into a protected dir then a relative write is still denied" \
+  "$TMP5" "cd vendor/legacy && echo hi > file.txt"
+rm -rf "$TMP5"
+
+echo "== issue #15: an unverifiable write target (unresolved variable/substitution) fails closed =="
+TMP6="$(mktemp -d)"
+printf 'protected_paths:\n  - vendor/legacy/\n' > "$TMP6/orchestrator.yaml"
+expect_denied_in "a redirect target hidden behind an untracked variable fails closed" \
+  "$TMP6" 'echo hi > $SOME_UNTRACKED_VAR'
+rm -rf "$TMP6"
+
+echo "== issue #15: a read-only command merely MENTIONING a protected path text stays allowed (no false positive, #39 precedent) =="
+TMP7="$(mktemp -d)"
+printf 'protected_paths:\n  - vendor/legacy/\n' > "$TMP7/orchestrator.yaml"
+expect_allowed_in "git diff on a path that happens to be configured protected is allowed (read, not write)" \
+  "$TMP7" "git diff vendor/legacy/file.txt"
+expect_allowed_in "grep mentioning a protected path in its pattern text is allowed" \
+  "$TMP7" "grep vendor/legacy vendor/legacy/file.txt"
+rm -rf "$TMP7"
 
 echo ""
 echo "$PASS passed, $FAIL failed"
