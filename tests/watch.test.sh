@@ -700,6 +700,39 @@ fi
 PANE_STATE_DIR="$PANE_STATE_DIR_SAVED"
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
+echo "== issue #134: broker_states_summary appends a busy-age suffix for busy panes, so a glance at the header catches a long-running one =="
+PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
+PANE_STATE_DIR="$TMP/pane-state-busyage"
+mkdir -p "$PANE_STATE_DIR"
+tmux new-session -d -s "$TEST_SESSION" -n main
+tmux split-window -h -t "$TEST_SESSION:0"
+BA_PANE0_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+BA_PANE1_ID="$(tmux display-message -p -t "$TEST_SESSION:0.1" '#{pane_id}')"
+pane_for_agent() {
+  case "$1" in
+    baorchestra) echo "$TEST_SESSION:0.0" ;;
+    babuilder)   echo "$TEST_SESSION:0.1" ;;
+    *) echo "" ;;
+  esac
+}
+BROKER_AGENTS="baorchestra babuilder"
+OLD_BUSY_EPOCH=$(( $(date '+%s') - 480 ))
+printf 'busy %s sess-b rebuilt\n' "$OLD_BUSY_EPOCH" > "$PANE_STATE_DIR/${BA_PANE0_ID#%}"
+pane_state_write "$BA_PANE1_ID" idle "sid-c"
+SUMMARY="$(broker_states_summary)"
+if echo "$SUMMARY" | grep -q "baorchestra:busy(rebuilt) 8m"; then
+  pass "issue #134: a long-busy pane shows minutes-busy alongside its classification"
+else
+  fail "issue #134: expected 'baorchestra:busy(rebuilt) 8m' in the summary, got: $SUMMARY"
+fi
+if echo "$SUMMARY" | grep -qE "babuilder:idle( |\$)" ; then
+  pass "issue #134: an idle pane shows no busy-age suffix"
+else
+  fail "issue #134: expected 'babuilder:idle' with no age suffix, got: $SUMMARY"
+fi
+PANE_STATE_DIR="$PANE_STATE_DIR_SAVED"
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
 echo "== issue #6: broker_states_summary appends a (classification) suffix when one is on file =="
 PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
 PANE_STATE_DIR="$TMP/pane-state-lifecycle"
@@ -808,6 +841,163 @@ else
   fail "orchestra self-death should use 'message': $(cat "$FLAG_CALLS")"
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
+echo "== issue #134: pane_stuck_check -- idle pane and under-threshold busy pane never flag =="
+SC_PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
+PANE_STATE_DIR="$TMP/pane-state-stuck"
+mkdir -p "$PANE_STATE_DIR"
+STUCK_STATE_FILE="$TMP/stuck-check-state.json"
+STUCK_THRESHOLD_S=100
+rm -f "$STUCK_STATE_FILE"
+tmux new-session -d -s "$TEST_SESSION" -n main
+SC_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+pane_for_agent() {
+  case "$1" in
+    stucktest) echo "$TEST_SESSION:0.0" ;;
+    *) echo "" ;;
+  esac
+}
+LIVENESS_AGENTS="stucktest"
+STUCK_CALLS="$TMP/stuck-dispatch-calls.log"
+: > "$STUCK_CALLS"
+dispatch_main() { echo "$*" >> "$STUCK_CALLS"; }
+
+pane_state_write "$SC_PANE_ID" idle "sid-idle"
+pane_stuck_check
+if [ ! -s "$STUCK_CALLS" ]; then
+  pass "issue #134: an idle pane never triggers a stuck check"
+else
+  fail "issue #134: idle pane should not dispatch anything: $(cat "$STUCK_CALLS")"
+fi
+
+echo "== agy PR #136 round 1: an idle pane with NOTHING tracked must not rewrite STUCK_STATE_FILE on every tick (SSD wear / mtime thrash in a tight polling loop) =="
+WSC_WRITE_CALLS="$TMP/wsc-write-calls.log"
+: > "$WSC_WRITE_CALLS"
+# Spy on wsc_write while preserving its real behavior: rename the real
+# implementation aside, then wrap it -- `command wsc_write` would NOT
+# reach it (command explicitly bypasses shell function lookup, and there
+# is no external wsc_write binary), so this is the correct bash spy shape.
+eval "$(declare -f wsc_write | sed '1s/wsc_write/_orig_wsc_write_134/')"
+wsc_write() { echo "call" >> "$WSC_WRITE_CALLS"; _orig_wsc_write_134 "$@"; }
+pane_stuck_check
+pane_stuck_check
+pane_stuck_check
+eval "$(declare -f _orig_wsc_write_134 | sed '1s/_orig_wsc_write_134/wsc_write/')"
+unset -f _orig_wsc_write_134
+if [ ! -s "$WSC_WRITE_CALLS" ]; then
+  pass "issue #134: an untracked idle pane never triggers a state-file write, no matter how many ticks pass"
+else
+  fail "issue #134: PERFORMANCE: idle pane with nothing tracked should never call wsc_write, got $(wc -l < "$WSC_WRITE_CALLS" | tr -d ' ') calls"
+fi
+
+printf 'busy %s sid-fresh -\n' "$(date '+%s')" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+if [ ! -s "$STUCK_CALLS" ]; then
+  pass "issue #134: a freshly-busy pane (age well under threshold) never triggers a stuck check"
+else
+  fail "issue #134: under-threshold busy pane should not dispatch anything: $(cat "$STUCK_CALLS")"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
+echo "== issue #134: pane_stuck_check -- needs TWO consecutive over-threshold observations before flagging (not enough data on the first) =="
+STUCK_THRESHOLD_S=1
+rm -f "$STUCK_STATE_FILE"
+: > "$STUCK_CALLS"
+tmux new-session -d -s "$TEST_SESSION" -n main
+SC_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+OLD_EPOCH=$(( $(date '+%s') - 90 ))
+printf 'busy %s sid-stuck -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+if [ ! -s "$STUCK_CALLS" ]; then
+  pass "issue #134: the FIRST over-threshold observation records a baseline but does not flag yet"
+else
+  fail "issue #134: first over-threshold observation should not flag: $(cat "$STUCK_CALLS")"
+fi
+
+echo "== issue #134: SECOND observation, screen UNCHANGED -> flags as looping/stuck, exactly once =="
+pane_stuck_check
+CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
+if [ "$CALL_COUNT" -eq 1 ]; then
+  pass "issue #134: second over-threshold observation with an unchanged screen dispatches exactly one FLAG"
+else
+  fail "issue #134: expected exactly 1 dispatch call, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+fi
+if grep -q "STUCK?" "$STUCK_CALLS" && grep -qi "loop" "$STUCK_CALLS"; then
+  pass "issue #134: flag message identifies the pane as looping/stuck"
+else
+  fail "issue #134: expected a STUCK?/looping message, got: $(cat "$STUCK_CALLS")"
+fi
+if grep -q "^assign orchestra" "$STUCK_CALLS"; then
+  pass "issue #134: a non-orchestra agent's stuck flag uses 'assign' (nudges orchestra)"
+else
+  fail "issue #134: expected an 'assign orchestra' dispatch, got: $(cat "$STUCK_CALLS")"
+fi
+
+echo "== issue #134: THIRD observation, still busy+unchanged -> already flagged, no re-dispatch (dedup) =="
+pane_stuck_check
+CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
+if [ "$CALL_COUNT" -eq 1 ]; then
+  pass "issue #134: an already-flagged episode never re-dispatches on later checks"
+else
+  fail "issue #134: expected still exactly 1 dispatch call (dedup), got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+fi
+
+echo "== issue #134: state flips to idle -> tracking clears; a NEW busy episode over threshold can flag again =="
+pane_state_write "$SC_PANE_ID" idle "sid-recovered"
+pane_stuck_check
+OLD_EPOCH=$(( $(date '+%s') - 90 ))
+printf 'busy %s sid-stuck2 -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+pane_stuck_check
+CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
+if [ "$CALL_COUNT" -eq 2 ]; then
+  pass "issue #134: a new busy episode after an idle transition can flag again (episode boundary respected)"
+else
+  fail "issue #134: expected 2 total dispatch calls across two episodes, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
+echo "== issue #134: SECOND observation, screen CHANGED -> classified long-running, not looping =="
+rm -f "$STUCK_STATE_FILE"
+: > "$STUCK_CALLS"
+tmux new-session -d -s "$TEST_SESSION" -n main
+SC_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+OLD_EPOCH=$(( $(date '+%s') - 90 ))
+printf 'busy %s sid-longrun -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+tmux send-keys -t "$TEST_SESSION:0.0" "echo something-new-on-screen-$$" Enter
+sleep 0.3
+pane_stuck_check
+if grep -q "STUCK?" "$STUCK_CALLS" && grep -qi "long-running" "$STUCK_CALLS" && ! grep -qi "loop" "$STUCK_CALLS"; then
+  pass "issue #134: a changed screen between checks classifies as long-running, not looping"
+else
+  fail "issue #134: expected a long-running (not looping) message, got: $(cat "$STUCK_CALLS")"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
+echo "== issue #134: orchestra's own stuck episode uses 'message' (no nudge attempt) =="
+rm -f "$STUCK_STATE_FILE"
+: > "$STUCK_CALLS"
+tmux new-session -d -s "$TEST_SESSION" -n main
+SC_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+pane_for_agent() {
+  case "$1" in
+    orchestra) echo "$TEST_SESSION:0.0" ;;
+    *) echo "" ;;
+  esac
+}
+LIVENESS_AGENTS="orchestra"
+OLD_EPOCH=$(( $(date '+%s') - 90 ))
+printf 'busy %s sid-orch -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+pane_stuck_check
+if grep -q "^message orchestra" "$STUCK_CALLS"; then
+  pass "issue #134: orchestra's own stuck episode is recorded via 'message' (durable, no nudge)"
+else
+  fail "issue #134: orchestra self-stuck should use 'message': $(cat "$STUCK_CALLS")"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+PANE_STATE_DIR="$SC_PANE_STATE_DIR_SAVED"
 
 echo "== T33 (issue #77): merge_watch_check logs PR events to EVENTS_LOG for the dashboard's PRs section =="
 : > "$GH_CALLS"

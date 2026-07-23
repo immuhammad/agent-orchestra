@@ -52,6 +52,17 @@ EVENTS_LOG="${WATCH_EVENTS_LOG:-$CANON_DIR/events.log}"
 # on-demand headless spawn (dispatch.sh assign/handoff), not a standing
 # pane, so there's no persistent scribe pane left to flag as dead.
 LIVENESS_AGENTS="${WATCH_LIVENESS_AGENTS:-orchestra builder agy}"
+# issue #134: stuck/long-running detection for the same agent panes
+# liveness already watches. Ground truth is each pane's OWN pane-state
+# file (busy-age = now minus that file's last recorded transition, see
+# lib/pane-state-lib.sh's pane_state_age) -- no separate polling loop,
+# just read at broker cadence alongside pane_liveness_check.
+STUCK_STATE_FILE="${WATCH_STUCK_STATE_FILE:-$CANON_DIR/stuck-check-state.json}"
+# 45 minutes, matching the ticket's own default (#134). Only ever change
+# together with a real consumer -- no decorative config knobs (#86
+# precedent) -- so this is env-overridable for tests, not a new
+# orchestrator.yaml key.
+STUCK_THRESHOLD_S="${WATCH_STUCK_THRESHOLD_S:-2700}"
 
 # we_log_event <message> -- appends a timestamped line to EVENTS_LOG. Used
 # by merge-watch and pane-liveness so their findings survive the dashboard's
@@ -471,6 +482,122 @@ pane_liveness_check() {
   done
 }
 
+# -- stuck / long-running pane detection (issue #134) --------------------
+
+# wsc_hash_pane <target> -- a cheap, deterministic digest of what's
+# currently on screen, used only to detect "has this pane's terminal
+# output changed since the last check" -- never anything security-
+# sensitive. `cksum` (not md5/md5sum/shasum) is POSIX and ships identically
+# on both BSD (macOS) and GNU (Linux CI) with no flag differences to
+# reconcile -- the exact BSD/GNU split the ticket flagged, sidestepped by
+# not needing md5 at all. Hashes are only ever compared within the SAME
+# running watch.sh process, so cross-machine digest-format stability
+# (cksum's actual portability gap) is irrelevant here.
+wsc_hash_pane() {
+  tmux capture-pane -p -t "$1" 2>/dev/null | cksum
+}
+
+wsc_ensure_state_file() {
+  [ -f "$STUCK_STATE_FILE" ] || echo '{}' > "$STUCK_STATE_FILE"
+}
+
+wsc_read() { # jq args, e.g. --arg a "$agent" '.[$a].flagged // false'
+  wsc_ensure_state_file
+  jq -r "$@" "$STUCK_STATE_FILE"
+}
+
+wsc_write() { # jq args, filter transforms current state -> new state
+  wsc_ensure_state_file
+  local tmp
+  tmp="$(mktemp "${STUCK_STATE_FILE}.XXXXXX")" || return 1
+  jq "$@" "$STUCK_STATE_FILE" > "$tmp" && mv "$tmp" "$STUCK_STATE_FILE"
+}
+
+# pane_stuck_check -- complementary to pane_liveness_check: that catches a
+# pane DYING (dropped to a plain shell); this catches one that's alive but
+# hung, retry-looping, or just burning quota unattended for a very long
+# stretch (Ahmad's overnight ask, #134). NEVER auto-kills or auto-
+# interrupts -- this only ever flags Orchestra, who decides.
+#
+# Per busy pane over STUCK_THRESHOLD_S: needs TWO consecutive over-
+# threshold observations before flagging at all -- the first merely
+# records a baseline screen hash (there's nothing to compare yet), the
+# second classifies by comparing hashes: unchanged -> "looping/stuck"
+# (upgrade), changed -> "long-running" (still just busy, screen is moving).
+# Exactly ONE flag fires per busy EPISODE (tracked in STUCK_STATE_FILE,
+# keyed by agent) -- a pane that flips away from busy (idle/failsafe, or
+# dies and pane_liveness_check clears its state) ends the episode and
+# clears tracking, so a later busy stretch can flag again.
+pane_stuck_check() {
+  local agent target pane_id state age
+  for agent in $LIVENESS_AGENTS; do
+    target="$(pane_for_agent "$agent")"
+    [ -z "$target" ] && continue
+    tmux has-session -t "${target%%:*}" 2>/dev/null || continue
+    pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
+    [ -z "$pane_id" ] && continue
+    state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
+
+    if [ "$state" != "busy" ]; then
+      # Episode over (or never started) -- drop any tracking so the next
+      # busy stretch starts clean. agy PR #136 round 1: only write if this
+      # agent is ACTUALLY tracked -- jq's `del` on a missing key is a
+      # harmless no-op, but wsc_write still does a full mktemp+jq+mv every
+      # call, and this branch runs for every idle agent on every watch
+      # tick. An unconditional call here means constant disk churn while
+      # the room is simply idle, for zero effect.
+      if [ "$(wsc_read --arg a "$agent" 'has($a)')" = "true" ]; then
+        wsc_write --arg a "$agent" 'del(.[$a])'
+      fi
+      continue
+    fi
+
+    age="$(pane_state_age "$pane_id" 2>/dev/null || echo '')"
+    case "$age" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "$age" -lt "$STUCK_THRESHOLD_S" ] && continue
+
+    local already_flagged prev_hash cur_hash
+    already_flagged="$(wsc_read --arg a "$agent" '.[$a].flagged // false')"
+    if [ "$already_flagged" = "true" ]; then
+      continue
+    fi
+
+    prev_hash="$(wsc_read --arg a "$agent" '.[$a].hash // empty')"
+    cur_hash="$(wsc_hash_pane "$target")"
+
+    if [ -z "$prev_hash" ]; then
+      # First over-threshold observation this episode: not enough data to
+      # classify yet -- record the baseline, wait for the next check.
+      wsc_write --arg a "$agent" --arg h "$cur_hash" '.[$a] = {flagged: false, hash: $h}'
+      continue
+    fi
+
+    local minutes kind changed_desc
+    minutes=$(( age / 60 ))
+    if [ "$cur_hash" = "$prev_hash" ]; then
+      kind="looping/stuck"
+      changed_desc="unchanged"
+    else
+      kind="long-running"
+      changed_desc="changed"
+    fi
+
+    local tail msg
+    tail="$(tmux capture-pane -p -t "$target" 2>/dev/null | tail -5)"
+    msg="FLAG: STUCK?: pane '${agent}' busy ${minutes}m, classified ${kind} (screen ${changed_desc} since the last check). Tail:
+${tail}"
+    if [ "$agent" = "orchestra" ]; then
+      dispatch_main message orchestra stuck "$msg" >/dev/null
+    else
+      dispatch_main assign orchestra stuck "$msg" >/dev/null
+    fi
+    wsc_write --arg a "$agent" --arg h "$cur_hash" '.[$a] = {flagged: true, hash: $h}'
+    we_log_event "FLAGGED $agent as STUCK? (${kind}, busy ${minutes}m)"
+  done
+}
+
 # -- main loop ----------------------------------------------------------
 
 # watch_pane_lines -- how many rows watch_render has to work with.
@@ -559,6 +686,7 @@ watch_main() {
     broker_translate_agy_state
     broker_check
     pane_liveness_check
+    pane_stuck_check
 
     watch_render
 
