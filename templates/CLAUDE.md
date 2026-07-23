@@ -26,3 +26,9 @@ Handoff Protocol for the full read-order and what's ephemeral
 - <Claude-Code-only quirks go here — hook wiring (`.claude/settings.json`),
   skill pack location (`.claude/skills/`), permission config. Delete this
   line once filled in.>
+- Protected paths are OS-immutable while `bin/orc-protect on` is set
+  (guard-layer redesign #141): writes into `.claude/`, `.agents/`,
+  `orchestrator.yaml` fail with EPERM at the kernel, whatever tool or
+  shell shape attempts them. For a LEGITIMATE config edit or template
+  re-sync: `bin/orc-protect off`, edit, `bin/orc-protect on` — and say
+  so in your handoff/decisions entry so the toggle is auditable.
