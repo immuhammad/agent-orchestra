@@ -184,6 +184,18 @@ else
   fail "expected deny for an unresolvable cd target, got: $OUT"
 fi
 
+echo "== issue #15 agy REQUEST-CHANGES round 2 finding: cd - must fail closed (guard cannot predict \$OLDPWD across arbitrary commands) =="
+TMP8="$(mktemp -d)"
+mkdir -p "$TMP8/protected_dir"
+printf 'protected_paths:\n  - protected_dir/\n' > "$TMP8/orchestrator.yaml"
+expect_denied_in "cd protected_dir; cd /tmp; cd - fails closed (real shell returns to protected_dir via \$OLDPWD)" \
+  "$TMP8" 'cd protected_dir; cd /tmp; cd - && echo hi > settings.json'
+rm -rf "$TMP8"
+
+echo "== issue #15 fix-round: bare cd (no argument) is the SAME failure class as cd - (targets \$HOME, unpredictable) -- closed proactively =="
+expect_denied "a bare cd with no argument fails closed" \
+  'cd && echo hi > settings.json'
+
 echo "== issue #15 fix-round regression: a normal, resolvable cd (properly quoted, no embedded quotes) still works =="
 expect_allowed "cd into a real, edge-quoted directory with an unrelated write still allowed" \
   'cd "lib" && echo hi > /tmp/not-a-real-write-target-just-parsed.txt'
