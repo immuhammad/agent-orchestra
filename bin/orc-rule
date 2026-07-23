@@ -1,0 +1,56 @@
+#!/bin/bash
+# bin/orc-rule "<one-line rule>" — append a soft-policy rule to
+# .harness/rules.md (guard-layer redesign #141, layer 4).
+#
+# The rules file is GUIDANCE agents read at session start -- explicitly
+# never the hard stop (kernel immutability via bin/orc-protect and
+# GitHub branch protection are the walls; an inattentive agent is
+# exactly the one that won't re-read a rules file). Orchestra appends a
+# rule when a mistake recurs or a judgment call gets settled -- the
+# mistakes->rules loop (#13 P9).
+#
+# Append-only by tooling: same mkdir-based lock discipline as
+# lib/log-decision.sh, one rule per call, single-line enforced. Never
+# edit or reorder the file by hand.
+set -euo pipefail
+
+RULE="${1:-}"
+if [ -z "$RULE" ]; then
+  echo "usage: orc-rule \"<one-line rule>\"" >&2
+  exit 1
+fi
+case "$RULE" in
+  *$'\n'*)
+    echo "orc-rule: REFUSE -- a rule is ONE line (keep the file lean; details belong in decisions.log or the issue)." >&2
+    exit 1 ;;
+esac
+
+RULES_FILE="${ORC_RULES_FILE:-.harness/rules.md}"
+LOCK_DIR="${ORC_RULES_LOCK_DIR:-${RULES_FILE}.lock}"
+
+# mkdir is atomic -- same pattern as log-decision.sh, so concurrent
+# appends serialize instead of interleaving.
+tries=0
+until mkdir "$LOCK_DIR" 2>/dev/null; do
+  tries=$((tries + 1))
+  if [ "$tries" -gt 50 ]; then
+    echo "orc-rule: could not acquire lock at $LOCK_DIR (stale? remove it if no orc-rule is running)" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+if [ ! -f "$RULES_FILE" ]; then
+  mkdir -p "$(dirname "$RULES_FILE")"
+  cat > "$RULES_FILE" <<'EOF'
+# RULES -- append-only soft policy (guard-layer redesign #141, layer 4)
+# Read by every session at start (surfaced via hooks/session-start.sh).
+# GUIDANCE ONLY: the hard stops live in bin/orc-protect (kernel
+# immutability) and GitHub branch protection. Append via
+# bin/orc-rule "<one line>" -- never edit or reorder by hand.
+EOF
+fi
+
+printf -- '- %s: %s\n' "$(date +%Y-%m-%d)" "$RULE" >> "$RULES_FILE"
+echo "orc-rule: appended to $RULES_FILE"

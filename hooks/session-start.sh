@@ -95,4 +95,25 @@ if [ -n "$ROLE" ] && [ -n "$CLASS" ]; then
   esac
 fi
 
-jq -n --arg ctx "${BASE_CONTEXT}${SOUL_CONTEXT}${LIFECYCLE_CONTEXT}" '{additionalContext: $ctx}'
+# issue #144 (#141 layer 4): surface the append-only soft-policy rules
+# file every session, capped to the LAST 40 rule lines so a grown file
+# can't bloat context (append-only = newest last; the cap is loud, not
+# silent). Guidance only -- enforcement lives in orc-protect + branch
+# protection. Sessions outside `orc up` (no ORC_ROLE) still get this:
+# rules are behavioral, not pane plumbing.
+RULES_CONTEXT=""
+RULES_FILE=".harness/rules.md"
+if [ -f "$RULES_FILE" ]; then
+  # NOTE: no `|| echo 0` here -- grep -c already prints 0 on no-match
+  # (while exiting 1); chaining echo would yield "0\n0".
+  RULE_LINES="$(grep -c '^- ' "$RULES_FILE" 2>/dev/null)"
+  [ -n "$RULE_LINES" ] || RULE_LINES=0
+  if [ "$RULE_LINES" -gt 0 ]; then
+    RULES_BODY="$(grep '^- ' "$RULES_FILE" | tail -40)"
+    RULES_NOTE=""
+    [ "$RULE_LINES" -gt 40 ] && RULES_NOTE=" (showing newest 40 of $RULE_LINES -- full file: $RULES_FILE)"
+    RULES_CONTEXT=" RULES (append-only soft policy, guidance not enforcement; add via bin/orc-rule)$RULES_NOTE: $RULES_BODY"
+  fi
+fi
+
+jq -n --arg ctx "${BASE_CONTEXT}${RULES_CONTEXT}${SOUL_CONTEXT}${LIFECYCLE_CONTEXT}" '{additionalContext: $ctx}'
