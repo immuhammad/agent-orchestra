@@ -213,6 +213,11 @@ if [ -n "$MONITOR_MIN_HEIGHT" ] && [ "$MONITOR_MIN_HEIGHT" -gt 0 ]; then
 else
   fail "CORRECTNESS REGRESSION (issue #87): a monitor pane has zero/negative height"
 fi
+if tmux show-hooks -t "$LAYOUT_SESSION" 2>/dev/null | grep -q 'client-attached'; then
+  fail "weighted branch must NOT arm the attach-snap hook (it already sized from the real terminal; the hook is the FALLBACK's self-heal)"
+else
+  pass "weighted branch arms no client-attached snap hook"
+fi
 tmux kill-session -t "$LAYOUT_SESSION" 2>/dev/null || true
 
 echo "== issue #87: a terminal too small for the weighted layout falls back to the original tiled layout, loudly =="
@@ -368,6 +373,55 @@ else
   fail "issue #119: expected the loud too-small WARNING when the client-size reading is empty, got: $(cat "$T119EMPTY_TMP/build.err" 2>/dev/null)"
 fi
 TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119EMPTY_SESSION" 2>/dev/null || true
+
+echo "== fallback sizing self-heals at first attach: one-shot client-attached hook snaps the monitor strip to the weighted branch's absolute monitor_rows =="
+# The percent-proportioned fallback rescales unpredictably when the first
+# real client attaches (live-hit twice on 2026-07-23: the 25% strip landed
+# at 23 of 59 rows and had to be resize-pane'd by hand). The fallback now
+# arms a ONE-SHOT client-attached hook -- run-shell -b, because the hook
+# fires before tmux rescales the window to the new client, so an inline
+# resize would be mangled; a backgrounded shell re-enters the server after
+# the attach completes -- that snaps the strip to monitor_rows and unsets
+# itself. The attach is driven from a pane of a second throwaway session:
+# tmux itself provides the pty this suite doesn't have.
+SNAP_SESSION="orctest-snap-$$"
+SNAP_OUTER="orctest-snapouter-$$"
+SNAP_TMP="$(mktemp -d)"
+(
+  cd "$TMP"
+  env -u ORC_TERM_COLS -u ORC_TERM_LINES -u TMUX TERM=dumb \
+    ORC_SESSION="$SNAP_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$SNAP_TMP/build.out" 2> "$SNAP_TMP/build.err" < /dev/null
+)
+if tmux show-hooks -t "$SNAP_SESSION" 2>/dev/null | grep -q 'client-attached'; then
+  pass "fallback build arms the one-shot client-attached snap hook"
+else
+  fail "fallback build should arm a client-attached hook, show-hooks says: $(tmux show-hooks -t "$SNAP_SESSION" 2>/dev/null)"
+fi
+tmux new-session -d -s "$SNAP_OUTER" -x 240 -y 60
+tmux send-keys -t "$SNAP_OUTER" "TMUX= tmux attach -t $SNAP_SESSION" C-m
+SNAP_STRIP=""
+SNAP_I=0
+while [ "$SNAP_I" -lt 40 ]; do
+  SNAP_STRIP="$(tmux display-message -p -t "$SNAP_SESSION:0.3" '#{pane_height}' 2>/dev/null)"
+  [ "$SNAP_STRIP" = "14" ] && break
+  sleep 0.25
+  SNAP_I=$((SNAP_I+1))
+done
+assert_eq "first real attach snaps the monitor strip to monitor_rows (14)" "14" "$SNAP_STRIP"
+SNAP_AGENT="$(tmux display-message -p -t "$SNAP_SESSION:0.0" '#{pane_height}' 2>/dev/null)"
+if [ -n "$SNAP_AGENT" ] && [ "$SNAP_AGENT" -ge 15 ]; then
+  pass "post-snap agent panes get the rest of the client height (${SNAP_AGENT} rows >= the 15-row min_agent_rows floor)"
+else
+  fail "post-snap agent panes should be >= 15 rows, got: ${SNAP_AGENT}"
+fi
+if tmux show-hooks -t "$SNAP_SESSION" 2>/dev/null | grep -q 'client-attached'; then
+  fail "the snap hook must unset itself after the first attach (one sizing decision -- never fights later manual tuning)"
+else
+  pass "the snap hook unset itself after the first attach"
+fi
+tmux kill-session -t "$SNAP_OUTER" 2>/dev/null || true
+tmux kill-session -t "$SNAP_SESSION" 2>/dev/null || true
 
 echo "== issue #59: liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
 if grep -v '^[[:space:]]*#' "$DIR/../bin/orc" | grep -q 'nohup'; then
