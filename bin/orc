@@ -523,6 +523,22 @@ orc_init_render_project_doc() {
   done < "$src"
 }
 
+# orc_init_render_soul <src> <dest> <model> <effort> <pane> -- copies a
+# templates/souls/<role>.md identity card, substituting <MODEL>/<EFFORT>/
+# <PANE> from the SAME answers the Roles table (orc_init_render_agents_md)
+# reads -- one source of model-lane truth, two renderings. Cards summarize
+# and point at AGENTS.md; they carry no blockquote to strip (issue #12).
+orc_init_render_soul() {
+  local src="$1" dest="$2" model="$3" effort="$4" pane="$5" line
+  : > "$dest"
+  while IFS= read -r line; do
+    line="${line//<MODEL>/$model}"
+    line="${line//<EFFORT>/$effort}"
+    line="${line//<PANE>/$pane}"
+    echo "$line" >> "$dest"
+  done < "$src"
+}
+
 # orc_init_core <answers_file> <target_dir> -- the whole non-interactive
 # wizard: validate, refuse if already initialized, write every file,
 # install skills, run the post-init verifiers. Nothing is written unless
@@ -619,7 +635,46 @@ orc_init_core() {
   orc_init_render_project_doc "$ORC_TEMPLATES_DIR/GEMINI.md" "$target/GEMINI.md" "$project"
 
   cp "$ORC_TEMPLATES_DIR/review-protocol.md" "$target/review-protocol.md"
-  cp "$ORC_TEMPLATES_DIR/SOUL.md" "$target/SOUL.md"
+
+  # issue #12: per-role SOUL.md identity cards -- same model-lane answers
+  # as the AGENTS.md Roles table above, one row of truth rendered twice.
+  # Builder combines Implementer+Tester into one pane (see CLAUDE.md's own
+  # Roles section) -- its soul takes the Implementer lane, the one
+  # actually exec'd for that pane by orc_build_session. Scribe has no
+  # pane (headless one-shot, issue #89) -- its <PANE> says so instead of a
+  # tmux index.
+  mkdir -p "$target/souls"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/orchestra.md" "$target/souls/orchestra.md" \
+    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_EFFORT high)" "0.0"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/builder.md" "$target/souls/builder.md" \
+    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_EFFORT default)" "0.1"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/reviewer.md" "$target/souls/reviewer.md" \
+    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_EFFORT high)" "0.2"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/scribe.md" "$target/souls/scribe.md" \
+    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_EFFORT low)" "headless (no standing pane)"
+
+  # issue #12: agy has no SessionStart-hook equivalent we control (unlike
+  # Claude's orchestra/builder panes) or a scribe-style spawn prompt to
+  # ride in -- it's a standing interactive pane. Verified live (see
+  # decisions.log): `.agents/rules/` is NOT a confirmed agy mechanism --
+  # agy's own introspection found no documentation for it and could not
+  # confirm it experimentally, contradicting the immuhammad/agent-
+  # orchestra#8 research's self-inspection claim. GEMINI.md IS a
+  # confirmed native mechanism (this project's own agy Reviewer pane has
+  # operated on AGENTS.md/GEMINI.md content every session) and is already
+  # per-project rendered with a "## Reviewer" section -- append the soul
+  # card there instead of a speculative unverified path.
+  {
+    echo ""
+    echo "## SOUL"
+    echo ""
+    cat "$target/souls/reviewer.md"
+  } >> "$target/GEMINI.md"
+
   mkdir -p "$target/.harness"
   cp "$ORC_TEMPLATES_DIR/handoff.md" "$target/.harness/handoff.md"
   touch "$target/.harness/decisions.log"

@@ -626,6 +626,57 @@ else
   fail "issue #23: expected --allowedTools to scope Write to $ACK_9010: $(cat "$CLAUDE_CALLS")"
 fi
 
+echo "== issue #12: souls/scribe.md, when present at the project root, rides the headless spawn prompt =="
+# Correctly-nested scratch (unlike SCRIBE_SCRATCH above, which plays the
+# role of .harness directly): PROJECT_ROOT/.harness is CANON_DIR, souls/
+# lives as its sibling, exactly like a real orc-init'd room.
+SOUL_PROJECT_ROOT="$(mktemp -d)"
+mkdir -p "$SOUL_PROJECT_ROOT/.harness/inbox/scribe" "$SOUL_PROJECT_ROOT/souls"
+printf 'SCRIBE-SOUL-MARKER: I am the scribe card.\n' > "$SOUL_PROJECT_ROOT/souls/scribe.md"
+SOUL_CLAUDE_CALLS="$SOUL_PROJECT_ROOT/claude-calls.log"
+: > "$SOUL_CLAUDE_CALLS"
+SOUL_FAKE_BIN="$SOUL_PROJECT_ROOT/bin"
+mkdir -p "$SOUL_FAKE_BIN"
+cat > "$SOUL_FAKE_BIN/claude" <<'FAKECLAUDE'
+#!/bin/bash
+echo "$*" >> "$CLAUDE_CALLS_FILE"
+ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
+[ -n "$ACK_PATH" ] && echo "DONE: scribe handled it" > "$ACK_PATH"
+FAKECLAUDE
+chmod +x "$SOUL_FAKE_BIN/claude"
+PATH="$SOUL_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$SOUL_CLAUDE_CALLS" DISPATCH_CANON_DIR="$SOUL_PROJECT_ROOT/.harness" bash "$DISPATCH" assign scribe 9011 "do the judgment task" >/dev/null 2>&1
+sleep 1
+if grep -q "SCRIBE-SOUL-MARKER" "$SOUL_CLAUDE_CALLS"; then
+  pass "issue #12: souls/scribe.md content rides the headless spawn prompt"
+else
+  fail "issue #12: expected SCRIBE-SOUL-MARKER in the spawned prompt: $(cat "$SOUL_CLAUDE_CALLS")"
+fi
+rm -rf "$SOUL_PROJECT_ROOT"
+
+echo "== issue #12: no souls/scribe.md on disk -> the spawn prompt is unchanged, no error =="
+NOSOUL_PROJECT_ROOT="$(mktemp -d)"
+mkdir -p "$NOSOUL_PROJECT_ROOT/.harness/inbox/scribe"
+NOSOUL_CLAUDE_CALLS="$NOSOUL_PROJECT_ROOT/claude-calls.log"
+: > "$NOSOUL_CLAUDE_CALLS"
+NOSOUL_FAKE_BIN="$NOSOUL_PROJECT_ROOT/bin"
+mkdir -p "$NOSOUL_FAKE_BIN"
+cat > "$NOSOUL_FAKE_BIN/claude" <<'FAKECLAUDE'
+#!/bin/bash
+echo "$*" >> "$CLAUDE_CALLS_FILE"
+ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
+[ -n "$ACK_PATH" ] && echo "DONE: scribe handled it" > "$ACK_PATH"
+FAKECLAUDE
+chmod +x "$NOSOUL_FAKE_BIN/claude"
+OUT_NOSOUL="$(PATH="$NOSOUL_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$NOSOUL_CLAUDE_CALLS" DISPATCH_CANON_DIR="$NOSOUL_PROJECT_ROOT/.harness" bash "$DISPATCH" assign scribe 9012 "do the judgment task" 2>&1)"
+STATUS_NOSOUL=$?
+sleep 1
+if [ "$STATUS_NOSOUL" -eq 0 ] && grep -q "You are the scribe agent" "$NOSOUL_CLAUDE_CALLS"; then
+  pass "issue #12: no souls/scribe.md -> spawn still succeeds with the plain prompt, no error"
+else
+  fail "issue #12: expected a clean spawn with no soul file, status=$STATUS_NOSOUL: $(cat "$NOSOUL_CLAUDE_CALLS")"
+fi
+rm -rf "$NOSOUL_PROJECT_ROOT"
+
 echo "== agy PROBE 1 (PR #30 REQUEST-CHANGES): scribe gets a scoped scratch-dir Write grant to create gh --body-file tmpfiles =="
 # gh issue comment/pr comment need --body-file <tmpfile> (the guard
 # false-positives on inline --body); creating that tmpfile is a Write to a
