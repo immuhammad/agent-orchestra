@@ -650,54 +650,7 @@ rm -f "$BROKER_STATE_DIR"/watchtest__20260101000000-2 "$BROKER_STATE_DIR"/watcht
 unset -f dispatch_main
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== issue #130: agy statusline -> pane-state translation (agy's own #129 finding) =="
-# Sandbox the pane-state dir: dispatch.sh pinned PANE_STATE_DIR to the
-# REAL room's canon dir at source time, and these tests write agy
-# states -- re-point it for this section, restore after.
-PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
-PANE_STATE_DIR="$TMP/pane-state"
-mkdir -p "$PANE_STATE_DIR"
-tmux new-session -d -s "$TEST_SESSION" -n main
-AGY_TEST_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
-pane_for_agent() {
-  case "$1" in
-    agy) echo "$TEST_SESSION:0.0" ;;
-    *) echo "" ;;
-  esac
-}
-AGY_STATUSLINE_FILE="$TMP/agy-statusline.json"
-AGY_STATUSLINE_MAX_AGE_S=300
-printf '{"agent_state":"idle","session_id":"agy-sess-1"}' > "$AGY_STATUSLINE_FILE"
-broker_translate_agy_state
-if [ "$(pane_state_read "$AGY_TEST_PANE_ID" 2>/dev/null)" = "idle" ] && [ "$(pane_state_session "$AGY_TEST_PANE_ID" 2>/dev/null)" = "agy-sess-1" ]; then
-  pass "issue #130: idle agent_state + session_id translated into pane-state"
-else
-  fail "issue #130: expected idle/agy-sess-1 in the pane-state file"
-fi
-printf '{"agent_state":"running_tool","session_id":"agy-sess-1"}' > "$AGY_STATUSLINE_FILE"
-broker_translate_agy_state
-if [ "$(pane_state_read "$AGY_TEST_PANE_ID" 2>/dev/null)" = "busy" ]; then
-  pass "issue #130: any non-idle agent_state maps to busy (fail toward do-not-type)"
-else
-  fail "issue #130: expected busy for agent_state=running_tool"
-fi
-touch -t 202001010000 "$AGY_STATUSLINE_FILE"
-broker_translate_agy_state
-if pane_state_read "$AGY_TEST_PANE_ID" >/dev/null 2>&1; then
-  fail "issue #130: a STALE statusline must clear the translated state (polled source, unknown truth)"
-else
-  pass "issue #130: stale statusline clears the state -- heuristic fallback back in charge"
-fi
-printf '{"agent_state":"idle","session_id":"agy-sess-1"}' > "$AGY_STATUSLINE_FILE"
-broker_translate_agy_state
-rm -f "$AGY_STATUSLINE_FILE"
-broker_translate_agy_state
-if pane_state_read "$AGY_TEST_PANE_ID" >/dev/null 2>&1; then
-  fail "issue #130: a MISSING statusline must clear the translated state"
-else
-  pass "issue #130: missing statusline clears the state"
-fi
-PANE_STATE_DIR="$PANE_STATE_DIR_SAVED"
+
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
 echo "== issue #134: broker_states_summary appends a busy-age suffix for busy panes, so a glance at the header catches a long-running one =="

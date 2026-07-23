@@ -1,22 +1,52 @@
 {
   "agy-guard": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "bash ../hooks/session-start.sh"
+      },
+      {
+        "type": "command",
+        "command": "bash ../hooks/pane-state.sh idle"
+      }
+    ],
+    "turn-start": [
+      {
+        "type": "command",
+        "command": "bash ../hooks/pane-state.sh busy"
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "bash lib/guard-quota-stop-agy.sh"
+            "command": "bash ../lib/guard-quota-stop-agy.sh"
           },
           {
             "type": "command",
-            "command": "bash lib/guard-agy.sh"
+            "command": "bash ../lib/guard-agy.sh"
           },
           {
             "type": "command",
-            "command": "bash lib/guard-room-branch-agy.sh"
+            "command": "bash ../lib/guard-room-branch-agy.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ../hooks/pane-state.sh busy"
           }
         ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "bash ../hooks/check-inbox-stop.sh"
+      },
+      {
+        "type": "command",
+        "command": "bash ../hooks/pane-state.sh idle"
       }
     ]
   }

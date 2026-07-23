@@ -171,9 +171,9 @@ pane_is_idle() {
   # guessing about what's rendered on screen (unlike the capture-pane
   # heuristic below, which cannot tell Claude Code's input hint/ghost text
   # from real pending content and misreads busy/idle as a result). A pane
-  # with no fresh hook state (agy's pane -- a different TUI whose process
-  # never fires these hooks -- or a pane whose hook hasn't written yet)
-  # falls through to the screen-scrape heuristic unchanged.
+  # with no fresh hook state (a TUI lacking hook support, or a pane whose
+  # hook hasn't written yet) falls through to the screen-scrape heuristic
+  # as a generic last resort.
   pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
   if [ -n "$pane_id" ]; then
     hook_state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
@@ -255,12 +255,12 @@ nudge_agent() {
     echo "dispatch.sh: no tmux '${target%%:*}' session running, skipping nudge" >&2
     return 0
   fi
-  # issue #125: state-driven, no deferred queue. The pane's own hook state
-  # (ground truth for Claude panes) decides: idle -> one immediate typed
+  # issue #125 / #150: state-driven, no deferred queue. The pane's own hook state
+  # (ground truth for hook-enabled panes) decides: idle -> one immediate typed
   # wake (safe -- idle is not a guess); busy -> nothing, the check-inbox
   # Stop hook delivers at turn end; failsafe -> nothing, the broker holds
-  # delivery until the park lifts. No/unknown state (agy -- a TUI that
-  # fires no Claude hooks) falls back to the screen heuristic for this one
+  # delivery until the park lifts. No/unknown state (a TUI lacking hooks)
+  # falls back to the screen heuristic as a generic last resort for this one
   # immediate-wake decision. Either way lib/broker.sh owns retries with
   # .ack verification, so a skipped wake here is a delay, never a loss.
   # (send_submit itself keeps the #86 confirm/retry typing discipline.)
