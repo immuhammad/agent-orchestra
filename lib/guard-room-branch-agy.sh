@@ -16,7 +16,7 @@ source "$DIR/quota-stop-lib.sh"
 # shellcheck source=./room-branch-lib.sh
 source "$DIR/room-branch-lib.sh"
 
-INPUT=$(cat)
+INPUT="${ANTIGRAVITY_SOURCE_METADATA:-}"
 
 CANON_DIR="$(qsg_resolve_canon_dir)" || {
   MSG="room-branch-gate: gate cannot verify room-branch state -- project root unresolvable. Failing CLOSED."
@@ -35,7 +35,7 @@ if [ "$STATE" = "ok" ] || room_branch_override_active "$ROOT"; then
   exit 0
 fi
 
-COMMAND=$(echo "$INPUT" | jq -r '.toolCall.args.CommandLine // .toolCall.args.commandLine // empty')
+COMMAND=$(echo "$INPUT" | jq -r '.tool.toolCall.argumentsJson | fromjson? | .CommandLine // .commandLine // empty')
 if [ -n "$COMMAND" ]; then
   if qsg_command_allowed "$COMMAND" "$CANON_DIR"; then
     echo '{"decision":"allow"}'
@@ -50,8 +50,8 @@ fi
 # Same confirmed agy write-tool payload shape as guard-quota-stop-agy.sh
 # (TargetFile primary, FilePath/file_path defensive fallbacks).
 FILE_PATH=$(echo "$INPUT" | jq -r '
-  .toolCall.args.TargetFile //
-  .toolCall.args.FilePath // .toolCall.args.file_path // empty
+  .tool.toolCall.argumentsJson | fromjson? |
+  .TargetFile // .FilePath // .file_path // empty
 ')
 if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
   echo '{"decision":"allow"}'
@@ -60,11 +60,12 @@ fi
 
 # Same read-tool payload shape as guard-quota-stop-agy.sh
 # (AbsolutePath/DirectoryPath), gated on a read/view-shaped tool name.
-TOOL_NAME=$(echo "$INPUT" | jq -r '.toolCall.name // empty')
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool.toolCall.name // empty')
 case "$TOOL_NAME" in
   *[Rr]ead*|*[Vv]iew*)
     READ_FILE_PATH=$(echo "$INPUT" | jq -r '
-      .toolCall.args.AbsolutePath // .toolCall.args.DirectoryPath // empty
+      .tool.toolCall.argumentsJson | fromjson? |
+      .AbsolutePath // .DirectoryPath // empty
     ')
     if [ -n "$READ_FILE_PATH" ] && qsg_read_allowed "$READ_FILE_PATH" "$CANON_DIR"; then
       echo '{"decision":"allow"}'
