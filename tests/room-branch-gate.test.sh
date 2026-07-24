@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/room-branch-gate.test.sh — tests for issue #60 task E's room-branch
+# tests/room-branch-gate.test.sh — tests for task E's room-branch
 # PreToolUse gate: hooks/room-branch-gate.sh (Claude Code dialect) and
 # lib/guard-room-branch-agy.sh (agy dialect), both thin wrappers over
 # lib/room-branch-lib.sh (task B). Unlike quota-stop-gate.sh (a persisted

@@ -1,7 +1,7 @@
 # GEMINI.md — Antigravity CLI lane
 
-> Template shipped by [agent-orchestra](https://github.com/immuhammad/agent-orchestra)
-> (issue #18). Copy this into your project root alongside `AGENTS.md`, fill
+> Template shipped by [agent-orchestra](https://github.com/immuhammad/agent-orchestra).
+> Copy this into your project root alongside `AGENTS.md`, fill
 > in the `<PROJECT>` placeholders, and delete this blockquote. `AGENTS.md`
 > is this project's single source of truth for harness rules — this file
 > adds Antigravity-CLI-specific notes only and must never contradict it.

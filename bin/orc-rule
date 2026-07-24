@@ -1,13 +1,13 @@
 #!/bin/bash
 # bin/orc-rule "<one-line rule>" — append a soft-policy rule to
-# .harness/rules.md (guard-layer redesign #141, layer 4).
+# .harness/rules.md (guard-layer redesign, layer 4).
 #
 # The rules file is GUIDANCE agents read at session start -- explicitly
 # never the hard stop (kernel immutability via bin/orc-protect and
 # GitHub branch protection are the walls; an inattentive agent is
 # exactly the one that won't re-read a rules file). Orchestra appends a
 # rule when a mistake recurs or a judgment call gets settled -- the
-# mistakes->rules loop (#13 P9).
+# mistakes->rules loop.
 #
 # Append-only by tooling: same mkdir-based lock discipline as
 # lib/log-decision.sh, one rule per call, single-line enforced. Never
@@ -44,7 +44,7 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 if [ ! -f "$RULES_FILE" ]; then
   mkdir -p "$(dirname "$RULES_FILE")"
   cat > "$RULES_FILE" <<'EOF'
-# RULES -- append-only soft policy (guard-layer redesign #141, layer 4)
+# RULES -- append-only soft policy (guard-layer redesign, layer 4)
 # Read by every session at start (surfaced via hooks/session-start.sh).
 # GUIDANCE ONLY: the hard stops live in bin/orc-protect (kernel
 # immutability) and GitHub branch protection. Append via

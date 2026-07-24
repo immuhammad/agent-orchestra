@@ -39,10 +39,10 @@ trap cleanup EXIT
 # through exit so an interrupted run still reaps its sessions.
 trap 'exit 130' INT TERM
 
-# Self-heal on the way IN (agy PR #145 round 1): no trap catches SIGKILL,
-# so a kill -9'd run strands its sessions until someone cleans up by
-# hand. Reap any orctest-* session whose embedded owner PID is dead;
-# anything with a live PID (parallel runs, this run) always survives.
+# Self-heal on the way IN: no trap catches SIGKILL, so a kill -9'd run
+# strands its sessions until someone cleans up by hand. Reap any
+# orctest-* session whose embedded owner PID is dead; anything with a
+# live PID (parallel runs, this run) always survives.
 reap_dead_orctest_sessions() {
   tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^orctest-' \
   | while IFS= read -r s; do
@@ -56,9 +56,9 @@ reap_dead_orctest_sessions() {
 }
 reap_dead_orctest_sessions
 
-echo "== PR #145 round 1: dead-PID orphan reaper =="
-# A max-PID orphan stands in for a SIGKILL-stranded run (same stand-in
-# gatekeeper.test.sh used for #37); a live decoy proves PID-scoping.
+echo "== dead-PID orphan reaper =="
+# A max-PID orphan stands in for a SIGKILL-stranded run (the same
+# stand-in gatekeeper.test.sh uses); a live decoy proves PID-scoping.
 REAP_DEAD="orctest-reapme-2147483647"
 REAP_LIVE="orctest-decoy-$$"
 tmux new-session -d -s "$REAP_DEAD" >/dev/null 2>&1
@@ -106,7 +106,7 @@ assert_eq "integration_branch scalar" "uat"         "$(grep '^BRANCH=' "$TMP/sca
 assert_eq "roles.orchestra.model"   "opus"          "$(grep '^ORCH_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 assert_eq "roles.implementer.model" "sonnet"        "$(grep '^IMPL_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 
-echo "== orc-config.sh: orc_session_name (issue #18 item 7 / #19) =="
+echo "== orc-config.sh: orc_session_name =="
 (
   cd "$TMP"
   cat > orchestrator.yaml <<'EOF'
@@ -144,7 +144,7 @@ EOF
   source "$DIR/../lib/orc-config.sh"
   orc_session_name fallback
 ) > "$TMP/session-hostile.out"
-assert_eq "session name sanitizes EVERY char outside [A-Za-z0-9_-] (agy PR #133: spaces word-split and quotes shell-inject the /bin/sh string inside the attach-snap hook)" "my-cool-project" "$(cat "$TMP/session-hostile.out")"
+assert_eq "session name sanitizes EVERY char outside [A-Za-z0-9_-] (spaces word-split and quotes shell-inject the /bin/sh string inside the attach-snap hook)" "my-cool-project" "$(cat "$TMP/session-hostile.out")"
 rm -f "$TMP/orchestrator.yaml"
 
 echo "== orc-config.sh: protected_paths (block list) =="
@@ -177,7 +177,7 @@ assert_eq "inline-list count" "2" "$(wc -l < "$TMP/inline.out" | tr -d ' ')"
 grep -q '^career-ops/$' "$TMP/inline.out" && pass "inline-list contains career-ops/" || fail "inline-list contains career-ops/"
 grep -q '^docs/frozen/$' "$TMP/inline.out" && pass "inline-list contains docs/frozen/" || fail "inline-list contains docs/frozen/"
 
-echo "== orc-config.sh: EMPTY default, no hardcoded project name (issue #18 B-i) =="
+echo "== orc-config.sh: EMPTY default, no hardcoded project name =="
 (
   cd "$TMP"
   rm -f orchestrator.yaml
@@ -225,7 +225,7 @@ EOF
 )
 
 PANE_COUNT="$(tmux list-panes -t "$SESSION" 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "control room has 5 panes (issue #89: pane 3/copilot retired)" "5" "$PANE_COUNT"
+assert_eq "control room has 5 panes (pane 3/copilot retired)" "5" "$PANE_COUNT"
 
 TITLES="$(tmux list-panes -t "$SESSION" -F '#{pane_title}' 2>/dev/null | sort | tr '\n' ',')"
 EXPECTED_TITLES="agy,builder,gatekeeper,orchestra,pr/budget watch,"
@@ -237,7 +237,7 @@ grep -q 'protected_paths=career-ops/' "$TMP/build.err" && pass "build log report
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-echo "== issue #87: agent panes get real headroom on a normal terminal, not an even 5-way tile =="
+echo "== agent panes get real headroom on a normal terminal, not an even 5-way tile =="
 # The naive `tiled` layout gives all 5 panes an equal share -- on a real
 # terminal (measured: 238x60) that squeezed the 3 INTERACTIVE agent panes
 # (orchestra/builder/agy) down to ~18 rows, not enough for Claude Code's
@@ -256,7 +256,7 @@ LAYOUT_TMP="$(mktemp -d)"
 )
 
 LAYOUT_PANE_COUNT="$(tmux list-panes -t "$LAYOUT_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "issue #87: weighted layout still has 5 panes" "5" "$LAYOUT_PANE_COUNT"
+assert_eq "weighted layout still has 5 panes" "5" "$LAYOUT_PANE_COUNT"
 
 # Index->role mapping is a hard contract (AGENTS.md: 0=orchestra 1=builder
 # 2=agy 3=gatekeeper 4=watch; dispatch.sh's pane_for_agent and gatekeeper-
@@ -264,20 +264,20 @@ assert_eq "issue #87: weighted layout still has 5 panes" "5" "$LAYOUT_PANE_COUNT
 # ORDER, not just as an unordered set of titles (the pre-existing test
 # above already covers the unordered-set case).
 LAYOUT_TITLES_BY_INDEX="$(tmux list-panes -t "$LAYOUT_SESSION" -F '#{pane_index}:#{pane_title}' 2>/dev/null | sort -t: -k1,1n | cut -d: -f2 | tr '\n' ',')"
-assert_eq "issue #87: index->role order preserved (0=orchestra 1=builder 2=agy 3=gatekeeper 4=watch)" "orchestra,builder,agy,gatekeeper,pr/budget watch," "$LAYOUT_TITLES_BY_INDEX"
+assert_eq "index->role order preserved (0=orchestra 1=builder 2=agy 3=gatekeeper 4=watch)" "orchestra,builder,agy,gatekeeper,pr/budget watch," "$LAYOUT_TITLES_BY_INDEX"
 
 AGENT_MIN_HEIGHT="$(tmux list-panes -t "$LAYOUT_SESSION" -F '#{pane_index} #{pane_height}' 2>/dev/null | awk '$1<=2 {print $2}' | sort -n | head -1)"
 if [ -n "$AGENT_MIN_HEIGHT" ] && [ "$AGENT_MIN_HEIGHT" -ge 25 ]; then
-  pass "issue #87: all 3 agent panes (orchestra/builder/agy) have >= 25 rows on a 238x60 terminal (smallest: ${AGENT_MIN_HEIGHT})"
+  pass "all 3 agent panes (orchestra/builder/agy) have >= 25 rows on a 238x60 terminal (smallest: ${AGENT_MIN_HEIGHT})"
 else
-  fail "CORRECTNESS REGRESSION (issue #87): an agent pane has fewer than 25 rows on a 238x60 terminal (smallest measured: ${AGENT_MIN_HEIGHT:-none})"
+  fail "CORRECTNESS REGRESSION: an agent pane has fewer than 25 rows on a 238x60 terminal (smallest measured: ${AGENT_MIN_HEIGHT:-none})"
 fi
 
 MONITOR_MIN_HEIGHT="$(tmux list-panes -t "$LAYOUT_SESSION" -F '#{pane_index} #{pane_height}' 2>/dev/null | awk '$1>=3 {print $2}' | sort -n | head -1)"
 if [ -n "$MONITOR_MIN_HEIGHT" ] && [ "$MONITOR_MIN_HEIGHT" -gt 0 ]; then
-  pass "issue #87: monitor panes (gatekeeper/watch) still have a positive row count (${MONITOR_MIN_HEIGHT}) -- short is fine, zero is not"
+  pass "monitor panes (gatekeeper/watch) still have a positive row count (${MONITOR_MIN_HEIGHT}) -- short is fine, zero is not"
 else
-  fail "CORRECTNESS REGRESSION (issue #87): a monitor pane has zero/negative height"
+  fail "CORRECTNESS REGRESSION: a monitor pane has zero/negative height"
 fi
 if tmux show-hooks -t "$LAYOUT_SESSION" 2>/dev/null | grep -q 'client-attached'; then
   fail "weighted branch must NOT arm the attach-snap hook (it already sized from the real terminal; the hook is the FALLBACK's self-heal)"
@@ -286,7 +286,7 @@ else
 fi
 tmux kill-session -t "$LAYOUT_SESSION" 2>/dev/null || true
 
-echo "== issue #87: a terminal too small for the weighted layout falls back to the original tiled layout, loudly =="
+echo "== a terminal too small for the weighted layout falls back to the original tiled layout, loudly =="
 SMALL_SESSION="orctest-small-$$"
 SMALL_TMP="$(mktemp -d)"
 (
@@ -296,17 +296,17 @@ SMALL_TMP="$(mktemp -d)"
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SMALL_TMP/build.err"
 )
 SMALL_PANE_COUNT="$(tmux list-panes -t "$SMALL_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "issue #87: too-small terminal still builds all 5 panes (graceful fallback, not a hard failure)" "5" "$SMALL_PANE_COUNT"
+assert_eq "too-small terminal still builds all 5 panes (graceful fallback, not a hard failure)" "5" "$SMALL_PANE_COUNT"
 if grep -qi 'WARNING.*too small' "$SMALL_TMP/build.err" 2>/dev/null; then
-  pass "issue #87: a too-small terminal warns loudly about falling back to the tiled layout"
+  pass "a too-small terminal warns loudly about falling back to the tiled layout"
 else
   fail "expected a loud WARNING about falling back to tiled on a too-small terminal, got: $(cat "$SMALL_TMP/build.err" 2>/dev/null)"
 fi
 SMALL_ZERO_HEIGHT="$(tmux list-panes -t "$SMALL_SESSION" -F '#{pane_height}' 2>/dev/null | awk '$1<=0' | wc -l | tr -d ' ')"
-assert_eq "issue #87: fallback layout never produces a zero-height pane" "0" "$SMALL_ZERO_HEIGHT"
+assert_eq "fallback layout never produces a zero-height pane" "0" "$SMALL_ZERO_HEIGHT"
 tmux kill-session -t "$SMALL_SESSION" 2>/dev/null || true
 
-echo "== issue #87 review round 2: no ORC_TERM_COLS/LINES override AND no real controlling tty -- falls back loudly, never trusts a non-tty tput default as if it were the real client size =="
+echo "== no ORC_TERM_COLS/LINES override AND no real controlling tty -- falls back loudly, never trusts a non-tty tput default as if it were the real client size =="
 # CI-reproduced: `tput cols`/`tput lines` do NOT reliably fail when stdout
 # isn't a real terminal -- with TERM set (even TERM=dumb) but no tty, tput
 # happily returns a plausible-looking "80"/"24" fallback default instead of
@@ -318,38 +318,38 @@ NOTTY_SESSION="orctest-notty-$$"
 NOTTY_TMP="$(mktemp -d)"
 (
   cd "$TMP"
-  # -u TMUX (issue #119, review round 2 -- reproduced live running this
-  # suite from inside a real tmux pane): this test's whole POINT is
-  # "nothing about the real client size is knowable" -- but the #119 fix
-  # added a SECOND way to learn it (the attached tmux client), which is
-  # unconditionally available whenever $TMUX happens to be inherited from
-  # whatever shell is running this test. Stripped explicitly so the
-  # scenario stays genuinely size-unknown regardless of the invoking
-  # shell's own tmux context, instead of accidentally exercising #119's
-  # new code path (that path has its own dedicated tests below).
+  # -u TMUX (reproduced live running this suite from inside a real tmux
+  # pane): this test's whole POINT is "nothing about the real client size
+  # is knowable" -- but the attached-tmux-client fix added a SECOND way to
+  # learn it (the attached tmux client), which is unconditionally
+  # available whenever $TMUX happens to be inherited from whatever shell
+  # is running this test. Stripped explicitly so the scenario stays
+  # genuinely size-unknown regardless of the invoking shell's own tmux
+  # context, instead of accidentally exercising that new code path (it
+  # has its own dedicated tests below).
   env -u ORC_TERM_COLS -u ORC_TERM_LINES -u TMUX TERM=dumb \
     ORC_SESSION="$NOTTY_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$NOTTY_TMP/build.out" 2> "$NOTTY_TMP/build.err" < /dev/null
 )
 NOTTY_PANE_COUNT="$(tmux list-panes -t "$NOTTY_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "issue #87: no override + no tty still builds all 5 panes (graceful fallback)" "5" "$NOTTY_PANE_COUNT"
+assert_eq "no override + no tty still builds all 5 panes (graceful fallback)" "5" "$NOTTY_PANE_COUNT"
 if grep -qi 'WARNING.*too small' "$NOTTY_TMP/build.err" 2>/dev/null; then
-  pass "issue #87: no override + no tty falls back to tiled with a loud warning, not a silent guess at the real size"
+  pass "no override + no tty falls back to tiled with a loud warning, not a silent guess at the real size"
 else
-  fail "CORRECTNESS REGRESSION (issue #87): no override + no tty should fall back loudly, not trust a non-tty tput default -- got: $(cat "$NOTTY_TMP/build.err" 2>/dev/null)"
+  fail "CORRECTNESS REGRESSION: no override + no tty should fall back loudly, not trust a non-tty tput default -- got: $(cat "$NOTTY_TMP/build.err" 2>/dev/null)"
 fi
 NOTTY_ZERO_HEIGHT="$(tmux list-panes -t "$NOTTY_SESSION" -F '#{pane_height}' 2>/dev/null | awk '$1<=0' | wc -l | tr -d ' ')"
-assert_eq "issue #87: no-tty fallback never produces a zero-height pane" "0" "$NOTTY_ZERO_HEIGHT"
+assert_eq "no-tty fallback never produces a zero-height pane" "0" "$NOTTY_ZERO_HEIGHT"
 tmux kill-session -t "$NOTTY_SESSION" 2>/dev/null || true
 
-# issue #119: `orc up` run from INSIDE an already-attached tmux client (a
+# `orc up` run from INSIDE an already-attached tmux client (a
 # human's outer terminal is itself a tmux pane) measures the CALLING
 # PANE's own geometry via tput, not the actual physical terminal window --
-# live-hit rebuilding this room's own #87 layout, where the calling pane
-# was narrower than the real attached client, tripping the loud tiled
-# fallback for no real reason. Fixed by sizing from the attached client
-# (`tmux display-message -p '#{client_width} #{client_height}'`) whenever
-# $TMUX is set, before falling through to tput/none.
+# live-hit rebuilding this room's own weighted layout, where the calling
+# pane was narrower than the real attached client, tripping the loud
+# tiled fallback for no real reason. Fixed by sizing from the attached
+# client (`tmux display-message -p '#{client_width} #{client_height}'`)
+# whenever $TMUX is set, before falling through to tput/none.
 #
 # A `tmux` STUB on PATH (not a real second attached client, which would
 # need a real pty) intercepts ONLY the exact display-message call this
@@ -358,7 +358,7 @@ tmux kill-session -t "$NOTTY_SESSION" 2>/dev/null || true
 # session/window management in this test still goes through real tmux.
 REAL_TMUX="$(command -v tmux)"
 
-echo "== issue #119: \$TMUX set -> sizes from the attached tmux CLIENT, not tput, and echoes the chosen size + source =="
+echo "== \$TMUX set -> sizes from the attached tmux CLIENT, not tput, and echoes the chosen size + source =="
 T119_STUB_DIR="$(mktemp -d)"
 cat > "$T119_STUB_DIR/tmux" <<STUB
 #!/bin/bash
@@ -377,22 +377,22 @@ T119_TMP="$(mktemp -d)"
     ORC_SESSION="$T119_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$T119_TMP/build.out" 2> "$T119_TMP/build.err" < /dev/null
 )
-# issue #119 review: $TMUX's socket segment IS load-bearing for plain tmux
+# $TMUX's socket segment IS load-bearing for plain tmux
 # CLI invocations with no -L/-S (confirmed live on tmux 3.7b -- a
 # different TMUX value really does route to a different server/socket,
 # not just a nesting marker). The builder subshell above ran with
 # TMUX="/tmp/faketmux,12345,0", so every query against the session it
 # built must use that SAME value or it's asking the wrong server.
 T119_WINSIZE="$(TMUX="/tmp/faketmux,12345,0" tmux list-windows -t "$T119_SESSION" -F '#{window_width}x#{window_height}' 2>/dev/null)"
-assert_eq "issue #119: room is sized from the stubbed attached-client dimensions (199x55), not this test's own tput/pane size" "199x55" "$T119_WINSIZE"
+assert_eq "room is sized from the stubbed attached-client dimensions (199x55), not this test's own tput/pane size" "199x55" "$T119_WINSIZE"
 if grep -q 'sizing room at 199x55 (source: attached tmux client)' "$T119_TMP/build.out" 2>/dev/null; then
-  pass "issue #119: happy path echoes the chosen size + source"
+  pass "happy path echoes the chosen size + source"
 else
-  fail "issue #119: expected an echoed 'sizing room at 199x55 (source: attached tmux client)' line, got: $(cat "$T119_TMP/build.out" 2>/dev/null)"
+  fail "expected an echoed 'sizing room at 199x55 (source: attached tmux client)' line, got: $(cat "$T119_TMP/build.out" 2>/dev/null)"
 fi
 TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119_SESSION" 2>/dev/null || true
 
-echo "== issue #119: ORC_TERM_COLS/LINES override still wins even when \$TMUX is set (override stays top-priority) =="
+echo "== ORC_TERM_COLS/LINES override still wins even when \$TMUX is set (override stays top-priority) =="
 T119OV_SESSION="orctest-119ov-$$"
 T119OV_TMP="$(mktemp -d)"
 (
@@ -403,12 +403,12 @@ T119OV_TMP="$(mktemp -d)"
     bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$T119OV_TMP/build.out" 2> "$T119OV_TMP/build.err" < /dev/null
 )
 T119OV_WINSIZE="$(TMUX="/tmp/faketmux,12345,0" tmux list-windows -t "$T119OV_SESSION" -F '#{window_width}x#{window_height}' 2>/dev/null)"
-assert_eq "issue #119: ORC_TERM_COLS/LINES (90x30) wins over the attached-client stub (199x55)" "90x30" "$T119OV_WINSIZE"
+assert_eq "ORC_TERM_COLS/LINES (90x30) wins over the attached-client stub (199x55)" "90x30" "$T119OV_WINSIZE"
 TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119OV_SESSION" 2>/dev/null || true
 
-echo "== issue #119: \$TMUX set but no attached client (empty display-message) falls through to the loud tiled fallback, not a crash =="
+echo "== \$TMUX set but no attached client (empty display-message) falls through to the loud tiled fallback, not a crash =="
 T119EMPTY_STUB_DIR="$(mktemp -d)"
-# agy review round 1 (PR #123): a real client-less tmux server does NOT
+# A real client-less tmux server does NOT
 # print nothing for #{client_width}/#{client_height} -- confirmed live, it
 # prints a single space + newline. Echoing genuinely nothing here was a
 # dishonest mock that masked the bin/orc bug this fix addresses (a bare
@@ -432,11 +432,11 @@ T119EMPTY_TMP="$(mktemp -d)"
     bash -c "source '$DIR/../bin/orc'; orc_build_session" > "$T119EMPTY_TMP/build.out" 2> "$T119EMPTY_TMP/build.err" < /dev/null
 )
 T119EMPTY_PANE_COUNT="$(TMUX="/tmp/faketmux,12345,0" tmux list-panes -t "$T119EMPTY_SESSION" 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "issue #119: empty client-size reading still builds all 5 panes via the loud fallback" "5" "$T119EMPTY_PANE_COUNT"
+assert_eq "empty client-size reading still builds all 5 panes via the loud fallback" "5" "$T119EMPTY_PANE_COUNT"
 if grep -qi 'WARNING.*too small' "$T119EMPTY_TMP/build.err" 2>/dev/null; then
-  pass "issue #119: no attached-client size + no tty falls back loudly, same as the no-override/no-tty case"
+  pass "no attached-client size + no tty falls back loudly, same as the no-override/no-tty case"
 else
-  fail "issue #119: expected the loud too-small WARNING when the client-size reading is empty, got: $(cat "$T119EMPTY_TMP/build.err" 2>/dev/null)"
+  fail "expected the loud too-small WARNING when the client-size reading is empty, got: $(cat "$T119EMPTY_TMP/build.err" 2>/dev/null)"
 fi
 TMUX="/tmp/faketmux,12345,0" tmux kill-session -t "$T119EMPTY_SESSION" 2>/dev/null || true
 
@@ -489,7 +489,7 @@ fi
 tmux kill-session -t "$SNAP_OUTER" 2>/dev/null || true
 tmux kill-session -t "$SNAP_SESSION" 2>/dev/null || true
 
-echo "== agy PR #133 round 1: a hand-set ORC_SESSION outside [A-Za-z0-9_-] is REFUSED before any tmux call (it reaches /bin/sh via the attach-snap hook) =="
+echo "== a hand-set ORC_SESSION outside [A-Za-z0-9_-] is REFUSED before any tmux call (it reaches /bin/sh via the attach-snap hook) =="
 # orc_session_name sanitizes every DERIVED name, so only a verbatim
 # ORC_SESSION override can carry a space or quote into orc_build_session.
 # The hostile value below carries both failure modes agy demonstrated:
@@ -516,14 +516,14 @@ fi
 HOSTILE_SESSIONS="$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c 'bad name' || true)"
 assert_eq "hostile session name: no tmux session was created" "0" "$HOSTILE_SESSIONS"
 
-echo "== issue #59: liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
+echo "== liveness watchdog restart no longer uses nohup (guard.sh correctly fails closed on nohup, which blocked bin/orc's OWN restart drill mid-drill) =="
 if grep -v '^[[:space:]]*#' "$DIR/../bin/orc" | grep -q 'nohup'; then
   fail "bin/orc should no longer launch gatekeeper-liveness.sh via nohup (a comment MAY still mention nohup to explain why -- only a live invocation fails this) -- the harness's own restart drill needs an inspectable path, same as the other three loops"
 else
   pass "bin/orc no longer uses nohup"
 fi
 
-echo "== issue #6: orchestra/builder pane launches go through sl_build_launch_cmd (session lifecycle classification), not a bare hardcoded claude invocation =="
+echo "== orchestra/builder pane launches go through sl_build_launch_cmd (session lifecycle classification), not a bare hardcoded claude invocation =="
 if grep -q 'source "\$ORC_LIB_DIR/session-lifecycle.sh"' "$DIR/../bin/orc"; then
   pass "bin/orc sources lib/session-lifecycle.sh"
 else
@@ -535,12 +535,12 @@ else
   fail "expected orc_build_session to call sl_build_launch_cmd for both orchestra and builder"
 fi
 if grep -qE "send-keys -t \"\\\$session:0\\.0\" \"ORC_ROLE=orchestra claude" "$DIR/../bin/orc"; then
-  fail "bin/orc should no longer hardcode a bare ORC_ROLE=orchestra claude launch (issue #6: every launch is classified)"
+  fail "bin/orc should no longer hardcode a bare ORC_ROLE=orchestra claude launch (every launch is classified)"
 else
   pass "bin/orc no longer hardcodes a bare unclassified orchestra launch"
 fi
 
-echo "== issue #6: orc_build_session, no prior role-session recorded -> pane 0/1 launch commands are classified FRESH =="
+echo "== orc_build_session, no prior role-session recorded -> pane 0/1 launch commands are classified FRESH =="
 CLASS_SESSION="orctest-lifecycle-$$"
 CLASS_TMP="$(mktemp -d)"
 CLASS_STUB_DIR="$(mktemp -d)"
@@ -580,7 +580,7 @@ else
 fi
 rm -rf "$CLASS_TMP" "$CLASS_STUB_DIR"
 
-echo "== issue #59: liveness watchdog launches via a tmux session, same mechanism as the other three loops =="
+echo "== liveness watchdog launches via a tmux session, same mechanism as the other three loops =="
 LIVE_SESSION="orctest-liveness-$$"
 LIVE_TMP="$(mktemp -d)"
 (
@@ -601,7 +601,7 @@ tmux kill-session -t "$LIVE_SESSION" 2>/dev/null || true
 tmux kill-session -t "${LIVE_SESSION}-liveness" 2>/dev/null || true
 rm -rf "$LIVE_TMP"
 
-echo "== issue #59: ORC_SKIP_LIVENESS=1 still skips the liveness watchdog entirely (regression) =="
+echo "== ORC_SKIP_LIVENESS=1 still skips the liveness watchdog entirely (regression) =="
 SKIP_SESSION="orctest-liveness-skip-$$"
 SKIP_TMP="$(mktemp -d)"
 (
@@ -619,7 +619,7 @@ fi
 tmux kill-session -t "$SKIP_SESSION" 2>/dev/null || true
 rm -rf "$SKIP_TMP"
 
-echo "== issue #22: orc_build_session seeds the inbox dirs dispatch.sh actually uses, not a hand-made layout =="
+echo "== orc_build_session seeds the inbox dirs dispatch.sh actually uses, not a hand-made layout =="
 for agent in orchestra builder agy scribe; do
   if [ -d "$TMP/.harness/inbox/$agent" ]; then
     pass "orc_build_session seeded inbox/$agent"
@@ -628,12 +628,12 @@ for agent in orchestra builder agy scribe; do
   fi
 done
 if [ -d "$TMP/.harness/inbox/copilot" ]; then
-  fail "orc_build_session should NOT seed a legacy inbox/copilot dir in a fresh room (issue #22: scribe/ is the live physical dir now)"
+  fail "orc_build_session should NOT seed a legacy inbox/copilot dir in a fresh room (scribe/ is the live physical dir now)"
 else
   pass "fresh room has no legacy inbox/copilot dir"
 fi
 
-echo "== issue #10/#31: orc_build_session runs the hook-wiring doctor check, LOUD but non-fatal =="
+echo "== orc_build_session runs the hook-wiring doctor check, LOUD but non-fatal =="
 # The room built above had NO .claude/settings.json at all -- the check
 # should have WARNED in build.err (loud) without orc_build_session itself
 # failing (non-fatal, already proven by the pane/inbox assertions above
@@ -662,7 +662,7 @@ fi
 tmux kill-session -t "$HOOKWIRE_SESSION" 2>/dev/null || true
 rm -rf "$HOOKWIRE_TMP"
 
-echo "== orc.sh: ORC_SESSION defaults to THIS project's own session, not a shared 'harness' (issue #18 item 7 / #19) =="
+echo "== orc.sh: ORC_SESSION defaults to THIS project's own session, not a shared 'harness' =="
 DEFAULT_SESSION_OUT="$(
   cd "$TMP"
   cat > orchestrator.yaml <<'EOF'
@@ -681,7 +681,7 @@ ENV_OVERRIDE_OUT="$(
 assert_eq "ORC_SESSION env override still wins over orchestrator.yaml" "explicit-override" "$ENV_OVERRIDE_OUT"
 rm -f "$TMP/orchestrator.yaml"
 
-echo "== orc.sh: orc_build_session seeds merge-watch-state on a fresh room (issue #18 item 5 / C1) =="
+echo "== orc.sh: orc_build_session seeds merge-watch-state on a fresh room =="
 SEED_SESSION="orctest-seed-$$"
 SEED_TMP="$(mktemp -d)"
 FAKE_GH_BIN="$SEED_TMP/bin"
@@ -726,7 +726,7 @@ fi
 tmux kill-session -t "orctest-seedskip-$$" 2>/dev/null || true
 rm -rf "$SEED_TMP" "$SEED_TMP2"
 
-echo "== issue #60 task C: orc_build_session refuses/warns on room-branch mismatch =="
+echo "== orc_build_session refuses/warns on room-branch mismatch =="
 rb_mk_repo() {
   local dir
   dir="$(mktemp -d)"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# lib/session-lifecycle.sh -- issue #6: classifies every Claude Code pane
+# lib/session-lifecycle.sh -- classifies every Claude Code pane
 # start as resumed|rebuilt|fresh instead of always launching a blank
 # session and letting it silently masquerade as having no history.
 #
@@ -46,7 +46,7 @@ ROLE_SESSION_DIR="${ROLE_SESSION_DIR:-${CANON_DIR:-.harness}/state/role-session}
 # How long a `claude --resume` attempt can run before an exit is treated
 # as "the resume genuinely failed" rather than "the session ended
 # normally". Not exposed via orchestrator.yaml (no consumer need for it to
-# be tunable yet -- AGENTS.md #86: no new config keys without one).
+# be tunable yet -- AGENTS.md's own rule: no new config keys without one).
 SL_RESUME_FAIL_WINDOW_S="${SL_RESUME_FAIL_WINDOW_S:-10}"
 
 # sl_role_session_file <role> -- echoes the path to that role's last-known
@@ -63,7 +63,7 @@ sl_read_role_session() {
   file="$(sl_role_session_file "$role")"
   [ -f "$file" ] || return 0
   sid="$(tr -d '[:space:]' < "$file" 2>/dev/null || echo '')"
-  # agy PR #135 round 1: this value is interpolated straight into the
+  # agy's review found: this value is interpolated straight into the
   # shell command sl_build_launch_cmd hands `tmux send-keys` to TYPE into
   # a live pane. The file on disk is trusted state we wrote, but reading
   # it back is the last point before that trust turns into code a shell
@@ -71,7 +71,7 @@ sl_read_role_session() {
   # doesn't go through sl_write_role_session) must never carry shell
   # metacharacters that far. A real Claude Code session_id is always
   # UUID-shaped, so this is not a functional restriction; same closed
-  # charset PR #133 used for orc_session_name, for the same reason.
+  # charset used elsewhere for orc_session_name, for the same reason.
   case "$sid" in
     ''|*[!A-Za-z0-9_-]*) return 0 ;;
   esac

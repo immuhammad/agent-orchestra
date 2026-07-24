@@ -1,9 +1,9 @@
 #!/bin/bash
 # bin/orc-protect [on|off|status] [target_dir] — OS-level immutability for
-# the harness's protected paths (guard-layer redesign #141, layer 1).
+# the harness's protected paths (guard-layer redesign, layer 1).
 #
 # The PreToolUse guards used to chase protected-path writes by re-parsing
-# shell — a losing game (#98/#84/#139/#140). This helper moves the hard
+# shell — a losing game. This helper moves the hard
 # stop DOWN to the filesystem: macOS `chflags uchg` / Linux `chattr +i`.
 # A flagged path rejects every write at the kernel (EPERM) no matter how
 # the command was spelled — bash -c, trailing redirects, tilde tricks,

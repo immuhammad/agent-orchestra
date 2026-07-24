@@ -1,9 +1,9 @@
 #!/bin/bash
 # lib/quota-stop-clear.sh <reason> — explicit manual clear for the
-# quota-stop PreToolUse gate (issue #10). This is the "Ahmad's a/b/c
+# quota-stop PreToolUse gate. This is the "Ahmad's a/b/c
 # answer was recorded" signal the Gate-1 plan asked to be decided:
 # inferring that answer from pane text or timing would be exactly the
-# kind of drift-prone heuristic issue #11 exists to eliminate, so instead
+# kind of drift-prone heuristic this project avoids by design, so instead
 # it's an explicit, auditable action -- whichever session received
 # Ahmad's answer (or Orchestra, relaying it) runs this to lift the gate
 # for every other session watching the same flag. The weekly and

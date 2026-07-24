@@ -4,7 +4,7 @@
 # since skills must be auto-used per AGENTS.md's Skills table, not just
 # invocable on request. Kept role-agnostic (this hook fires identically for
 # every session/role) -- full detail lives in AGENTS.md's Skills table.
-# issue #23: a one-shot/headless spawn (e.g. the dispatched scribe) must
+# A one-shot/headless spawn (e.g. the dispatched scribe) must
 # run with MINIMAL context -- just its dispatched task, already given
 # directly in its own prompt -- not this pane-agent room-state briefing. A
 # scribe spawn was observed booting, reading the "read handoff.md" + quota
@@ -29,7 +29,7 @@ touch .harness/.session-start
 
 BASE_CONTEXT="HARNESS ACTIVE. Read .harness/handoff.md (current task state, ephemeral -- replaced each session) and .harness/decisions.log (durable cross-session context, append-only) before any work. Quota rule: at 80% of any window, stop, update handoff, ask Ahmad about fallback switch. Ahmad: run /usage to check Claude quota, agy quota screen for Google pool. Skills auto-use by role (see AGENTS.md Skills table): Builder -- test-driven-development, systematic-debugging, verification-before-completion, using-git-worktrees; Reviewer -- code-review (applies review-protocol.md); Orchestra -- brainstorming, writing-plans (+ fan-out skills, Orchestra-only). Inbox .msg bodies: caveman mode; handoff.md/decisions.log/PR descriptions/issue comments stay full English."
 
-# issue #6: session lifecycle classification (resumed|rebuilt|fresh).
+# Session lifecycle classification (resumed|rebuilt|fresh).
 # ORC_SESSION_CLASS is set by bin/orc's launch command (lib/session-
 # lifecycle.sh's sl_build_launch_cmd) for the ACTUAL process env var
 # claude itself was exec'd under -- so it's set here regardless of
@@ -65,7 +65,7 @@ if [ -n "$ROLE" ] && [ -n "$CLASS" ]; then
         [ -n "${TMUX_PANE:-}" ] && pane_state_write "$TMUX_PANE" idle "$SESSION_ID" "$CLASS"
         [ -n "$SESSION_ID" ] && sl_write_role_session "$ROLE" "$SESSION_ID"
 
-        # issue #12: per-role SOUL.md identity card -- CANON_DIR is the
+        # Per-role SOUL.md identity card -- CANON_DIR is the
         # project's .harness dir (see harness-root.sh), so its parent is
         # the project root souls/ lives in, sibling to AGENTS.md. Read
         # fresh every startup/resume (the card is meant to be re-read each
@@ -95,7 +95,7 @@ if [ -n "$ROLE" ] && [ -n "$CLASS" ]; then
   esac
 fi
 
-# issue #144 (#141 layer 4): surface the append-only soft-policy rules
+# Surface the append-only soft-policy rules
 # file every session, capped to the LAST 40 rule lines so a grown file
 # can't bloat context (append-only = newest last; the cap is loud, not
 # silent). Guidance only -- enforcement lives in orc-protect + branch

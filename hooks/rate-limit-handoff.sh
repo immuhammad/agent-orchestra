@@ -8,7 +8,7 @@ set -euo pipefail
 
 INPUT=$(cat)
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-# issue #116: hooks fire with cwd = the consumer project, so handoff.md
+# Hooks fire with cwd = the consumer project, so handoff.md
 # stays cwd-relative; handoff-lib.sh moved to ../lib/ (sibling of hooks/).
 # shellcheck source=../lib/handoff-lib.sh
 source "$DIR/../lib/handoff-lib.sh"
@@ -18,7 +18,7 @@ source "$DIR/../lib/harness-root.sh"
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"')
 HANDOFF=".harness/handoff.md"
 
-# issue #125: a rate-limited session is PARKED, not idle -- record failsafe
+# A rate-limited session is PARKED, not idle -- record failsafe
 # ground truth (with this session's id for ownership) so the broker holds
 # delivery and auto-resume can later confirm it still owns the pane.
 # Best-effort: a resolution failure must never eat the handoff note below.

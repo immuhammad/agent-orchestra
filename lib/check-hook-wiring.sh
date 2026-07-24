@@ -1,17 +1,17 @@
 #!/bin/bash
-# lib/check-hook-wiring.sh -- issue #10/#31/#48: verifies the RUNNING
+# lib/check-hook-wiring.sh -- verifies the RUNNING
 # (gitignored, per-room) .claude/settings.json actually wires every hook
 # templates/settings.json (the tracked source of truth) says it should.
 #
-# issue #48: this used to check against a HARDCODED list of hooks the
+# This used to check against a HARDCODED list of hooks the
 # script's author knew about at the time it was written (quota-stop-gate,
 # guard, guard-write, room-branch-gate) -- any hook added to the template
-# AFTER that was invisible to it forever. Confirmed live: PR #45 (#33)
+# AFTER that was invisible to it forever. Confirmed live: a later change
 # wired three pane-state.sh hooks into the template; this doctor kept
 # passing a room missing all three, silently, because it never learned to
 # look for them. Two lists meant to stay in sync will drift -- this is the
-# project's own recurring lesson (see #10 itself: the same doctor pattern,
-# rotted unseen one ticket later). Fixed by deriving the expected hook set
+# project's own recurring lesson (the same doctor pattern rotted unseen
+# one ticket later). Fixed by deriving the expected hook set
 # from the template AT CHECK TIME instead of a list: every (event,
 # matcher, script) triple present in the template must also be present in
 # the live config with the SAME command; a hook added to the template is
@@ -26,7 +26,7 @@
 #
 # Exit 0: every template hook is wired live, unaltered (an extra live-only
 # hook is fine -- a room may legitimately layer extras, see .claude vs
-# templates precedent, issue #31 protection -- reported as a NOTE, not a
+# templates precedent -- reported as a NOTE, not a
 # failure). Exit 2 (LOUD -- stderr + explicit message per finding, never
 # silent): the live or template file is missing/malformed, OR any template
 # hook is missing or altered in the live config.
@@ -112,9 +112,8 @@ while IFS=$'\t' read -r t_event t_matcher t_cmd; do
   fi
 done <<< "$TEMPLATE_HOOKS"
 
-# Extra live-only hooks are informational, never a failure (issue #31
-# precedent: a room may legitimately layer hooks the template doesn't
-# ship).
+# Extra live-only hooks are informational, never a failure (a room may
+# legitimately layer hooks the template doesn't ship).
 while IFS=$'\t' read -r l_event l_matcher l_cmd; do
   [ -z "$l_event" ] && continue
   l_base="$(chw_basename "$l_cmd")"

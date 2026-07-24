@@ -1,5 +1,5 @@
 #!/bin/bash
-# lib/broker.sh — issue #125: the delivery layer of the file-inbox
+# lib/broker.sh — the delivery layer of the file-inbox
 # dispatch. Senders only ever write durable .msg files; THIS is the one
 # place (besides dispatch.sh's single at-send wake) that ever types into
 # another agent's pane, and every wake it sends is VERIFIED by the .ack
@@ -27,7 +27,7 @@ BROKER_PENDING_LIST="${BROKER_PENDING_LIST:-$BROKER_STATE_DIR/pending.list}"
 # room's real inboxes.
 BROKER_INBOX_ROOT="${BROKER_INBOX_ROOT:-$CANON_DIR/inbox}"
 
-# Config: orchestrator.yaml `dispatch:` block (issue #86 precedent: every
+# Config: orchestrator.yaml `dispatch:` block (precedent: every
 # key ships with this consumer). Env overrides win for tests.
 BROKER_WAKE_GRACE_S="${BROKER_WAKE_GRACE_S:-$(orc_get_nested dispatch wake_grace_s)}"
 BROKER_WAKE_GRACE_S="${BROKER_WAKE_GRACE_S:-10}"
@@ -100,7 +100,7 @@ broker_check() {
       pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
       # effective, not raw: a stale 'failsafe' whose quota flag already
       # lifted reads as idle here, so delivery resumes without needing
-      # the pane to somehow wake itself first (issue #125 follow-up).
+      # the pane to somehow wake itself first.
       [ -n "$pane_id" ] && state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '')"
     fi
     for m in "$inbox"/*.msg; do
@@ -134,7 +134,7 @@ broker_check() {
         continue  # a wake is in flight; give the .ack its deadline
       fi
       if [ "$attempts" -ge 2 ]; then
-        # issue #127: ONE FLAG per agent per pass, not one per stuck
+        # ONE FLAG per agent per pass, not one per stuck
         # message -- the FLAG names the first; the rest are visible in
         # the pending list.
         if [ "$agent_escalated" -eq 0 ]; then
@@ -147,7 +147,7 @@ broker_check() {
       if [ -z "$state" ] && [ "$agent_woke" -eq 0 ]; then
         # No hook ground truth (fallback for TUIs lacking hooks): only type into a
         # heuristically-idle pane -- the one place the screen heuristic
-        # legitimately survives (#125 audit: no hook-based replacement).
+        # legitimately survives (no hook-based replacement).
         # Skipped once woken this pass: the wake itself makes the pane
         # look busy to the heuristic.
         if [ -z "$target" ] || ! pane_is_idle "$target" "$agent"; then
@@ -155,7 +155,7 @@ broker_check() {
         fi
       fi
       if [ -n "$target" ]; then
-        # issue #127 (live-hit: 13 wakes typed into builder, one per
+        # (live-hit: 13 wakes typed into builder, one per
         # stale message): an agent is woken AT MOST ONCE per pass -- a
         # single 'check inbox' covers the WHOLE inbox -- but the shared
         # wake is stamped against EVERY pending message's attempt file,
@@ -184,7 +184,7 @@ broker_check() {
 # broker_states_summary -- one-line ground-truth readout for the watch
 # header: "orchestra:idle(resumed) builder:busy agy:?" ('?' = no hook
 # state). The parenthesized suffix
-# (issue #6 point 4: session lifecycle classification recorded in the
+# (session lifecycle classification recorded in the
 # pane's own state file so watch can render it) is appended ONLY when a
 # classification is on file for that pane -- most panes most of the time,
 # after a busy/idle transition or two, still show one (pane_state_write's
@@ -204,7 +204,7 @@ broker_states_summary() {
         state="$(pane_state_effective "$pane_id" 2>/dev/null || echo '?')"
         [ -z "$state" ] && state="?"
         classification="$(pane_state_classification "$pane_id" 2>/dev/null || echo '')"
-        # issue #134: a busy-age glance in the header, alongside the
+        # a busy-age glance in the header, alongside the
         # per-pane liveness check that flags a genuinely stuck one -- this
         # is the ambient always-on signal, the FLAG is the proactive one.
         if [ "$state" = "busy" ]; then

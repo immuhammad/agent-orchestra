@@ -10,7 +10,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./harness-root.sh
 source "$DIR/harness-root.sh"
-# #11 secondary gap (invisible death): a rate-limit-stuck Claude CLI never
+# secondary gap (invisible death): a rate-limit-stuck Claude CLI never
 # drops to a shell, so nothing else in this file's own heartbeat check
 # would ever notice it -- gatekeeper.sh is alive and well, it's one
 # Builder-type pane that's silently wedged. Detecting that needs a pane
@@ -20,7 +20,7 @@ source "$DIR/harness-root.sh"
 source "$DIR/send-lib.sh"
 # shellcheck source=./dispatch.sh
 source "$DIR/dispatch.sh"
-# issue #116: HEARTBEAT/LOG must resolve to the same place gatekeeper.sh
+# HEARTBEAT/LOG must resolve to the same place gatekeeper.sh
 # itself writes to (the caller's project root), not this script's own
 # directory -- nohup preserves cwd from `orc up`, so $PWD is still the
 # project root at the time this was launched. Resolved lazily/memoized,
@@ -44,7 +44,7 @@ CHECK_INTERVAL="${GATEKEEPER_LIVENESS_INTERVAL:-60}"
 # 2x that plus slack tolerates one slow iteration (e.g. a slow curl to the
 # usage endpoint) without a false-positive warning.
 STALE_AFTER="${GATEKEEPER_LIVENESS_STALE_AFTER:-660}"
-# issue #155: a wall-clock GAP between this watchdog's own ticks (system
+# a wall-clock GAP between this watchdog's own ticks (system
 # suspend, or the room/process itself just (re)started after downtime)
 # makes a HEALTHY gatekeeper.sh look dead -- this watchdog's own `sleep
 # $CHECK_INTERVAL` pauses across the exact same gap (confirmed live twice:
@@ -66,20 +66,20 @@ STALE_AFTER="${GATEKEEPER_LIVENESS_STALE_AFTER:-660}"
 GAP_THRESHOLD="${GATEKEEPER_LIVENESS_GAP_THRESHOLD:-$((CHECK_INTERVAL * 2))}"
 GAP_GRACE="${GATEKEEPER_LIVENESS_GAP_GRACE:-${GATEKEEPER_INTERVAL:-300}}"
 # PREV_TICK_EPOCH empty -> "no prior tick in this process" -> the very
-# first tick always counts as a gap (issue #155 incident 1: a fresh
+# first tick always counts as a gap (a fresh
 # process/room-rebuild can't tell how long it was actually down before this
 # tick, so its first reading alone is never trusted).
 PREV_TICK_EPOCH=""
 GAP_GRACE_UNTIL=""
-# issue #19 follow-up: used to hardcode "harness:0.0" -- reuse
+# used to hardcode "harness:0.0" -- reuse
 # $DISPATCH_SESSION (already derived above via dispatch.sh's own
-# orc_session_name-based resolution, issue #18 item 7/#19) instead of
+# orc_session_name-based resolution) instead of
 # re-deriving it, so this can't drift from dispatch.sh's own session
 # targeting and two clone-per-project rooms never collide here either.
 TARGET="${GATEKEEPER_LIVENESS_TARGET:-$DISPATCH_SESSION:0.0}"
 ALERTED=false
 
-# #11 secondary gap: which pane(s) to watch for "CLI alive but
+# secondary gap: which pane(s) to watch for "CLI alive but
 # rate-limit-stuck", and the two independent signals that detect it (see
 # gkl_check_rate_limit_stuck below). Builder (pane 0.1, per
 # lib/dispatch.sh's pane_for_agent) is the pane the confirmed overnight
@@ -97,7 +97,7 @@ HANDOFF_FILE="${GATEKEEPER_LIVENESS_HANDOFF_FILE:-$(_gkl_canon_dir)/handoff.md}"
 # expected "parked at the failsafe question" pane -- that case is already
 # fully handled by auto-resume.sh.
 #
-# issue #41: a bare `[Rr]ate.?limit` alternative here matched Anthropic's
+# a bare `[Rr]ate.?limit` alternative here matched Anthropic's
 # startup MOTD ("...keeping Claude Code's weekly rate limits 50% higher,
 # through July 19") on every freshly-started pane, firing a false
 # rate-limit-stuck alert on a completely idle, healthy session. Promotional
@@ -105,25 +105,25 @@ HANDOFF_FILE="${GATEKEEPER_LIVENESS_HANDOFF_FILE:-$(_gkl_canon_dir)/handoff.md}"
 # HIT ("5-hour limit reached" / "weekly limit reached") -- narrowed to that
 # shape so vendor-controlled marketing text can't trigger this again.
 RATELIMIT_BANNER_RE="${GATEKEEPER_LIVENESS_RATELIMIT_RE:-(5-hour|weekly) limit reached|usage limit reached|try again (later|in)}"
-# issue #41 layer 1b: the MOTD sits at the TOP of a fresh pane's visible
+# the MOTD sits at the TOP of a fresh pane's visible
 # screen; a real banner (if the CLI is actually stuck on one) sits at the
 # BOTTOM, right above the parked prompt. send_meaningful_tail's default of
 # 20 non-blank lines is wide enough to still catch the MOTD on a pane with
 # little else rendered yet -- narrowed so scanning is anchored at the tail,
 # not "anywhere visible".
 #
-# review round 2 (agy, PR #101 finding 1): an initial 5-line window was too
+# an initial 5-line window was too
 # narrow -- a real banner can sit behind a few CLI hint lines (e.g. a retry
 # prompt), pushing it past the window and producing a FALSE NEGATIVE on a
 # genuinely stuck pane, which is worse than the false positive this issue
 # started from. Widened to 10: still meaningfully bounded vs. the old
-# unbounded-in-practice 20-on-an-~18-row-pane default (#87) -- a banner
+# unbounded-in-practice 20-on-an-~18-row-pane default -- a banner
 # quoted deep in mid-scrollback conversation still falls outside it -- while
 # covering banner + several hint lines + the prompt. The usage-corroboration
 # layer below is the real backstop against a wide window catching stray
 # text; this number doesn't have to be exact.
 RATELIMIT_TAIL_LINES="${GATEKEEPER_LIVENESS_RATELIMIT_TAIL_LINES:-10}"
-# issue #41 layer 2: prefer real state over scraping. GATEKEEPER_SH is
+# prefer real state over scraping. GATEKEEPER_SH is
 # sourced in a SEPARATE subshell (gkl_usage_pcts below), never inline into
 # this process -- gatekeeper.sh defines its own CHECK_INTERVAL (the
 # unrelated 300s quota-poll cadence) which would silently clobber this
@@ -166,7 +166,7 @@ gkl_pane_in_set() {
   esac
 }
 
-# gkl_usage_pcts -- issue #41 corroboration signal. Runs
+# gkl_usage_pcts -- corroboration signal. Runs
 # get_claude_token/fetch_claude_usage (defined in gatekeeper.sh) in a
 # subprocess via `bash -c "source ...; ..."`, same idiom this test suite
 # already uses elsewhere to source gatekeeper.sh without its top-level vars
@@ -176,14 +176,14 @@ gkl_pane_in_set() {
 # missing). One fetch covers both -- callers must treat an empty half as
 # UNKNOWN for that quota class, not 0%.
 #
-# review round 2 (agy, PR #101 finding 2): checking five_hour alone wrongly
+# checking five_hour alone wrongly
 # suppressed a genuinely stuck pane hitting the WEEKLY (seven_day) limit --
 # that pane's five_hour reading can easily be low (e.g. 5%) even though it
 # is actually rate-limited. Both quota classes must be confirmed low before
 # treating a banner match as a false positive.
 gkl_usage_pcts() {
   [ -f "$GATEKEEPER_SH" ] || return 1
-  # review round 2 (claude cross-check, PR #101 finding B): gatekeeper.sh
+  # gatekeeper.sh
   # registers `trap gk_log_exit EXIT` unconditionally at source time, not
   # gated behind its own BASH_SOURCE guard -- sourcing it here without
   # disarming that trap fires it on THIS subshell's own exit, appending a
@@ -193,7 +193,7 @@ gkl_usage_pcts() {
   bash -c "source '$GATEKEEPER_SH' 2>/dev/null; trap - EXIT; json=\$(fetch_claude_usage 2>/dev/null) || exit 1; fh=\$(echo \"\$json\" | jq -r '.five_hour.utilization // empty' 2>/dev/null | cut -d. -f1); sd=\$(echo \"\$json\" | jq -r '.seven_day.utilization // empty' 2>/dev/null | cut -d. -f1); echo \"\$fh \$sd\""
 }
 
-# gkl_check_rate_limit_stuck -- #11 secondary gap. Two INDEPENDENT signals,
+# gkl_check_rate_limit_stuck -- secondary gap. Two INDEPENDENT signals,
 # either alone is sufficient (per Gate-1 plan):
 #   1. handoff.md gets a fresh "## RATE-LIMITED" section (written by
 #      hooks/rate-limit-handoff.sh on a real StopFailure/rate_limit hook
@@ -223,15 +223,14 @@ gkl_check_rate_limit_stuck() {
   for pane in $RATELIMIT_WATCH_PANES; do
     local tail_text
     tail_text="$(send_meaningful_tail "$pane" "$RATELIMIT_TAIL_LINES" 2>/dev/null)"
-    # review round 2 (claude cross-check, PR #101 finding A): a
-    # case-sensitive match missed real renderings like "Weekly limit
+    # a case-sensitive match missed real renderings like "Weekly limit
     # reached" or "Try again in 2 hours." (capitalized mid-sentence/at a
     # sentence start) -- -i so the specific phrase shape still has to
     # match, just regardless of case.
     if [ -n "$tail_text" ] && echo "$tail_text" | grep -Eiq "$RATELIMIT_BANNER_RE" \
       && ! echo "$tail_text" | tr -d '\n' | grep -Eq 'Quota .*Options: \(a\).*Pick one\.'; then
       if ! gkl_pane_in_set "$RATELIMIT_ALERTED_PANES" "$pane"; then
-        # issue #41 layer 2: only SUPPRESS on positive contrary evidence --
+        # only SUPPRESS on positive contrary evidence --
         # BOTH quota classes confirmed low. An unfetchable/unknown reading
         # (either half) is not evidence against a real banner, so this errs
         # toward alerting on doubt, same bias as pane_is_idle elsewhere in
@@ -261,13 +260,13 @@ gkl_check_rate_limit_stuck() {
 }
 
 # gkl_check_heartbeat_tick <now> -- one tick of the heartbeat-staleness
-# check, factored out of liveness_main's loop (issue #155) so it's callable
+# check, factored out of liveness_main's loop so it's callable
 # standalone (tests pass an explicit epoch instead of needing real sleeps).
 # Mutates the global PREV_TICK_EPOCH/GAP_GRACE_UNTIL/ALERTED state.
 gkl_check_heartbeat_tick() {
   local now="$1" last_raw="" age is_gap=false
 
-  # issue #155: detect a wall-clock GAP since this watchdog's own previous
+  # detect a wall-clock GAP since this watchdog's own previous
   # tick -- either this is the process's first tick ever (PREV_TICK_EPOCH
   # unset: a fresh start can't know how long it was actually down before
   # now, incident 1), or the elapsed time since the last tick vastly
@@ -313,7 +312,7 @@ gkl_check_heartbeat_tick() {
     return
   fi
 
-  # issue #155: stale, but if a gap was recently detected, withhold
+  # stale, but if a gap was recently detected, withhold
   # judgment until GAP_GRACE has actually elapsed -- gatekeeper.sh's own
   # paused sleep needs roughly its own loop period to catch back up (both
   # confirmed incidents self-healed inside this window).
@@ -324,13 +323,13 @@ gkl_check_heartbeat_tick() {
 
   if [ "$ALERTED" = false ]; then
     echo "$(date) - ALERT: gatekeeper heartbeat stale (${age}s, expected every ~${STALE_AFTER}s)" >> "$LOG"
-    # issue #24: this used to be a raw one-shot `send-keys` with text
+    # this used to be a raw one-shot `send-keys` with text
     # and C-m in the SAME burst -- exactly the pattern send-lib.sh's
     # send_submit() exists to prevent (Claude Code's TUI drops an
     # Enter that arrives in the same burst as pasted text), and it
     # was also keystroke-only with no durable copy, so a busy or dead
-    # pane lost the alert entirely (the #105 lesson, missed on this
-    # one path). dispatch_main assign orchestra (already used above
+    # pane lost the alert entirely (a lesson learned elsewhere but
+    # missed on this one path). dispatch_main assign orchestra (already used above
     # in gkl_check_rate_limit_stuck) gives both for free: a durable
     # .msg is the guarantee, the nudge is only the doorbell.
     dispatch_main assign orchestra "gatekeeper-stale-heartbeat" "gatekeeper watchdog: no heartbeat for ${age}s -- gatekeeper.sh may have died. Check pane 4." >/dev/null 2>&1

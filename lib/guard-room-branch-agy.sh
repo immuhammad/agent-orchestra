@@ -1,7 +1,7 @@
 #!/bin/bash
 # lib/guard-room-branch-agy.sh — PreToolUse gate for agy (Antigravity CLI),
 # wired via .agents/hooks.json. agy counterpart to
-# hooks/room-branch-gate.sh (issue #60 task E): a room-branch mismatch
+# hooks/room-branch-gate.sh: a room-branch mismatch
 # gates agy sessions too, not just Claude Code's. See that file's header
 # for the full reasoning (live per-call check, no persisted flag, shared
 # qsg park-honestly allow-list plus the restore-command escape hatch).

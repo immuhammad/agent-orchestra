@@ -12,10 +12,10 @@
 #   it in. If anything about that pane changed since parking -- Ahmad
 #   answered it, it crashed, it moved on some other way -- auto-resume backs
 #   off silently (well, loudly in the log) rather than guessing.
-# - issue #125: parked-detection and ownership read the pane's own
+# - Parked-detection and ownership read the pane's own
 #   hook-written state file (failsafe + session_id, lib/pane-state-lib.sh),
 #   NEVER the screen. The old role-split fingerprint/question-visible
-#   machinery (#73/#80) is gone; `role` stays in the state entry for
+#   machinery is gone; `role` stays in the state entry for
 #   logging/back-compat only.
 #
 # State machine per tracked pane (persisted in AUTO_RESUME_STATE_FILE so it
@@ -38,7 +38,7 @@ AR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "$AR_DIR/send-lib.sh"
 # shellcheck source=./harness-root.sh
 source "$AR_DIR/harness-root.sh"
-# issue #116: state defaults off the CALLER's project root (this script's
+# State defaults off the CALLER's project root (this script's
 # own dir is now agent-orchestra's shared lib/, not the consumer
 # project). Resolved lazily/memoized -- a caller pinning every *_FILE/LOG
 # var explicitly (tests) never needs orchestrator.yaml/ORC_PROJECT_ROOT.
@@ -56,15 +56,15 @@ _ar_canon_dir() {
 AR_STATE_FILE="${AUTO_RESUME_STATE_FILE:-$(_ar_canon_dir)/auto-resume-state.json}"
 AR_MAX_PER_DAY="${AUTO_RESUME_MAX_PER_DAY:-2}"
 AR_LOG="${AUTO_RESUME_LOG:-$(_ar_canon_dir)/budget.log}"
-# #11 belt-and-braces: even once the window has time-reset, only resume
+# Belt-and-braces: even once the window has time-reset, only resume
 # into quota we've confirmed is actually available.
 AR_RESUME_USAGE_CEILING="${AUTO_RESUME_USAGE_CEILING:-50}"
-# #10: single source of truth for the quota-stop PreToolUse gate's flag
+# Single source of truth for the quota-stop PreToolUse gate's flag
 # path -- gatekeeper.sh (writer), this file (auto-clear on real reset), and
 # hooks/quota-stop-gate.sh / lib/guard-quota-stop-agy.sh (readers) must
 # never resolve this independently or they can drift apart.
 AR_QUOTA_STOP_FLAG="${AUTO_RESUME_QUOTA_STOP_FLAG:-$(_ar_canon_dir)/state/quota-stop}"
-# issue #125: ground-truth pane state (busy|idle|failsafe + session_id),
+# Ground-truth pane state (busy|idle|failsafe + session_id),
 # written by each pane's own hooks -- replaces every screen-scrape this
 # file used to do (AR_PARK_MARKER question-spotting, fingerprint
 # ownership). gatekeeper-liveness.sh keeps its own inline copy of the
@@ -87,7 +87,7 @@ ar_now_epoch() { echo "${AUTO_RESUME_NOW_EPOCH:-$(date -u +%s)}"; }
 # fractional seconds AND a numeric offset (2026-07-12T20:39:59.719039+00:00)
 # -- BSD `date -j -f` cannot be handed either of those (its format string
 # would need to match exactly, and a literal "Z" doesn't match "+00:00"),
-# and GNU `date -d` isn't available on darwin at all. #32: this one function
+# and GNU `date -d` isn't available on darwin at all. This one function
 # is the ONLY resets_at parser in this codebase (both ar_write_quota_stop_flag
 # and ar_poll_pane's resume comparison call it) -- there is no second,
 # "working" parse path to collapse into it.
@@ -135,10 +135,10 @@ ar_epoch_from_iso8601() {
   return 0
 }
 
-# issue #125: park detection and ownership moved OFF screen-scrapes onto
+# Park detection and ownership moved OFF screen-scrapes onto
 # the hook-written pane state file. The machinery this replaces -- tail
-# fingerprint hashing (#80's ar_fingerprint/ar_normalize) and the
-# question-visible re-check (#73's ar_still_at_failsafe_question) -- was
+# fingerprint hashing (ar_fingerprint/ar_normalize) and the
+# question-visible re-check (ar_still_at_failsafe_question) -- was
 # assumptions derived from rendered text; the state file is written by
 # the parked session's own hooks at the moment it parks, and session_id
 # gives ownership an identity comparison instead of a screen hash.
@@ -158,7 +158,7 @@ ar_pane_session() {
   pane_state_session "$pid" 2>/dev/null
 }
 
-# #80: hash a NORMALIZED view of the tail, not the raw bytes. Claude Code's
+# Hash a NORMALIZED view of the tail, not the raw bytes. Claude Code's
 # TUI repaints volatile chrome (context/token counters, timers, "esc to
 # interrupt") even when the human never touched the pane -- that changed the
 # raw fingerprint and got a still-blocked parked pane dropped before it could
@@ -178,7 +178,7 @@ ar_pane_session() {
 # in the pane. A human answering flips the state to busy (drops
 # ownership); a restarted session writes a NEW session_id at SessionStart
 # (drops ownership) -- both fail toward "do not inject", the same posture
-# as the old fingerprint test, with no screen read anywhere (issue #125).
+# as the old fingerprint test, with no screen read anywhere.
 ar_pane_still_owned() { # $1 = pane, $2 = stored session_id
   local pane="$1" stored_sid="$2" state sid
   state="$(ar_pane_state "$pane")" || return 1
@@ -243,14 +243,14 @@ ar_mark_pending() { # $1 = pane target, $2 = role ("driver" for the Orchestra pa
 # of current usage% (the reset that matters happens AFTER usage has already
 # dropped back down, so this must not be gated on still being over
 # threshold).
-ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = current 5h usage_pct (belt-and-braces, #11)
+ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = current 5h usage_pct (belt-and-braces)
   local pane="$1" current_resets_at="$2" usage_pct="${3:-}"
   local state
   state="$(ar_read --arg p "$pane" '.panes[$p].state // empty')"
   [ -z "$state" ] && return 0
 
   if [ "$state" = "pending" ]; then
-    # issue #125: parked the moment the pane's OWN hooks report failsafe
+    # Parked the moment the pane's OWN hooks report failsafe
     # (its Stop fired while the quota-stop flag was up, or a rate_limit
     # StopFailure hit) -- no screen-scrape, no question-spotting.
     if [ "$(ar_pane_state "$pane" || echo '')" = "failsafe" ]; then
@@ -275,7 +275,7 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
       return 0
     fi
 
-    # #11: trigger is a TIME comparison against the resets_at we recorded
+    # Trigger is a TIME comparison against the resets_at we recorded
     # AT PARKING TIME, never a string inequality against the freshest
     # poll's resets_at. A rolling 5h window's resets_at drifts continuously
     # as usage moves through it -- comparing strings meant a few minutes of
@@ -302,7 +302,7 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
         return 0
       fi
 
-      # Belt-and-braces (#11): only resume into quota we've confirmed is
+      # Belt-and-braces: only resume into quota we've confirmed is
       # actually available. An unreadable/missing usage_pct fails SAFE (not
       # resumed) rather than guessing -- same "never guess" posture as the
       # epoch parse above. Tracking is deliberately KEPT (not dropped) so
@@ -317,12 +317,12 @@ ar_poll_pane() { # $1 = pane target, $2 = current five_hour resets_at, $3 = curr
       local remaining
       remaining="$(ar_budget_remaining)"
       if [ "$remaining" -gt 0 ]; then
-        # #80/#81/#86: submit via the shared send_submit (send-lib.sh) --
+        # Submit via the shared send_submit (send-lib.sh) --
         # text and Enter as separate key events with a beat, a wrap-safe
         # confirm, and clear-and-retype on a still-stuck input.
         send_submit "$pane" "Quota window reset (5h) -- auto-resuming per AGENTS.md T20 budgeted auto-resume ($(( AR_MAX_PER_DAY - remaining + 1 ))/${AR_MAX_PER_DAY} today). Continuing (option c)."
         ar_write '.budget.count += 1'
-        # issue #125: verify delivery by ground truth -- the resumed
+        # Verify delivery by ground truth -- the resumed
         # session's first hook write flips failsafe -> busy -- instead of
         # re-reading the screen. Bounded so the gatekeeper loop never
         # stalls long on an unresponsive pane; AUTO_RESUME_VERIFY_S=0
@@ -358,7 +358,7 @@ ar_poll_all() { # $1 = current five_hour resets_at, $2 = current 5h usage_pct
   done < <(ar_read '.panes | keys[]')
 }
 
-# --- #10: quota-stop PreToolUse gate flag -----------------------------
+# --- quota-stop PreToolUse gate flag -----------------------------
 # gatekeeper.sh (writer) and the quota-stop-gate hooks (readers) share
 # AR_QUOTA_STOP_FLAG above as the single path. This file only ever WRITES
 # via ar_write_quota_stop_flag and CLEARS via
@@ -369,7 +369,7 @@ ar_poll_all() { # $1 = current five_hour resets_at, $2 = current 5h usage_pct
 # fill-in). resets_at is OPTIONAL and, when given, is converted to an
 # epoch up front and stored as resets_at_epoch -- this is what lets
 # ar_clear_quota_stop_flag_if_reset auto-lift the gate on a genuine
-# time-based window reset (the #11<->#10 seam) without re-parsing anything
+# time-based window reset without re-parsing anything
 # later or depending on any pane being tracked. Gate-1 only calls this with
 # a resets_at for the "5h" pool: weekly crossings never auto-anything per
 # existing policy (see file header), and "both" needs a human regardless
@@ -393,8 +393,7 @@ ar_write_quota_stop_flag() {
   # -- a bare `mktemp` defaults to $TMPDIR, which can be a different
   # mount than AR_QUOTA_STOP_FLAG's own directory, silently downgrading
   # `mv` to a non-atomic copy+delete (same class of bug as the heartbeat
-  # write Ahmad caught live -- fixed here too while touching this code
-  # for the #10-rework). `mktemp "${AR_QUOTA_STOP_FLAG}.XXXXXX"` creates
+  # write Ahmad caught live -- fixed here too while touching this code). `mktemp "${AR_QUOTA_STOP_FLAG}.XXXXXX"` creates
   # the temp file IN THE SAME DIRECTORY, guaranteeing a same-filesystem
   # `mv` a concurrent reader (the PreToolUse hooks) can never observe
   # partially-written.
@@ -407,20 +406,19 @@ ar_write_quota_stop_flag() {
   ar_log "quota-stop flag written (pool=$pool pct=$pct fallback=$fallback)"
 }
 
-# ar_clear_quota_stop_flag_if_reset [current weekly usage_pct] -- the
-# #11<->#10 seam: lifts the PreToolUse gate ONLY once the window that
+# ar_clear_quota_stop_flag_if_reset [current weekly usage_pct] -- lifts
+# the PreToolUse gate ONLY once the window that
 # triggered it has genuinely time-reset (epoch comparison against
 # resets_at_epoch captured when the flag was written), never a
 # usage-percentage heuristic -- dropping below some % mid-window is not
 # the same as the window actually rolling over, and clearing on that
-# would reopen the exact drift bug #11 exists to fix. A flag with no
+# would reopen the exact drift bug this guards against. A flag with no
 # resets_at_epoch at all (a pure "weekly" crossing has none, see
 # ar_write_quota_stop_flag) is left alone here; only
 # lib/quota-stop-clear.sh's explicit manual clear lifts it. Call once per
 # gatekeeper iteration, unconditionally (same posture as ar_poll_all).
 #
-# "both" is a special case (#10-rework finding 5, agy's dedicated
-# security review): it DOES carry a resets_at_epoch (the 5h reset time,
+# "both" is a special case: it DOES carry a resets_at_epoch (the 5h reset time,
 # since gatekeeper.sh now passes it), but agy's own pool has no comparable
 # epoch this codebase can read -- once the 5h portion resets, this can't
 # tell whether agy is ALSO clear. Rather than either fully clearing (would

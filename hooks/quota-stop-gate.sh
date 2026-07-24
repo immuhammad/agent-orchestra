@@ -1,5 +1,5 @@
 #!/bin/bash
-# hooks/quota-stop-gate.sh — PreToolUse gate (issue #10). Makes the
+# hooks/quota-stop-gate.sh — PreToolUse gate. Makes the
 # AGENTS.md Quota Failsafe an actual gate instead of a request: while
 # gatekeeper.sh's quota-stop flag (lib/auto-resume.sh's
 # AR_QUOTA_STOP_FLAG, see ar_write_quota_stop_flag) exists, every tool
@@ -48,7 +48,7 @@ case "$TOOL_NAME" in
     fi
     ;;
   Read)
-    # #40: a gated agent must be able to READ the state it's ordered to
+    # A gated agent must be able to READ the state it's ordered to
     # act on (handoff.md, decisions.log, the inbox, the flag itself) --
     # without this, "update handoff.md" is an order the agent has no way
     # to obey (see qsg_read_allowed's header for the live deadlock this

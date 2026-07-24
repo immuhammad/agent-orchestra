@@ -1,5 +1,5 @@
 #!/bin/bash
-# lib/quota-stop-lib.sh — shared allow-list/message logic for issue #10's
+# lib/quota-stop-lib.sh — shared allow-list/message logic for the
 # quota-stop PreToolUse gate. Sourced by BOTH hooks/quota-stop-gate.sh
 # (Claude Code's exit-code protocol, wired via .claude/settings.json) and
 # lib/guard-quota-stop-agy.sh (agy's JSON-decision protocol, wired via
@@ -16,7 +16,7 @@ source "$_QSG_LIB_DIR/harness-root.sh"
 source "$_QSG_LIB_DIR/cmd-inspect-lib.sh"
 
 # qsg_resolve_canon_dir -- fail-CLOSED project-root resolution (finding 3,
-# agy's dedicated security review of PR #17's rework request). The
+# agy's dedicated security review). The
 # original version of the two hooks called harness_canonical_dir "$PWD"
 # alone and failed OPEN (allowed the tool) if that came back empty -- an
 # agent could `cd /tmp` (or anywhere with no discoverable
@@ -50,7 +50,7 @@ qsg_resolve_canon_dir() {
 }
 
 # qsg_lexical_normalize <path> -- thin alias for lib/cmd-inspect-lib.sh's
-# orc_lexical_normalize (#39: moved there so guard.sh's resolved
+# orc_lexical_normalize (moved there so guard.sh's resolved
 # write-target check can reuse the exact same traversal-safe
 # normalization instead of a second copy). Kept under its original name
 # since qsg_path_allowed/qsg_read_allowed/_qsg_normalize_target below
@@ -62,8 +62,8 @@ qsg_lexical_normalize() {
 # _qsg_normalize_target <file_path> -- resolves file_path to an absolute
 # path (relative to $PWD if not already absolute) and lexically normalizes
 # it. Shared by every path-allow-list function below so there is exactly
-# ONE normalize+anchor implementation for both read and write checks (#40
-# -- do not fork a second copy of this logic).
+# ONE normalize+anchor implementation for both read and write checks
+# (do not fork a second copy of this logic).
 _qsg_normalize_target() {
   local file_path="$1" resolved
   [ -z "$file_path" ] && return 1
@@ -101,7 +101,7 @@ qsg_path_allowed() {
   esac
 }
 
-# qsg_read_allowed <file_path> <canon_dir> -- (#40) the ONLY Read targets a
+# qsg_read_allowed <file_path> <canon_dir> -- the ONLY Read targets a
 # gated session may still touch. Before this, qsg_path_allowed's coverage
 # was Write/Edit only -- a gated agent was ordered by the failsafe message
 # to "update handoff.md" while unable to READ handoff.md, decisions.log,
@@ -131,10 +131,10 @@ QSG_REJECT_SENTINEL="__QSG_REJECT__"
 
 # qsg_split_top_level <command string> -- echoes one shell "segment" per
 # line, splitting on UNQUOTED ; && || |, via lib/cmd-inspect-lib.sh's
-# shared orc_split_top_level_segments (#39: this used to be its own
+# shared orc_split_top_level_segments (this used to be its own
 # hand-rolled character scan; guard.sh needed the SAME quote-aware
 # splitting for its resolved-write-target check, and a second copy here is
-# exactly the kind of drift #39's root cause warns about -- one scanner,
+# exactly the kind of drift that root cause warns about -- one scanner,
 # two callers). This matters concretely here -- lib/log-decision.sh's own
 # documented argument shape is a single pipe-delimited string
 # ("role|model|decision"), and a naive separator-split (guard.sh's own
@@ -150,8 +150,8 @@ QSG_REJECT_SENTINEL="__QSG_REJECT__"
 # segment has an UNQUOTED `<` or `>` anywhere -- a redirection target is
 # not part of an allow-listed command's own arguments; letting `bash
 # lib/dispatch.sh ... > /etc/passwd` pass the allow-list as "one matching
-# segment" was a real bypass (finding 1, agy's dedicated security review
-# of PR #17's rework request) -- the segment split alone doesn't stop the
+# segment" was a real bypass (finding 1, agy's dedicated security
+# review) -- the segment split alone doesn't stop the
 # shell from still honoring the redirection. Quote-aware for the SAME
 # reason the separator split is: a report-back message legitimately
 # containing a literal "<" or ">" inside quotes (e.g. "usage < 50%") must
@@ -195,7 +195,7 @@ qsg_split_top_level() {
 # review). Every remaining UNQUOTED top-level segment must independently
 # match the allow-list, anchored at the segment's start.
 #
-# agy REQUEST-CHANGES on PR #17: the per-segment check USED to be a glob
+# agy's REQUEST-CHANGES review: the per-segment check USED to be a glob
 # like `*/lib/dispatch.sh\ *` -- the leading `*` matches ANY prefix, so
 # `bash /tmp/evil.sh /path/to/lib/dispatch.sh assign orchestra x DONE`
 # satisfied it (the string CONTAINS "/lib/dispatch.sh ") even though bash

@@ -5,7 +5,7 @@ CHECK_INTERVAL="${GATEKEEPER_INTERVAL:-300}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./harness-root.sh
 source "$DIR/harness-root.sh"
-# issue #116: state files default off the CALLER's project root, not this
+# state files default off the CALLER's project root, not this
 # script's own directory (these scripts now live in agent-orchestra's
 # lib/, separate from any consumer project). Resolved LAZILY (only if at
 # least one of the specific *_FILE overrides below is unset) and memoized
@@ -57,7 +57,7 @@ source "$DIR/auto-resume.sh"
 # board below. Colors and clearing auto-disable outside a tty, so this
 # never changes what a redirected/piped invocation (tests, logs) prints.
 source "$DIR/tui-lib.sh"
-# issue #60 task D: room-branch-lib.sh (task B) backs the ROOM dashboard
+# room-branch-lib.sh backs the ROOM dashboard
 # section + once-per-crossing alert below.
 source "$DIR/room-branch-lib.sh"
 GATEKEEPER_STALE_AFTER="${GATEKEEPER_LIVENESS_STALE_AFTER:-660}"
@@ -75,9 +75,9 @@ source "$DIR/dispatch.sh"
 # thresholds reads as a genuine user prompt, which is a safety bug, not just
 # noise (confirmed live during testing).
 #
-# issue #19 follow-up: used to hardcode "harness" -- reuse $DISPATCH_SESSION
+# used to hardcode "harness" -- reuse $DISPATCH_SESSION
 # (already derived above via dispatch.sh's own orc_session_name-based
-# resolution, issue #18 item 7/#19) instead of re-deriving it, so this can't
+# resolution) instead of re-deriving it, so this can't
 # drift from dispatch.sh's own session targeting and two clone-per-project
 # rooms never collide here either.
 NOTIFY_SESSION="${GATEKEEPER_NOTIFY_SESSION:-$DISPATCH_SESSION}"
@@ -118,7 +118,7 @@ gk_clear_alerted() {
   gk_alert_write --arg p "$1" '.[$p] = {alerted: false}'
 }
 
-# gk_check_room_branch -- issue #60 task D: sets the ROOM_BRANCH_STATE /
+# gk_check_room_branch -- sets the ROOM_BRANCH_STATE /
 # ROOM_BRANCH_HEAD globals gatekeeper_render reads, and fires (at most) one
 # durable orchestra alert per mismatch CROSSING -- reuses the same
 # gk_is_alerted/gk_mark_alerted persisted-state pattern the quota pools
@@ -154,7 +154,7 @@ gk_check_room_branch() {
 GK_VOICE="${GATEKEEPER_VOICE:-$(orc_get_scalar voice)}"
 GK_VOICE="${GK_VOICE:-off}"
 
-# issue #86: threshold now READ from orchestrator.yaml's
+# threshold now READ from orchestrator.yaml's
 # budgets.<pool>.failsafe_pct (previously a hardcoded literal -- the yaml
 # key was entirely decorative; Ahmad set it and it had zero effect). Falls
 # back to 80 (the prior hardcoded value) so a room with no budgets: block
@@ -167,7 +167,7 @@ GK_VOICE="${GK_VOICE:-off}"
 # Value computation only here -- no I/O. Sourcing this file (tests that
 # just want e.g. NOTIFY_SESSION's default, or gatekeeper-liveness.sh's
 # gkl_usage_pcts sourcing it in a subshell just for fetch_claude_usage)
-# must stay side-effect-free, same lesson as issue #41 finding B's EXIT-
+# must stay side-effect-free, same lesson as the EXIT-
 # trap leak -- the loud warning itself (to budget.log AND stderr) is
 # deferred to gatekeeper_main below, which only actually runs when this
 # script is EXECUTED, not merely sourced (see the BASH_SOURCE guard at the
@@ -234,7 +234,7 @@ fetch_claude_usage() {
 
 # gatekeeper_render -- clears the pane and redraws a compact 6-line fixed
 # frame: header (time + thresholds), then one labeled line each for
-# QUOTA/HB/RESUME/ALERT/ROOM, no blank spacers (issue #120: the old
+# QUOTA/HB/RESUME/ALERT/ROOM, no blank spacers (the old
 # blank-separated multi-line board was 17 lines tall -- taller than the
 # monitor strip, so QUOTA -- the most important line -- scrolled off
 # screen). Display-layer only -- reads USAGE_PCT/WEEKLY_PCT/AGY_PCT/
@@ -324,7 +324,7 @@ while true; do
       gk_say "Both quota pools exhausted"
       gk_mark_alerted claude_5h; gk_mark_alerted agy
       ar_mark_pending "$NOTIFY_SESSION:0.0" "driver"
-      # #10 (rework finding 5): carry the 5h resets_at even for "both" --
+      # carry the 5h resets_at even for "both" --
       # agy's pool still has no epoch to auto-clear against, so this alone
       # can't fully lift the gate, but ar_clear_quota_stop_flag_if_reset
       # uses it to DOWNGRADE both -> weekly once the 5h window resets,
@@ -341,7 +341,7 @@ while true; do
       gk_say "Claude quota threshold"
       gk_mark_alerted claude_5h
       ar_mark_pending "$NOTIFY_SESSION:0.0" "driver"
-      # #10: 5h is the one pool with a resets_at we can epoch-compare, so
+      # 5h is the one pool with a resets_at we can epoch-compare, so
       # this flag auto-clears on the real window reset (see
       # ar_clear_quota_stop_flag_if_reset, called below every iteration).
       ar_write_quota_stop_flag "5h" "$USAGE_PCT" "agy" "$FIVE_HOUR_RESETS_AT"
@@ -361,7 +361,7 @@ while true; do
     gk_alert_orchestra "quota-weekly" "quota Claude WEEKLY at ${WEEKLY_PCT}% — follow AGENTS.md failsafe (pool: weekly)."
     gk_say "Claude weekly quota threshold"
     gk_mark_alerted claude_weekly
-    # #10: weekly never auto-clears (same "always stop for Ahmad, no
+    # weekly never auto-clears (same "always stop for Ahmad, no
     # exceptions" policy as auto-resume.sh's own header comment) -- stays
     # gated until the manual clear (lib/quota-stop-clear.sh).
     ar_write_quota_stop_flag "weekly" "$WEEKLY_PCT" "none"
@@ -375,9 +375,10 @@ while true; do
   # for it.
   ar_poll_all "$FIVE_HOUR_RESETS_AT" "$USAGE_PCT"
 
-  # #10: lift the quota-stop PreToolUse gate on a genuine time-based window
+  # lift the quota-stop PreToolUse gate on a genuine time-based window
   # reset -- unconditional every iteration, independent of whether any pane
-  # is currently tracked (the #11<->#10 seam). WEEKLY_PCT is passed so a
+  # is currently tracked (the seam between the two related quota-gate
+  # mechanisms). WEEKLY_PCT is passed so a
   # "both" -> "weekly" downgrade (finding 5) shows the CURRENT weekly%,
   # not whatever stale 5h% the "both" flag happened to be written with.
   ar_clear_quota_stop_flag_if_reset "$WEEKLY_PCT"

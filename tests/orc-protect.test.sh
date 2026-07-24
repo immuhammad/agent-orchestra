@@ -1,6 +1,6 @@
 #!/bin/bash
-# tests/orc-protect.test.sh — TDD tests for bin/orc-protect (issue #142,
-# guard-layer redesign #141 layer 1). Run: bash tests/orc-protect.test.sh
+# tests/orc-protect.test.sh — TDD tests for bin/orc-protect
+# (guard-layer redesign layer 1). Run: bash tests/orc-protect.test.sh
 #
 # Enforcement cases need the OS immutability privilege: always present on
 # macOS (chflags uchg is owner-settable), absent for unprivileged Linux

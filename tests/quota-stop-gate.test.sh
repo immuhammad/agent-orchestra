@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/quota-stop-gate.test.sh — tests for issue #10's quota-stop
+# tests/quota-stop-gate.test.sh — tests for the quota-stop
 # PreToolUse gate: hooks/quota-stop-gate.sh (Claude Code dialect) and
 # lib/guard-quota-stop-agy.sh (agy dialect), both built on the shared
 # lib/quota-stop-lib.sh allow-list, plus lib/quota-stop-clear.sh's manual
@@ -22,7 +22,7 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 echo "project: test" > "$TMP/orchestrator.yaml"
 FLAG="$TMP/.harness/state/quota-stop"
-# agy REQUEST-CHANGES (PR #17): qsg_command_allowed now resolves the
+# agy REQUEST-CHANGES: qsg_command_allowed now resolves the
 # actual executable token to a REAL canonicalized path (not a string
 # glob), so the three allow-listed scripts need to genuinely exist under
 # $TMP for a legitimate invocation to resolve successfully.
@@ -78,14 +78,14 @@ else
   fail "expected the verbatim failsafe question in stderr, got: $GATE_OUT"
 fi
 if echo "$GATE_OUT" | grep -qF "quota-stop-clear.sh"; then
-  pass "#40: blocked message names lib/quota-stop-clear.sh instead of leaving 'resolve this' unstated"
+  pass "blocked message names lib/quota-stop-clear.sh instead of leaving 'resolve this' unstated"
 else
-  fail "#40: expected the blocked message to point at lib/quota-stop-clear.sh, got: $GATE_OUT"
+  fail "expected the blocked message to point at lib/quota-stop-clear.sh, got: $GATE_OUT"
 fi
 if echo "$GATE_OUT" | grep -qF "human-directed"; then
-  pass "#40: blocked message makes clear the flag clear is human-directed, not something the agent infers alone"
+  pass "blocked message makes clear the flag clear is human-directed, not something the agent infers alone"
 else
-  fail "#40: expected the blocked message to say clearing is human-directed, got: $GATE_OUT"
+  fail "expected the blocked message to say clearing is human-directed, got: $GATE_OUT"
 fi
 
 echo "== Claude Code dialect: allow-listed Write targets pass even while gated =="
@@ -112,7 +112,7 @@ run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/log-decis
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra 11-10 DONE"}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "dispatch.sh invocation (report-back), a DIRECT local invocation, allowed while gated" || fail "dispatch.sh should be allowed while gated, got $GATE_STATUS"
 
-echo "== issue #18 B1: the orc-exec.sh trampoline is gone -- a trampoline-prefixed invocation is no longer specially unwrapped =="
+echo "== the orc-exec.sh trampoline is gone -- a trampoline-prefixed invocation is no longer specially unwrapped =="
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash .harness/orc-exec.sh lib/dispatch.sh assign orchestra 11-10 DONE"}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "an orc-exec.sh-prefixed invocation is blocked -- the allow-list matches DIRECT invocations only, no trampoline unwrapping" || fail "expected the dead trampoline prefix to no longer bypass the allow-list, got $GATE_STATUS: $GATE_OUT"
 
@@ -123,23 +123,23 @@ echo "== Claude Code dialect: a NON-allow-listed Read is still blocked while gat
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":"README.md"}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "Read of an unrelated file blocked while gated (deny-by-default, allow only the fixed list)" || fail "unrelated Read should be blocked while gated, got $GATE_STATUS"
 
-echo "== #40: allow-listed Reads pass even while gated -- a gated agent must be able to see the state it's told to act on =="
+echo "== allow-listed Reads pass even while gated -- a gated agent must be able to see the state it's told to act on =="
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/handoff.md"}}'
-[ "$GATE_STATUS" -eq 0 ] && pass "Read of handoff.md allowed while gated" || fail "#40: Read of handoff.md should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of handoff.md allowed while gated" || fail "Read of handoff.md should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
 
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/decisions.log"}}'
-[ "$GATE_STATUS" -eq 0 ] && pass "Read of decisions.log allowed while gated" || fail "#40: Read of decisions.log should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of decisions.log allowed while gated" || fail "Read of decisions.log should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
 
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/inbox/orchestra/20260711-99.msg"}}'
-[ "$GATE_STATUS" -eq 0 ] && pass "Read of an inbox .msg allowed while gated" || fail "#40: Read of inbox .msg should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of an inbox .msg allowed while gated" || fail "Read of inbox .msg should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
 
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/inbox/builder/20260711-99.ack"}}'
-[ "$GATE_STATUS" -eq 0 ] && pass "Read of an inbox .ack allowed while gated" || fail "#40: Read of inbox .ack should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of an inbox .ack allowed while gated" || fail "Read of inbox .ack should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
 
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/state/quota-stop"}}'
-[ "$GATE_STATUS" -eq 0 ] && pass "Read of the quota-stop flag itself allowed while gated (the agent can see what's blocking it)" || fail "#40: Read of the flag should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+[ "$GATE_STATUS" -eq 0 ] && pass "Read of the quota-stop flag itself allowed while gated (the agent can see what's blocking it)" || fail "Read of the flag should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
 
-echo "== #40: the Read allow-list is anchored to the project's canon dir, not any matching basename =="
+echo "== the Read allow-list is anchored to the project's canon dir, not any matching basename =="
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "Read of /etc/passwd is refused while gated" || fail "SECURITY: Read of /etc/passwd should be refused while gated, got $GATE_STATUS: $GATE_OUT"
 
@@ -148,7 +148,7 @@ run_claude_gate "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$OUTSID
 [ "$GATE_STATUS" -eq 2 ] && pass "Read of a handoff.md OUTSIDE this project's canon dir is still refused while gated" || fail "SECURITY REGRESSION: Read path allow-list not scoped to canon dir, got $GATE_STATUS: $GATE_OUT"
 rm -rf "$OUTSIDE_RO"
 
-echo "== #40: the Read allow-list survives a .. traversal attempt =="
+echo "== the Read allow-list survives a .. traversal attempt =="
 run_claude_gate '{"tool_name":"Read","tool_input":{"file_path":".harness/inbox/builder/../../../../etc/passwd"}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "Read with a .. traversal that string-glob-matches the inbox pattern is still refused" || fail "SECURITY REGRESSION: Read traversal bypass allowed, got $GATE_STATUS: $GATE_OUT"
 
@@ -165,7 +165,7 @@ run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x \"$(rm -rf /Users/mac/important)\""}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "command substitution inside an otherwise-matching call is blocked" || fail "SECURITY REGRESSION: command substitution bypass allowed, got $GATE_STATUS: $GATE_OUT"
 
-echo "== agy REQUEST-CHANGES (PR #17): a leading-* glob smuggle -- \$(evil script) \$(allowlisted path as an ARGUMENT) -- must be blocked =="
+echo "== agy REQUEST-CHANGES: a leading-* glob smuggle -- \$(evil script) \$(allowlisted path as an ARGUMENT) -- must be blocked =="
 # lib/dispatch.sh|*/lib/dispatch.sh\ * (etc.) used to match ANY string
 # CONTAINING that substring -- the leading `*` consumes an arbitrary
 # prefix, so `bash /tmp/evil.sh /path/to/lib/dispatch.sh assign ...`
@@ -188,7 +188,7 @@ run_claude_gate "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$OUTSI
 [ "$GATE_STATUS" -eq 2 ] && pass "a handoff.md OUTSIDE this project's canon dir is still blocked while gated" || fail "SECURITY REGRESSION: path allow-list not scoped to canon dir, got $GATE_STATUS: $GATE_OUT"
 rm -f "$OUTSIDE/handoff.md" 2>/dev/null
 
-echo "== regression (agy PR#17 rework, finding 1): a redirection cannot smuggle a write to an arbitrary file =="
+echo "== regression (agy rework, finding 1): a redirection cannot smuggle a write to an arbitrary file =="
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x DONE > /tmp/quota-stop-gate-poc-redirect"}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "an allow-listed call with a trailing > redirection is blocked, not allowed through" || fail "SECURITY REGRESSION (finding 1): redirection bypass allowed, got $GATE_STATUS: $GATE_OUT"
 
@@ -198,7 +198,7 @@ run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"bash lib/dispatch.sh assign orchestra x \"message with < and > as literal text\""}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "a QUOTED literal < or > inside an argument is not mistaken for a redirection" || fail "over-strict: quoted </> inside an argument got blocked, $GATE_STATUS: $GATE_OUT"
 
-echo "== regression (agy PR#17 rework, finding 2): the path allow-list survives a .. traversal attempt, not just a bare cross-project path =="
+echo "== regression (agy rework, finding 2): the path allow-list survives a .. traversal attempt, not just a bare cross-project path =="
 run_claude_gate '{"tool_name":"Write","tool_input":{"file_path":".harness/inbox/builder/../../../../etc/quota-stop-gate-poc-traversal.msg"}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "a Write with a .. traversal that string-glob-matches the inbox pattern is still blocked" || fail "SECURITY REGRESSION (finding 2): path traversal bypass allowed, got $GATE_STATUS: $GATE_OUT"
 
@@ -210,14 +210,14 @@ rm -f "$FLAG"
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "gate re-opened once the flag is cleared" || fail "gate should re-open once the flag is cleared, got $GATE_STATUS"
 
-echo "== regression (agy PR#17 rework, finding 3): unresolvable project root fails CLOSED, not open =="
+echo "== regression (agy rework, finding 3): unresolvable project root fails CLOSED, not open =="
 NOROOT="$(mktemp -d)"
 OUT="$(cd "$NOROOT" && env -u CLAUDE_PROJECT_DIR bash -c 'echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la\"}}" | bash "'"$CLAUDE_GATE"'"' 2>&1)"
 STATUS=$?
 [ "$STATUS" -eq 2 ] && pass "no orchestrator.yaml findable and no CLAUDE_PROJECT_DIR -> fails CLOSED (blocked)" || fail "SECURITY REGRESSION (finding 3): expected fail-closed (exit 2) with no resolvable project root, got $STATUS: $OUT"
 echo "$OUT" | grep -qi "failing closed" && pass "fail-closed message is diagnosable (says why), not a silent brick" || fail "expected a diagnosable 'failing closed' message, got: $OUT"
 
-echo "== regression (agy PR#17 rework, finding 3): CLAUDE_PROJECT_DIR anchor resolves even when \$PWD has nothing discoverable =="
+echo "== regression (agy rework, finding 3): CLAUDE_PROJECT_DIR anchor resolves even when \$PWD has nothing discoverable =="
 OUT="$(cd "$NOROOT" && env CLAUDE_PROJECT_DIR="$TMP" bash -c 'echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls -la\"}}" | bash "'"$CLAUDE_GATE"'"' 2>&1)"
 STATUS=$?
 [ "$STATUS" -eq 0 ] && pass "CLAUDE_PROJECT_DIR anchor lets resolution succeed from an unrelated cwd (no flag active there, so allowed)" || fail "CLAUDE_PROJECT_DIR anchor should have resolved successfully, got $STATUS: $OUT"
@@ -248,9 +248,9 @@ else
   fail "agy: expected the verbatim failsafe question in the deny reason, got: $REASON"
 fi
 if echo "$REASON" | grep -qF "quota-stop-clear.sh" && echo "$REASON" | grep -qF "human-directed"; then
-  pass "#40: agy deny reason also names lib/quota-stop-clear.sh and says clearing is human-directed"
+  pass "agy deny reason also names lib/quota-stop-clear.sh and says clearing is human-directed"
 else
-  fail "#40: expected the agy deny reason to point at lib/quota-stop-clear.sh and say human-directed, got: $REASON"
+  fail "expected the agy deny reason to point at lib/quota-stop-clear.sh and say human-directed, got: $REASON"
 fi
 
 echo "== agy dialect: allow-listed command passes even while gated =="
@@ -261,14 +261,14 @@ else
   fail "agy: dispatch.sh should be allowed while gated, got: $GATE_OUT"
 fi
 
-echo "== regression (agy PR#17 rework, finding 3): agy dialect also fails CLOSED on an unresolvable root =="
+echo "== regression (agy rework, finding 3): agy dialect also fails CLOSED on an unresolvable root =="
 NOROOT2="$(mktemp -d)"
 OUT="$(cd "$NOROOT2" && env -u CLAUDE_PROJECT_DIR bash -c 'echo "{\"toolCall\":{\"args\":{\"CommandLine\":\"ls -la\"}}}" | bash "'"$AGY_GATE"'"' 2>&1)"
 rm -rf "$NOROOT2"
 DECISION="$(echo "$OUT" | jq -r '.decision // empty' 2>/dev/null)"
 [ "$DECISION" = "deny" ] && pass "agy: unresolvable root -> deny decision (fails closed), not allow" || fail "SECURITY REGRESSION (finding 3, agy): expected a deny decision, got: $OUT"
 
-echo "== finding-4 (PR#17 flag 4), CONFIRMED live 2026-07-12: agy's real write-tool payload shape (name=write_to_file, args.TargetFile) is allow-listed for handoff.md =="
+echo "== finding-4, CONFIRMED live 2026-07-12: agy's real write-tool payload shape (name=write_to_file, args.TargetFile) is allow-listed for handoff.md =="
 # The exact live-captured payload shape (redacted path/content): a genuine
 # agy PreToolUse call for a native file write is
 # {"toolCall":{"name":"write_to_file","args":{"CodeContent":"...",
@@ -295,7 +295,7 @@ else
   fail "agy: TargetFile alone should resolve an allow-listed path, got: $GATE_OUT"
 fi
 
-echo "== #40 round 2 (agy REQUEST-CHANGES on PR #52): agy's OWN read-tool calls were still fully deadlocked -- .* PreToolUse matcher (templates/agents-hooks.json) covers agy's reads too, but the gate never extracted a read-tool path or called qsg_read_allowed =="
+echo "== round 2 (agy REQUEST-CHANGES): agy's OWN read-tool calls were still fully deadlocked -- .* PreToolUse matcher (templates/agents-hooks.json) covers agy's reads too, but the gate never extracted a read-tool path or called qsg_read_allowed =="
 # agy's dedicated security pass reported its real read-tool payload carries
 # the target path as .toolCall.args.AbsolutePath (or .toolCall.args.DirectoryPath
 # for a directory-shaped read) -- not independently trace-captured in this
@@ -306,26 +306,26 @@ run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/h
 if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
   pass "agy: a read-tool call (AbsolutePath) targeting handoff.md is allowed while gated"
 else
-  fail "#40 round 2: agy Read of handoff.md should be allowed while gated, got: $GATE_OUT"
+  fail "round 2: agy Read of handoff.md should be allowed while gated, got: $GATE_OUT"
 fi
 
 run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":".harness/state/quota-stop"}}}'
 if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
   pass "agy: a read-tool call targeting the flag itself is allowed while gated (the agent can see what's blocking it)"
 else
-  fail "#40 round 2: agy Read of the flag should be allowed while gated, got: $GATE_OUT"
+  fail "round 2: agy Read of the flag should be allowed while gated, got: $GATE_OUT"
 fi
 
 run_agy_gate '{"toolCall":{"name":"read_file","args":{"DirectoryPath":".harness/inbox/orchestra/20260711-99.msg"}}}'
 if echo "$GATE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
   pass "agy: the DirectoryPath fallback key also resolves an allow-listed inbox .msg"
 else
-  fail "#40 round 2: agy Read via DirectoryPath should be allowed for an allow-listed path, got: $GATE_OUT"
+  fail "round 2: agy Read via DirectoryPath should be allowed for an allow-listed path, got: $GATE_OUT"
 fi
 
 run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":"README.md"}}}'
 DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
-[ "$DECISION" = "deny" ] && pass "agy: a read-tool call for a NON-allow-listed file is still denied while gated" || fail "#40 round 2: agy Read of an unrelated file should be denied, got: $GATE_OUT"
+[ "$DECISION" = "deny" ] && pass "agy: a read-tool call for a NON-allow-listed file is still denied while gated" || fail "round 2: agy Read of an unrelated file should be denied, got: $GATE_OUT"
 
 run_agy_gate '{"toolCall":{"name":"view_file","args":{"AbsolutePath":"/etc/passwd"}}}'
 DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"

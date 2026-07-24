@@ -1,5 +1,5 @@
 #!/bin/bash
-# hooks/room-branch-gate.sh — PreToolUse gate (issue #60 task E). Makes a
+# hooks/room-branch-gate.sh — PreToolUse gate. Makes a
 # room-branch mismatch (lib/room-branch-lib.sh, task B) an actual gate, not
 # just the ROOM dashboard warning gatekeeper.sh (task D) shows. Unlike
 # quota-stop-gate.sh, there's no persisted flag file to check -- the room

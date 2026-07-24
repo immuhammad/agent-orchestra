@@ -6,7 +6,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 POLL="$DIR/../lib/inbox-poll.sh"
 TESTBOX="$DIR/inbox/testpollagent"
-# issue #116: inbox-poll.sh resolves its inbox root via
+# inbox-poll.sh resolves its inbox root via
 # INBOX_POLL_CANON_DIR (or orchestrator.yaml discovery) now, not its own
 # script directory -- pin it at $DIR so TESTBOX above is where it actually
 # looks.
@@ -52,7 +52,7 @@ else
 fi
 rm -f "$TESTBOX"/*.msg "$TESTBOX"/*.ack
 
-echo "== T30 (#56): 0-byte ack is flagged SUSPECT, not treated as a real ack =="
+echo "== T30: 0-byte ack is flagged SUSPECT, not treated as a real ack =="
 echo "hi" > "$TESTBOX/3-3.msg"
 : > "$TESTBOX/3-3.ack"
 OUT="$(bash "$POLL" testpollagent 2>&1)"
@@ -68,7 +68,7 @@ else
 fi
 rm -f "$TESTBOX"/*.msg "$TESTBOX"/*.ack
 
-echo "== T30 (#56): whitespace-only ack (bare newline) is also flagged SUSPECT =="
+echo "== T30: whitespace-only ack (bare newline) is also flagged SUSPECT =="
 echo "hi" > "$TESTBOX/4-4.msg"
 printf '\n' > "$TESTBOX/4-4.ack"
 OUT="$(bash "$POLL" testpollagent 2>&1)"

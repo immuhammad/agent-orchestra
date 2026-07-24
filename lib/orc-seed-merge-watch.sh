@@ -1,5 +1,5 @@
 #!/bin/bash
-# lib/orc-seed-merge-watch.sh — issue #18 item 5 (C1): seeds
+# lib/orc-seed-merge-watch.sh — seeds
 # merge-watch-state with every currently-merged PR number so a FRESH room
 # starts caught-up. Without this, lib/watch.sh's mw_already_processed
 # reads an ABSENT state file as "nothing has been seen yet" -- every

@@ -1,14 +1,13 @@
 #!/bin/bash
-# lib/review-protocol-verify.sh — VERIFY, updated for
-# issue #18 item 4: structural checks for the review protocol + agy skill
-# wrapper. The live canary (fresh agy session lists /code-review) was run
+# lib/review-protocol-verify.sh — VERIFY: structural checks for the
+# review protocol + agy skill wrapper. The live canary (fresh agy session lists /code-review) was run
 # by hand; this script makes the reproducible, mechanical part of the check
 # re-runnable, not the live agy interaction itself.
 # Run: bash lib/review-protocol-verify.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-# issue #18: the ONE canonical runtime path every reviewer/skill/template
+# The ONE canonical runtime path every reviewer/skill/template
 # references is project-root `review-protocol.md` -- gitignored per-project
 # (each project customizes its own rubric), seeded from this repo's tracked
 # `templates/review-protocol.md`. This script verifies the CHECKOUT it runs
@@ -130,29 +129,29 @@ else
   pass "GEMINI.md has no legacy .harness/review-protocol.md reference"
 fi
 
-echo "== issue #38: review-gated flow PUSHES the verdict back (assign), not a bounded handoff poll =="
+echo "== review-gated flow PUSHES the verdict back (assign), not a bounded handoff poll =="
 # The old flow dispatched the reviewer via `handoff` (a synchronous,
 # ~120s-bounded poll for the .ack) -- a review that legitimately outran
-# the timeout (agy's PR #30 security review did, live) left the verdict
+# the timeout (agy's own security review did, live) left the verdict
 # stranded: the reviewer HAD approved, but the requester gave up waiting
 # and never saw it. Fix per the ratified design: dispatch the reviewer via
 # `assign` (fire-and-forget, no timeout to outrun), and on completion the
 # reviewer pushes its own verdict back as a durable `assign` message to
 # the requester's inbox instead of the requester polling a bounded wait.
 if grep -qF 'dispatch.sh handoff <reviewer>' "$AGENTS_FILE" 2>/dev/null; then
-  fail "issue #38: AGENTS.md's review-gated flow still dispatches the reviewer via a bounded 'handoff' poll -- use 'assign' plus a pushed-back verdict instead"
+  fail "AGENTS.md's review-gated flow still dispatches the reviewer via a bounded 'handoff' poll -- use 'assign' plus a pushed-back verdict instead"
 else
-  pass "issue #38: review-gated flow no longer dispatches the reviewer via 'handoff'"
+  pass "review-gated flow no longer dispatches the reviewer via 'handoff'"
 fi
 if grep -qF 'dispatch.sh assign <reviewer>' "$AGENTS_FILE" 2>/dev/null; then
-  pass "issue #38: review-gated flow dispatches the reviewer via 'assign' (fire-and-forget)"
+  pass "review-gated flow dispatches the reviewer via 'assign' (fire-and-forget)"
 else
-  fail "issue #38: expected AGENTS.md to dispatch the reviewer via 'dispatch.sh assign <reviewer>'"
+  fail "expected AGENTS.md to dispatch the reviewer via 'dispatch.sh assign <reviewer>'"
 fi
 if grep -qi "push.*verdict\|verdict.*push" "$AGENTS_FILE" 2>/dev/null; then
-  pass "issue #38: AGENTS.md documents the reviewer pushing its verdict back on completion"
+  pass "AGENTS.md documents the reviewer pushing its verdict back on completion"
 else
-  fail "issue #38: expected AGENTS.md to instruct the reviewer to PUSH its verdict back on completion, not leave the requester polling a bounded handoff"
+  fail "expected AGENTS.md to instruct the reviewer to PUSH its verdict back on completion, not leave the requester polling a bounded handoff"
 fi
 
 echo ""

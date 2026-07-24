@@ -14,7 +14,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 DISPATCH="$DIR/../lib/dispatch.sh"
 TEST_SESSION="harness-dispatch-test"
 
-# issue #116: dispatch.sh's root-resolution now requires an
+# dispatch.sh's root-resolution now requires an
 # orchestrator.yaml/ORC_PROJECT_ROOT to exist somewhere above cwd unless
 # DISPATCH_CANON_DIR overrides it outright -- pin a scratch dir so this
 # test never depends on (or risks touching) any real project's discovery.
@@ -50,7 +50,7 @@ tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 # Pane 0: sits at a plain shell prompt -- idle.
 # Pane 1: simulate a TUI mid-generation -- busy.
 tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter 2>&1
-# issue #97 (found verifying this file): a FRESH split-window pane's shell
+# Found verifying this file: a FRESH split-window pane's shell
 # needs more than 1s to become ready to receive/execute send-keys input on
 # a loaded machine -- empirically confirmed (pane_current_command still
 # read the shell name, not the dispatched command, at 1s but was correct
@@ -69,7 +69,7 @@ else
   pass "busy pane correctly detected as not idle"
 fi
 
-echo "== issue #86 Task 3 / #97 review round 2: busy markers are shape-anchored and agent-agnostic (agy's live-observed 'Working...' render) =="
+echo "== busy markers are shape-anchored and agent-agnostic (agy's live-observed 'Working...' render) =="
 # A DEDICATED third pane (0.2), not the shared 0.1 pane the deferred-nudge
 # section below depends on staying busy -- reusing 0.1 here would both leave
 # stale 'Thinking...' scrollback contaminating this check AND interrupt the
@@ -77,7 +77,7 @@ echo "== issue #86 Task 3 / #97 review round 2: busy markers are shape-anchored 
 tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 # agy's real busy rendering (live-confirmed 2026-07-10): a spinner glyph
 # (⣟) prefixing "Working...", with a bare '>' prompt still visible
-# underneath. issue #97 review round 2 (agy finding 2): pane_busy_markers
+# underneath. pane_busy_markers
 # is no longer per-agent -- a spinner-glyph-prefixed line is a safe signal
 # for ANY TUI (prose essentially never starts a line with one), so this
 # now matches with or without an agent hint, closing the gap the ORIGINAL
@@ -90,13 +90,13 @@ else
   pass "agy's 'Working...' render correctly detected as busy for agent 'agy'"
 fi
 if pane_is_idle "$TEST_SESSION:0.2"; then
-  fail "CORRECTNESS REGRESSION (issue #97): a spinner-glyph-prefixed busy line should be detected busy regardless of agent hint (shape-anchored, not per-agent)"
+  fail "a spinner-glyph-prefixed busy line should be detected busy regardless of agent hint (shape-anchored, not per-agent)"
 else
-  pass "issue #97: the same spinner-glyph render is ALSO detected busy with NO agent hint -- the old per-agent gap is closed by shape-anchoring"
+  pass "the same spinner-glyph render is ALSO detected busy with NO agent hint -- the old per-agent gap is closed by shape-anchoring"
 fi
 tmux send-keys -t "$TEST_SESSION:0.2" C-c 2>&1
 
-echo "== issue #125: nudge_agent is state-driven -- busy pane (no hook state) sends NO keystrokes; the broker owns retries =="
+echo "== nudge_agent is state-driven -- busy pane (no hook state) sends NO keystrokes; the broker owns retries =="
 # Override pane_for_agent so a fake agent name maps onto this test session's
 # real busy pane (0.1).
 pane_for_agent() {
@@ -108,17 +108,17 @@ pane_for_agent() {
 
 OUT="$(nudge_agent "deferredtest" 2>&1)"
 if echo "$OUT" | grep -q "broker will retry"; then
-  pass "issue #125: heuristically-busy pane -> no keystrokes, broker owns the retry"
+  pass "heuristically-busy pane -> no keystrokes, broker owns the retry"
 else
   fail "expected 'broker will retry' for a busy pane with no hook state, got: $OUT"
 fi
 if tmux capture-pane -p -t "$TEST_SESSION:0.1" | grep -q "check inbox"; then
-  fail "issue #125: nudge_agent must NOT have typed into the busy pane"
+  fail "nudge_agent must NOT have typed into the busy pane"
 else
-  pass "issue #125: busy pane received no injected keystrokes"
+  pass "busy pane received no injected keystrokes"
 fi
 
-echo "== issue #125: nudge_agent trusts hook state outright -- busy/failsafe hold, idle wakes =="
+echo "== nudge_agent trusts hook state outright -- busy/failsafe hold, idle wakes =="
 source "$DIR/../lib/pane-state-lib.sh"
 NUDGE_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.1" '#{pane_id}')"
 NUDGE_SAFE_ID="$(pane_state_sanitize "$NUDGE_PANE_ID")"
@@ -126,7 +126,7 @@ mkdir -p "$PANE_STATE_DIR"
 echo "busy $(date '+%s') sid-t24" > "$PANE_STATE_DIR/$NUDGE_SAFE_ID"
 OUT="$(nudge_agent "deferredtest" 2>&1)"
 if echo "$OUT" | grep -q "Stop-hook pickup delivers at turn end"; then
-  pass "issue #125: hook-state busy -> no wake, Stop-hook pickup owns delivery"
+  pass "hook-state busy -> no wake, Stop-hook pickup owns delivery"
 else
   fail "expected the Stop-hook-pickup message for hook-state busy, got: $OUT"
 fi
@@ -135,7 +135,7 @@ mkdir -p "$CANON_DIR/state"
 touch "$CANON_DIR/state/quota-stop"
 OUT="$(nudge_agent "deferredtest" 2>&1)"
 if echo "$OUT" | grep -q "parked on quota failsafe"; then
-  pass "issue #125: hook-state failsafe (flag up) -> delivery held, no wake"
+  pass "hook-state failsafe (flag up) -> delivery held, no wake"
 else
   fail "expected the failsafe-hold message while the quota flag exists, got: $OUT"
 fi
@@ -145,9 +145,9 @@ if echo "$OUT" | grep -q "Stop-hook pickup delivers at turn end"; then
   fail "stale failsafe with the flag lifted must not read busy, got: $OUT"
 fi
 if echo "$OUT" | grep -q "parked on quota failsafe"; then
-  fail "issue #125 follow-up: stale failsafe (flag lifted) must not hold delivery, got: $OUT"
+  fail "stale failsafe (flag lifted) must not hold delivery, got: $OUT"
 else
-  pass "issue #125 follow-up: stale failsafe with the flag lifted no longer holds delivery"
+  pass "stale failsafe with the flag lifted no longer holds delivery"
 fi
 # Idle ground truth: kill the busy fixture first so the typed wake lands
 # at a real shell prompt, then assert the wake actually typed.
@@ -156,13 +156,13 @@ sleep 1
 echo "idle $(date '+%s') sid-t24" > "$PANE_STATE_DIR/$NUDGE_SAFE_ID"
 OUT="$(nudge_agent "deferredtest" 2>&1)"
 if echo "$OUT" | grep -q "nudged deferredtest"; then
-  pass "issue #125: hook-state idle -> immediate typed wake"
+  pass "hook-state idle -> immediate typed wake"
 else
   fail "expected an immediate wake on hook-state idle, got: $OUT"
 fi
 sleep 1
 if tmux capture-pane -p -t "$TEST_SESSION:0.1" | grep -q "check inbox"; then
-  pass "issue #125: the wake really typed 'check inbox' into the idle pane"
+  pass "the wake really typed 'check inbox' into the idle pane"
 else
   fail "expected 'check inbox' visible in the idle pane after the wake"
 fi
@@ -172,7 +172,7 @@ tmux send-keys -t "$TEST_SESSION:0.1" "clear" Enter 2>&1
 unset -f pane_for_agent
 source "$DISPATCH"
 
-echo "== issue #97: pane_is_idle no longer false-busies on text/hints ON the prompt line =="
+echo "== pane_is_idle no longer false-busies on text/hints ON the prompt line =="
 # Live-repro'd this session: SIX stranded nudges where a PREVIOUS nudge's
 # "check inbox" was still sitting unsubmitted on the prompt line, with
 # Claude Code's own hint chrome rendered below it -- the old bare-prompt-
@@ -192,9 +192,9 @@ sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf '❯ check inbox\\n──────────\\n  Sonnet 5 | ctx:8%% | 5h:8%%\\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.1"; then
-  pass "issue #97: stuck unsubmitted text on the prompt line + hint chrome below reads idle (send_submit clears it safely with C-u first)"
+  pass "stuck unsubmitted text on the prompt line + hint chrome below reads idle (send_submit clears it safely with C-u first)"
 else
-  fail "CORRECTNESS REGRESSION (issue #97): a pane with only leftover prompt-line text (no busy marker) still reads busy"
+  fail "a pane with only leftover prompt-line text (no busy marker) still reads busy"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
@@ -204,9 +204,9 @@ sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf '✢ Generating... (1m 20s · ↓ 500 tokens)\\n❯ check inbox\\n──────────\\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.1"; then
-  fail "CORRECTNESS REGRESSION (issue #97): a genuine busy marker should never be overridden by a prompt-shaped (even framed) line elsewhere in the tail"
+  fail "a genuine busy marker should never be overridden by a prompt-shaped (even framed) line elsewhere in the tail"
 else
-  pass "issue #97: a genuine busy marker still reads busy even with a FRAMED prompt-shaped line elsewhere in the tail"
+  pass "a genuine busy marker still reads busy even with a FRAMED prompt-shaped line elsewhere in the tail"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
@@ -216,7 +216,7 @@ sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf '> \\nGemini 2.5 Pro | context left 92%%\\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.1" "agy"; then
-  pass "issue #97: agy's empty-prompt + statusline shape reads idle"
+  pass "agy's empty-prompt + statusline shape reads idle"
 else
   fail "expected agy's bare '>' + statusline to read idle"
 fi
@@ -228,9 +228,9 @@ sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf 'and that is how the function handles the edge case.\\nLet me also update the tests to cover this scenario.\\nAdding a new test block below the existing one now.\\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.1"; then
-  fail "CORRECTNESS REGRESSION (issue #97): plain scrolled generated prose with no prompt line and no busy marker should stay busy (ambiguous content errs toward busy)"
+  fail "plain scrolled generated prose with no prompt line and no busy marker should stay busy (ambiguous content errs toward busy)"
 else
-  pass "issue #97: mid-output scroll with no prompt-shaped line and no busy marker correctly stays busy"
+  pass "mid-output scroll with no prompt-shaped line and no busy marker correctly stays busy"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
@@ -246,9 +246,9 @@ sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf '> quoting the original request here\\nline 2 of continued generation\\nline 3 of continued generation\\nline 4 of continued generation\\nline 5 of continued generation\\nline 6 of continued generation\\nline 7 of continued generation\\nline 8 of continued generation\\nline 9 of continued generation\\nstill generating, line 10\\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.1"; then
-  fail "CORRECTNESS REGRESSION (issue #97 finding 1): an unframed blockquote-shaped line with the busy marker scrolled out of the tail window false-IDLEd"
+  fail "an unframed blockquote-shaped line with the busy marker scrolled out of the tail window false-IDLEd"
 else
-  pass "issue #97: an unframed blockquote-shaped line does not false-IDLE even with no busy marker in the current tail window"
+  pass "an unframed blockquote-shaped line does not false-IDLE even with no busy marker in the current tail window"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
@@ -263,13 +263,13 @@ sleep 0.5
 tmux send-keys -t "$TEST_SESSION:0.1" "printf 'I was thinking about this differently -- working through\\nthe edge cases one more time before wrapping up.\\n> \\nGemini 2.5 Pro | context left 92%%\\n'; sleep 30" Enter 2>&1
 sleep 2
 if pane_is_idle "$TEST_SESSION:0.1" "agy"; then
-  pass "issue #97: prose containing 'thinking'/'working' + a genuinely idle prompt reads idle (the 00:16 incident's real cause is fixed)"
+  pass "prose containing 'thinking'/'working' + a genuinely idle prompt reads idle (the 00:16 incident's real cause is fixed)"
 else
-  fail "CORRECTNESS REGRESSION (issue #97 finding 2): ordinary prose containing common status words still false-flags busy on a genuinely idle pane"
+  fail "ordinary prose containing common status words still false-flags busy on a genuinely idle pane"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 
-echo "-- issue #97/#125: heuristic path (no hook state) -- genuinely busy defers to the broker; hint-text-idle wakes --"
+echo "-- heuristic path (no hook state) -- genuinely busy defers to the broker; hint-text-idle wakes --"
 pane_for_agent() {
   case "$1" in
     hinttest) echo "$TEST_SESSION:0.1" ;;
@@ -282,7 +282,7 @@ tmux send-keys -t "$TEST_SESSION:0.1" "printf 'Thinking...\\n'; sleep 30" Enter 
 sleep 2
 OUT="$(nudge_agent "hinttest" 2>&1)"
 if echo "$OUT" | grep -q "broker will retry"; then
-  pass "issue #97/#125: a genuinely busy pane (heuristic) sends no keystrokes -- broker owns the retry"
+  pass "a genuinely busy pane (heuristic) sends no keystrokes -- broker owns the retry"
 else
   fail "expected 'broker will retry' while the pane is genuinely busy, got: $OUT"
 fi
@@ -293,22 +293,22 @@ tmux send-keys -t "$TEST_SESSION:0.1" "printf '❯ check inbox\\n─────
 sleep 2
 OUT="$(nudge_agent "hinttest" 2>&1)"
 if echo "$OUT" | grep -q "nudged hinttest"; then
-  pass "issue #97/#125: hint-text-idle (no busy marker) still wakes immediately on the heuristic path"
+  pass "hint-text-idle (no busy marker) still wakes immediately on the heuristic path"
 else
-  fail "CORRECTNESS REGRESSION (issue #97): a hint-text-idle pane was not woken, got: $OUT"
+  fail "a hint-text-idle pane was not woken, got: $OUT"
 fi
 tmux send-keys -t "$TEST_SESSION:0.1" C-c 2>&1
 # Restore the real pane_for_agent for anything below that relies on it.
 unset -f pane_for_agent
 source "$DISPATCH"
 
-echo "== issue #33: pane_is_idle trusts a FRESH hook-based state file over a screen-scrape misread =="
+echo "== pane_is_idle trusts a FRESH hook-based state file over a screen-scrape misread =="
 source "$DIR/../lib/pane-state-lib.sh"
 tmux split-window -h -t "$TEST_SESSION:0" 2>&1
 GHOST_TARGET="$TEST_SESSION:0.3"
-# issue #97 review round 2 (agy finding 3): restored to its ORIGINAL
+# Restored to its ORIGINAL
 # intent/fixture -- prompt+trailing-hint-text on a SINGLE line, no border
-# line following it, no busy marker. #97's final design (positionally-
+# line following it, no busy marker. This test's final design (positionally-
 # scoped framed-prompt match, not a blanket end-anchor drop) does NOT read
 # this as idle from the screen-scrape alone: it's not bare, and it's not
 # FRAMED (no border line follows the prompt in this single-line fixture),
@@ -321,36 +321,36 @@ GHOST_PANE_ID="$(tmux display-message -p -t "$GHOST_TARGET" '#{pane_id}')"
 pane_state_write "$GHOST_PANE_ID" "idle"
 
 if pane_is_idle "$GHOST_TARGET"; then
-  pass "issue #33: a fresh hook state file (idle) overrides the ghost-text screen-scrape false-busy read"
+  pass "a fresh hook state file (idle) overrides the ghost-text screen-scrape false-busy read"
 else
-  fail "issue #33: pane_is_idle should trust the fresh hook state file (idle) over the ghost-text screen-scrape misread"
+  fail "pane_is_idle should trust the fresh hook state file (idle) over the ghost-text screen-scrape misread"
 fi
 tmux send-keys -t "$GHOST_TARGET" C-c 2>&1
 
-echo "== issue #33: pane_is_idle falls back to screen-scraping when no hook state file exists =="
+echo "== pane_is_idle falls back to screen-scraping when no hook state file exists =="
 NOSTATE_TARGET="$TEST_SESSION:0.0"
 NOSTATE_PANE_ID="$(tmux display-message -p -t "$NOSTATE_TARGET" '#{pane_id}')"
 rm -f "$PANE_STATE_DIR/$(pane_state_sanitize "$NOSTATE_PANE_ID")"
 if pane_is_idle "$NOSTATE_TARGET"; then
-  pass "issue #33: no hook state file -- falls back to screen-scrape (plain shell-prompt pane correctly idle)"
+  pass "no hook state file -- falls back to screen-scrape (plain shell-prompt pane correctly idle)"
 else
-  fail "issue #33: expected fallback to screen-scrape to still detect the plain shell-prompt pane as idle"
+  fail "expected fallback to screen-scrape to still detect the plain shell-prompt pane as idle"
 fi
 
-echo "== issue #125: hook state PERSISTS (no age-out) -- an ancient 'busy' still gates; pane_state_clear restores the fallback =="
+echo "== hook state PERSISTS (no age-out) -- an ancient 'busy' still gates; pane_state_clear restores the fallback =="
 STALE_PANE_ID="$NOSTATE_PANE_ID"
 mkdir -p "$PANE_STATE_DIR"
 echo "busy 1000000000" > "$PANE_STATE_DIR/$(pane_state_sanitize "$STALE_PANE_ID")"
 if pane_is_idle "$NOSTATE_TARGET"; then
-  fail "issue #125: an old hook 'busy' must stay authoritative (states are transitions; crash coverage is pane_state_clear, not an expiry)"
+  fail "an old hook 'busy' must stay authoritative (states are transitions; crash coverage is pane_state_clear, not an expiry)"
 else
-  pass "issue #125: ancient 'busy' hook state still gates -- no age-out"
+  pass "ancient 'busy' hook state still gates -- no age-out"
 fi
 pane_state_clear "$STALE_PANE_ID"
 if pane_is_idle "$NOSTATE_TARGET"; then
-  pass "issue #125: after pane_state_clear (watch liveness on a dead pane), screen-scrape fallback resumes (shell prompt = idle)"
+  pass "after pane_state_clear (watch liveness on a dead pane), screen-scrape fallback resumes (shell prompt = idle)"
 else
-  fail "issue #125: expected the screen-scrape fallback after the state file was cleared"
+  fail "expected the screen-scrape fallback after the state file was cleared"
 fi
 
 echo "== message verb: writes .msg, no nudge, no ack wait =="
@@ -369,7 +369,7 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
-echo "== issue #90: same-second dispatches to the same agent+issue no longer silently collide =="
+echo "== same-second dispatches to the same agent+issue no longer silently collide =="
 # A live incident: two dispatch_main calls in the same wall-clock second
 # (pane-liveness flagging builder and agy dead in the same loop iteration)
 # both computed the identical <ts>-<issue>.msg filename, and the plain
@@ -393,30 +393,30 @@ PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9002 "first messa
 PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9002 "second message" >/dev/null 2>&1
 MSGS_9002=("$CANON_DIR"/inbox/testagent/*9002*.msg)
 if [ "${#MSGS_9002[@]}" -eq 2 ] && [ -e "${MSGS_9002[0]}" ] && [ -e "${MSGS_9002[1]}" ]; then
-  pass "issue #90: two same-second dispatches to the same agent+issue produced TWO distinct .msg files"
+  pass "two same-second dispatches to the same agent+issue produced TWO distinct .msg files"
 else
-  fail "CORRECTNESS REGRESSION (issue #90): expected 2 distinct .msg files for a same-second collision, got: ${MSGS_9002[*]}"
+  fail "expected 2 distinct .msg files for a same-second collision, got: ${MSGS_9002[*]}"
 fi
 CONTENTS_9002="$(cat "${MSGS_9002[@]}" 2>/dev/null)"
 if echo "$CONTENTS_9002" | grep -q "first message" && echo "$CONTENTS_9002" | grep -q "second message"; then
-  pass "issue #90: BOTH message bodies survived -- neither was silently overwritten"
+  pass "BOTH message bodies survived -- neither was silently overwritten"
 else
-  fail "CORRECTNESS REGRESSION (issue #90): one message body was lost/overwritten: $CONTENTS_9002"
+  fail "one message body was lost/overwritten: $CONTENTS_9002"
 fi
 if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9002.msg" ]; then
-  pass "issue #90: the first (non-colliding) dispatch keeps the plain <ts>-<issue>.msg name -- backward compatible"
+  pass "the first (non-colliding) dispatch keeps the plain <ts>-<issue>.msg name -- backward compatible"
 else
   fail "expected the first dispatch to keep the plain <ts>-<issue>.msg name unsuffixed"
 fi
 if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9002-2.msg" ]; then
-  pass "issue #90: the second (colliding) dispatch gets a -2 suffix, keeping the <ts>-<issue> prefix"
+  pass "the second (colliding) dispatch gets a -2 suffix, keeping the <ts>-<issue> prefix"
 else
   fail "expected the second dispatch to land at <ts>-<issue>-2.msg"
 fi
 
 PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9002 "third message" >/dev/null 2>&1
 if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9002-3.msg" ] && [ "$(cat "$CANON_DIR/inbox/testagent/20260101120000-9002-3.msg")" = "third message" ]; then
-  pass "issue #90: a third same-second collision gets -3, its own content intact"
+  pass "a third same-second collision gets -3, its own content intact"
 else
   fail "expected a third collision to land at <ts>-<issue>-3.msg with its own content"
 fi
@@ -426,7 +426,7 @@ echo "second ack" > "$CANON_DIR/inbox/testagent/20260101120000-9002-2.ack"
 echo "third ack" > "$CANON_DIR/inbox/testagent/20260101120000-9002-3.ack"
 POLL_OUT_90="$(INBOX_POLL_CANON_DIR="$CANON_DIR" bash "$DIR/../lib/inbox-poll.sh" testagent 2>&1)"
 if ! echo "$POLL_OUT_90" | grep -q "PENDING"; then
-  pass "issue #90: each colliding .msg acks independently via its own suffixed basename (no false PENDING)"
+  pass "each colliding .msg acks independently via its own suffixed basename (no false PENDING)"
 else
   fail "expected no PENDING once all three collision files are acked, got: $POLL_OUT_90"
 fi
@@ -435,7 +435,7 @@ rm -f "$CANON_DIR"/inbox/testagent/*9003*.msg "$CANON_DIR"/inbox/testagent/*9004
 PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9003 "issue 9003 body" >/dev/null 2>&1
 PATH="$FAKE_DATE_BIN:$PATH" bash "$DISPATCH" message testagent 9004 "issue 9004 body" >/dev/null 2>&1
 if [ -e "$CANON_DIR/inbox/testagent/20260101120000-9003.msg" ] && [ -e "$CANON_DIR/inbox/testagent/20260101120000-9004.msg" ]; then
-  pass "issue #90: different-issue same-second dispatches land at their normal distinct names, unaffected"
+  pass "different-issue same-second dispatches land at their normal distinct names, unaffected"
 else
   fail "expected 20260101120000-9003.msg and -9004.msg to both exist, unsuffixed"
 fi
@@ -443,7 +443,7 @@ fi
 rm -rf "$FAKE_DATE_BIN"
 rm -f "$CANON_DIR"/inbox/testagent/*9002*.msg "$CANON_DIR"/inbox/testagent/*9002*.ack "$CANON_DIR"/inbox/testagent/*9003*.msg "$CANON_DIR"/inbox/testagent/*9004*.msg
 
-echo "== issue #59: --body-file <path> replaces the positional MSG arg for large bodies =="
+echo "== --body-file <path> replaces the positional MSG arg for large bodies =="
 # A real dispatch body is 3-8KB of structured text -- passing that as a
 # POSITIONAL string arg is exactly what forces callers into command
 # substitution ("$(cat file)"), which guard.sh correctly refuses to trust
@@ -462,7 +462,7 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg "$BODY_FILE"
 
-echo "== issue #59: --body-file works with assign/handoff too, not just message =="
+echo "== --body-file works with assign/handoff too, not just message =="
 BODY_FILE2="$(mktemp)"
 printf 'ASSIGN body from a file.\n' > "$BODY_FILE2"
 OUT="$(bash "$DISPATCH" assign testagent 9005 --body-file "$BODY_FILE2" 2>&1)"
@@ -474,7 +474,7 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg "$BODY_FILE2"
 
-echo "== issue #59: --body-file with a nonexistent path fails loudly instead of writing an empty/garbage .msg =="
+echo "== --body-file with a nonexistent path fails loudly instead of writing an empty/garbage .msg =="
 OUT="$(bash "$DISPATCH" message testagent 9006 --body-file "/no/such/file-$$" 2>&1)"
 STATUS=$?
 if [ "$STATUS" -ne 0 ] && ! ls "$CANON_DIR"/inbox/testagent/*-9006.msg >/dev/null 2>&1; then
@@ -514,7 +514,7 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR"/inbox/testagent/*.ack
 
-echo "== T30 (#56): handoff verb treats an empty/whitespace-only ack as suspect, keeps waiting =="
+echo "== handoff verb treats an empty/whitespace-only ack as suspect, keeps waiting =="
 (
   # Receiver writes an EMPTY ack first (the old "just touch it" habit),
   # then a real one shortly after -- handoff should only accept the second.
@@ -534,7 +534,7 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR"/inbox/testagent/*.ack
 
-echo "== T30 (#56): handoff verb times out if the ack STAYS empty the whole window =="
+echo "== handoff verb times out if the ack STAYS empty the whole window =="
 (
   sleep 1
   msg="$(ls -t "$CANON_DIR"/inbox/testagent/*-9008.msg 2>/dev/null | head -1)"
@@ -560,7 +560,7 @@ else
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
-echo "== issue #89: assign/handoff scribe spawns a one-shot headless run, not a pane nudge =="
+echo "== assign/handoff scribe spawns a one-shot headless run, not a pane nudge =="
 # Its own scratch CANON_DIR (via DISPATCH_CANON_DIR) so this never touches
 # a real project's inbox history.
 SCRIBE_SCRATCH="$(mktemp -d)"
@@ -595,38 +595,38 @@ else
   fail "expected the spawned claude call to use --model haiku: $(cat "$CLAUDE_CALLS")"
 fi
 if ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9010.msg >/dev/null 2>&1; then
-  pass "the .msg landed in the durable inbox (scribe dir -- scribe's real physical inbox, issue #22)"
+  pass "the .msg landed in the durable inbox (scribe dir -- scribe's real physical inbox)"
 else
   fail "expected the .msg in the scribe inbox dir"
 fi
 if ! grep -q "career-ops-harness" "$CLAUDE_CALLS"; then
-  pass "issue #18 B3: the scribe prompt no longer hardcodes 'career-ops-harness' (project-agnostic)"
+  pass "the scribe prompt no longer hardcodes 'career-ops-harness' (project-agnostic)"
 else
   fail "scribe prompt should not hardcode career-ops-harness: $(cat "$CLAUDE_CALLS")"
 fi
 if grep -q "ORC_ONESHOT=1" "$CLAUDE_CALLS"; then
-  pass "issue #23: headless scribe runs with ORC_ONESHOT=1 exported (exempts it from the handoff Stop hook)"
+  pass "headless scribe runs with ORC_ONESHOT=1 exported (exempts it from the handoff Stop hook)"
 else
-  fail "issue #23: expected ORC_ONESHOT=1 in the spawned claude's environment: $(cat "$CLAUDE_CALLS")"
+  fail "expected ORC_ONESHOT=1 in the spawned claude's environment: $(cat "$CLAUDE_CALLS")"
 fi
 if grep -q -- "--allowedTools" "$CLAUDE_CALLS"; then
-  pass "issue #23: headless scribe is spawned with explicit --allowedTools (never blocks on an unanswerable prompt)"
+  pass "headless scribe is spawned with explicit --allowedTools (never blocks on an unanswerable prompt)"
 else
-  fail "issue #23: expected --allowedTools in the spawned claude call: $(cat "$CLAUDE_CALLS")"
+  fail "expected --allowedTools in the spawned claude call: $(cat "$CLAUDE_CALLS")"
 fi
 if grep -q -- "--dangerously-skip-permissions" "$CLAUDE_CALLS"; then
-  fail "issue #23: must NOT widen the blast radius with --dangerously-skip-permissions -- scope with --allowedTools instead"
+  fail "must NOT widen the blast radius with --dangerously-skip-permissions -- scope with --allowedTools instead"
 else
-  pass "issue #23: headless scribe does not bypass permissions wholesale"
+  pass "headless scribe does not bypass permissions wholesale"
 fi
 ACK_9010="$(ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9010.ack 2>/dev/null | head -1)"
 if [ -n "$ACK_9010" ] && grep -qF "Write($ACK_9010)" "$CLAUDE_CALLS"; then
-  pass "issue #23: --allowedTools scopes the Write grant to exactly this dispatch's own .ack path"
+  pass "--allowedTools scopes the Write grant to exactly this dispatch's own .ack path"
 else
-  fail "issue #23: expected --allowedTools to scope Write to $ACK_9010: $(cat "$CLAUDE_CALLS")"
+  fail "expected --allowedTools to scope Write to $ACK_9010: $(cat "$CLAUDE_CALLS")"
 fi
 
-echo "== issue #12: souls/scribe.md, when present at the project root, rides the headless spawn prompt =="
+echo "== souls/scribe.md, when present at the project root, rides the headless spawn prompt =="
 # Correctly-nested scratch (unlike SCRIBE_SCRATCH above, which plays the
 # role of .harness directly): PROJECT_ROOT/.harness is CANON_DIR, souls/
 # lives as its sibling, exactly like a real orc-init'd room.
@@ -647,13 +647,13 @@ chmod +x "$SOUL_FAKE_BIN/claude"
 OUT_SOUL="$(PATH="$SOUL_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$SOUL_CLAUDE_CALLS" DISPATCH_CANON_DIR="$SOUL_PROJECT_ROOT/.harness" bash "$DISPATCH" assign scribe 9011 "do the judgment task" 2>&1)"
 sleep 1
 if grep -q "SCRIBE-SOUL-MARKER" "$SOUL_CLAUDE_CALLS"; then
-  pass "issue #12: souls/scribe.md content rides the headless spawn prompt"
+  pass "souls/scribe.md content rides the headless spawn prompt"
 else
-  fail "issue #12: expected SCRIBE-SOUL-MARKER in the spawned prompt: $(cat "$SOUL_CLAUDE_CALLS")"
+  fail "expected SCRIBE-SOUL-MARKER in the spawned prompt: $(cat "$SOUL_CLAUDE_CALLS")"
 fi
 rm -rf "$SOUL_PROJECT_ROOT"
 
-echo "== issue #12: no souls/scribe.md on disk -> the spawn prompt is unchanged, no error =="
+echo "== no souls/scribe.md on disk -> the spawn prompt is unchanged, no error =="
 NOSOUL_PROJECT_ROOT="$(mktemp -d)"
 mkdir -p "$NOSOUL_PROJECT_ROOT/.harness/inbox/scribe"
 NOSOUL_CLAUDE_CALLS="$NOSOUL_PROJECT_ROOT/claude-calls.log"
@@ -671,13 +671,13 @@ OUT_NOSOUL="$(PATH="$NOSOUL_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$NOSOUL_CLAUDE_CA
 STATUS_NOSOUL=$?
 sleep 1
 if [ "$STATUS_NOSOUL" -eq 0 ] && grep -q "You are the scribe agent" "$NOSOUL_CLAUDE_CALLS"; then
-  pass "issue #12: no souls/scribe.md -> spawn still succeeds with the plain prompt, no error"
+  pass "no souls/scribe.md -> spawn still succeeds with the plain prompt, no error"
 else
-  fail "issue #12: expected a clean spawn with no soul file, status=$STATUS_NOSOUL: $(cat "$NOSOUL_CLAUDE_CALLS")"
+  fail "expected a clean spawn with no soul file, status=$STATUS_NOSOUL: $(cat "$NOSOUL_CLAUDE_CALLS")"
 fi
 rm -rf "$NOSOUL_PROJECT_ROOT"
 
-echo "== agy PROBE 1 (PR #30 REQUEST-CHANGES): scribe gets a scoped scratch-dir Write grant to create gh --body-file tmpfiles =="
+echo "== agy PROBE 1: scribe gets a scoped scratch-dir Write grant to create gh --body-file tmpfiles =="
 # gh issue comment/pr comment need --body-file <tmpfile> (the guard
 # false-positives on inline --body); creating that tmpfile is a Write to a
 # path that is NOT $ack_file. Without a scoped scratch dir, the scribe
@@ -701,7 +701,7 @@ else
   fail "agy PROBE 1: expected the prompt to instruct the scribe to write body-files under its scratch dir"
 fi
 
-echo "== agy PROBE 2 (PR #30 REQUEST-CHANGES): every Bash(...) allowedTools entry uses valid, precisely-scoped syntax =="
+echo "== agy PROBE 2: every Bash(...) allowedTools entry uses valid, precisely-scoped syntax =="
 # agy: 'Bash(gh pr *)' (space form) does not parse the way this harness
 # intends -- standardize on the colon prefix form, AND keep each entry
 # scoped to a specific subcommand (comment/close/view), not a bare 'gh pr'/
@@ -728,7 +728,7 @@ else
   pass "agy PROBE 2: the old imprecise 'Bash(gh pr *)' entry is gone"
 fi
 
-echo "== issue #22: legacy 'copilot' verb resolves INTO 'scribe's physical inbox dir (inverted alias) =="
+echo "== legacy 'copilot' verb resolves INTO 'scribe's physical inbox dir (inverted alias) =="
 : > "$CLAUDE_CALLS"
 OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" assign copilot 9011 "another judgment task" 2>&1)"
 sleep 1
@@ -743,7 +743,7 @@ else
   fail "'copilot' should also spawn the headless scribe run"
 fi
 
-echo "== issue #89: handoff scribe waits for the headless run's own .ack, same as any other agent =="
+echo "== handoff scribe waits for the headless run's own .ack, same as any other agent =="
 : > "$CLAUDE_CALLS"
 OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPATCH" handoff scribe 9012 "judge this" 10 2>&1)"
 STATUS=$?
@@ -752,7 +752,7 @@ if [ "$STATUS" -eq 0 ] && echo "$OUT" | grep -q "received"; then
 else
   fail "handoff scribe should receive the spawned run's .ack (status=$STATUS): $OUT"
 fi
-echo "== issue #23: a headless run that exits WITHOUT writing an ack gets a SPAWN-FAILED ack, and output is logged, not swallowed =="
+echo "== a headless run that exits WITHOUT writing an ack gets a SPAWN-FAILED ack, and output is logged, not swallowed =="
 CRASH_BIN="$SCRIBE_SCRATCH/crash-bin"
 mkdir -p "$CRASH_BIN"
 cat > "$CRASH_BIN/claude" <<'CRASHCLAUDE'
@@ -765,19 +765,19 @@ OUT="$(PATH="$CRASH_BIN:$PATH" DISPATCH_CANON_DIR="$SCRIBE_SCRATCH" bash "$DISPA
 sleep 1
 ACK_9013="$(ls "$SCRIBE_SCRATCH"/inbox/scribe/*-9013.ack 2>/dev/null | head -1)"
 if [ -n "$ACK_9013" ] && grep -q "^SPAWN-FAILED" "$ACK_9013"; then
-  pass "issue #23: a crashed/no-ack headless run leaves a diagnosable SPAWN-FAILED ack, not silence"
+  pass "a crashed/no-ack headless run leaves a diagnosable SPAWN-FAILED ack, not silence"
 else
-  fail "issue #23: expected a SPAWN-FAILED ack after the headless run exited without one (found: ${ACK_9013:-none})"
+  fail "expected a SPAWN-FAILED ack after the headless run exited without one (found: ${ACK_9013:-none})"
 fi
 LOG_FILE="$(ls "$SCRIBE_SCRATCH"/state/scribe-*.log 2>/dev/null | tail -1)"
 if [ -n "$LOG_FILE" ] && grep -q "simulated crash" "$LOG_FILE"; then
-  pass "issue #23: the headless run's stderr is captured in a log file, not sent to /dev/null"
+  pass "the headless run's stderr is captured in a log file, not sent to /dev/null"
 else
-  fail "issue #23: expected the crash's stderr in a .harness/state/scribe-*.log file (found: ${LOG_FILE:-none})"
+  fail "expected the crash's stderr in a .harness/state/scribe-*.log file (found: ${LOG_FILE:-none})"
 fi
 rm -rf "$SCRIBE_SCRATCH"
 
-echo "== issue #22: assign scribe succeeds in a FRESH room seeded only with inbox/scribe/ (no legacy copilot/) =="
+echo "== assign scribe succeeds in a FRESH room seeded only with inbox/scribe/ (no legacy copilot/) =="
 FRESH_ROOM="$(mktemp -d)"
 mkdir -p "$FRESH_ROOM/inbox/scribe"
 CLAUDE_CALLS2="$FRESH_ROOM/claude-calls.log"
@@ -794,13 +794,13 @@ chmod +x "$FRESH_FAKE_BIN/claude"
 OUT="$(PATH="$FRESH_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS2" DISPATCH_CANON_DIR="$FRESH_ROOM" bash "$DISPATCH" assign scribe 9020 "fresh room task" 2>&1)"
 sleep 1
 if ls "$FRESH_ROOM"/inbox/scribe/*-9020.msg >/dev/null 2>&1; then
-  pass "issue #22: assign scribe writes .msg into inbox/scribe/ in a fresh room with no copilot/ dir"
+  pass "assign scribe writes .msg into inbox/scribe/ in a fresh room with no copilot/ dir"
 else
-  fail "issue #22: assign scribe should resolve to inbox/scribe/ in a fresh clone-per-project room (got: $OUT)"
+  fail "assign scribe should resolve to inbox/scribe/ in a fresh clone-per-project room (got: $OUT)"
 fi
 rm -rf "$FRESH_ROOM"
 
-echo "== issue #22: legacy 'copilot' dispatch verb still lands somewhere valid (aliases TO scribe/, not the reverse) =="
+echo "== legacy 'copilot' dispatch verb still lands somewhere valid (aliases TO scribe/, not the reverse) =="
 LEGACY_ROOM="$(mktemp -d)"
 mkdir -p "$LEGACY_ROOM/inbox/scribe"
 CLAUDE_CALLS3="$LEGACY_ROOM/claude-calls.log"
@@ -817,9 +817,9 @@ chmod +x "$LEGACY_FAKE_BIN/claude"
 OUT="$(PATH="$LEGACY_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS3" DISPATCH_CANON_DIR="$LEGACY_ROOM" bash "$DISPATCH" assign copilot 9021 "legacy verb task" 2>&1)"
 sleep 1
 if ls "$LEGACY_ROOM"/inbox/scribe/*-9021.msg >/dev/null 2>&1; then
-  pass "issue #22: legacy 'copilot' verb resolves into inbox/scribe/ (inverted alias)"
+  pass "legacy 'copilot' verb resolves into inbox/scribe/ (inverted alias)"
 else
-  fail "issue #22: legacy 'copilot' verb should resolve into inbox/scribe/, not require a copilot/ dir (got: $OUT)"
+  fail "legacy 'copilot' verb should resolve into inbox/scribe/, not require a copilot/ dir (got: $OUT)"
 fi
 rm -rf "$LEGACY_ROOM"
 
@@ -841,7 +841,7 @@ else
   fail "unknown verb should be rejected (status=$STATUS): $OUT"
 fi
 
-echo "== issue #159: --fresh ordering -- .msg is written only AFTER SessionStart(clear) evidence (simulated slow SessionStart) =="
+echo "== --fresh ordering -- .msg is written only AFTER SessionStart(clear) evidence (simulated slow SessionStart) =="
 mkdir -p "$CANON_DIR/inbox/freshtest"
 rm -f "$CANON_DIR"/inbox/freshtest/*.msg
 FRESH_TARGET="$TEST_SESSION:0.0"
@@ -875,9 +875,9 @@ FRESH_DISPATCH_PID=$!
 
 sleep 2
 if ! ls "$CANON_DIR"/inbox/freshtest/*.msg >/dev/null 2>&1; then
-  pass "issue #159: .msg not yet written 2s in, while --fresh is still waiting for SessionStart(clear) evidence"
+  pass ".msg not yet written 2s in, while --fresh is still waiting for SessionStart(clear) evidence"
 else
-  fail "issue #159 ORDERING REGRESSION: .msg appeared before the delayed SessionStart(clear) evidence"
+  fail "ORDERING REGRESSION: .msg appeared before the delayed SessionStart(clear) evidence"
 fi
 
 wait "$FRESH_DISPATCH_PID"
@@ -885,14 +885,14 @@ FRESH_DISPATCH_STATUS=$?
 wait "$FRESH_DELAY_PID"
 
 if [ "$FRESH_DISPATCH_STATUS" -eq 0 ] && ls "$CANON_DIR"/inbox/freshtest/*-159.msg >/dev/null 2>&1; then
-  pass "issue #159: --fresh wrote the .msg only after the delayed SessionStart(clear) evidence appeared"
+  pass "--fresh wrote the .msg only after the delayed SessionStart(clear) evidence appeared"
 else
-  fail "issue #159: expected --fresh to succeed once evidence appeared (status=$FRESH_DISPATCH_STATUS): $(cat "$FRESH_OUT_FILE")"
+  fail "expected --fresh to succeed once evidence appeared (status=$FRESH_DISPATCH_STATUS): $(cat "$FRESH_OUT_FILE")"
 fi
 rm -f "$FRESH_OUT_FILE"
 rm -f "$CANON_DIR"/inbox/freshtest/*.msg
 
-echo "== issue #159: --fresh at a busy pane refuses LOUDLY -- nothing typed, no .msg written =="
+echo "== --fresh at a busy pane refuses LOUDLY -- nothing typed, no .msg written =="
 echo "busy $(date '+%s') sid-busy1" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
 tmux send-keys -t "$FRESH_TARGET" "clear" Enter 2>&1
 sleep 0.5
@@ -904,22 +904,22 @@ FRESH_REFUSE_STATUS=$?
 FRESH_AFTER_CAPTURE="$(tmux capture-pane -p -t "$FRESH_TARGET")"
 
 if [ "$FRESH_REFUSE_STATUS" -ne 0 ] && echo "$FRESH_REFUSE_OUT" | grep -qi "refus"; then
-  pass "issue #159: --fresh at a busy pane refuses loudly (nonzero exit + explicit refusal message)"
+  pass "--fresh at a busy pane refuses loudly (nonzero exit + explicit refusal message)"
 else
-  fail "issue #159: expected a loud refusal for --fresh at a busy pane (status=$FRESH_REFUSE_STATUS): $FRESH_REFUSE_OUT"
+  fail "expected a loud refusal for --fresh at a busy pane (status=$FRESH_REFUSE_STATUS): $FRESH_REFUSE_OUT"
 fi
 if ! ls "$CANON_DIR"/inbox/freshtest/*.msg >/dev/null 2>&1; then
-  pass "issue #159: no .msg written when --fresh refuses on a busy pane"
+  pass "no .msg written when --fresh refuses on a busy pane"
 else
-  fail "issue #159 REGRESSION: a .msg was written despite --fresh refusing on a busy pane"
+  fail "REGRESSION: a .msg was written despite --fresh refusing on a busy pane"
 fi
 if [ "$FRESH_BEFORE_CAPTURE" = "$FRESH_AFTER_CAPTURE" ]; then
-  pass "issue #159: --fresh refusal typed NOTHING into the busy pane"
+  pass "--fresh refusal typed NOTHING into the busy pane"
 else
-  fail "issue #159 REGRESSION: --fresh refusal on a busy pane still typed something into it (before != after capture)"
+  fail "REGRESSION: --fresh refusal on a busy pane still typed something into it (before != after capture)"
 fi
 
-echo "== issue #159: --fresh --wait-idle grants a bounded grace period before refusing =="
+echo "== --fresh --wait-idle grants a bounded grace period before refusing =="
 echo "busy $(date '+%s') sid-busy2" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
 (
   sleep 2
@@ -932,76 +932,76 @@ FRESH_WAIT_OUT="$(dispatch_main assign freshtest 161 "waits then proceeds" --fre
 FRESH_WAIT_STATUS=$?
 wait "$FRESH_WAIT_BG_PID"
 if [ "$FRESH_WAIT_STATUS" -eq 0 ] && ls "$CANON_DIR"/inbox/freshtest/*-161.msg >/dev/null 2>&1; then
-  pass "issue #159: --wait-idle waited for the pane to go idle instead of refusing immediately"
+  pass "--wait-idle waited for the pane to go idle instead of refusing immediately"
 else
-  fail "issue #159: expected --wait-idle to wait then proceed (status=$FRESH_WAIT_STATUS): $FRESH_WAIT_OUT"
+  fail "expected --wait-idle to wait then proceed (status=$FRESH_WAIT_STATUS): $FRESH_WAIT_OUT"
 fi
 rm -f "$CANON_DIR"/inbox/freshtest/*.msg
 
 unset -f pane_for_agent
 source "$DISPATCH"
 
-echo "== issue #159: --fresh refuses outright for agy (no probed conversation-reset equivalent) =="
+echo "== --fresh refuses outright for agy (no probed conversation-reset equivalent) =="
 rm -f "$CANON_DIR"/inbox/agy/*.msg 2>/dev/null || true
 mkdir -p "$CANON_DIR/inbox/agy"
 OUT="$(bash "$DISPATCH" assign agy 162 "should refuse" --fresh 2>&1)"
 STATUS=$?
 if [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -qi "no agy equivalent"; then
-  pass "issue #159: --fresh refuses outright for agy, pointing at a pane restart instead"
+  pass "--fresh refuses outright for agy, pointing at a pane restart instead"
 else
-  fail "issue #159: expected --fresh to refuse for agy with a clear explanation (status=$STATUS): $OUT"
+  fail "expected --fresh to refuse for agy with a clear explanation (status=$STATUS): $OUT"
 fi
 if ! ls "$CANON_DIR"/inbox/agy/*.msg >/dev/null 2>&1; then
-  pass "issue #159: no .msg written when --fresh refuses for agy"
+  pass "no .msg written when --fresh refuses for agy"
 else
-  fail "issue #159 REGRESSION: a .msg was written despite --fresh refusing for agy"
+  fail "REGRESSION: a .msg was written despite --fresh refusing for agy"
 fi
 rm -f "$CANON_DIR"/inbox/agy/*.msg
 
-echo "== issue #159: relatedness warning fires exactly when agent+issue differ and --fresh is absent =="
+echo "== relatedness warning fires exactly when agent+issue differ and --fresh is absent =="
 mkdir -p "$CANON_DIR/state/last-issue"
 rm -f "$CANON_DIR"/inbox/testagent/*.msg
 echo "150" > "$CANON_DIR/state/last-issue/testagent"
 OUT="$(bash "$DISPATCH" assign testagent 9030 "different issue, no --fresh" 2>&1)"
 if echo "$OUT" | grep -qi "warning" && echo "$OUT" | grep -q "150" && echo "$OUT" | grep -q "9030"; then
-  pass "issue #159: relatedness warning fires for a different issue with no --fresh, naming both issues"
+  pass "relatedness warning fires for a different issue with no --fresh, naming both issues"
 else
-  fail "issue #159: expected a relatedness warning mentioning both issue #150 and #9030, got: $OUT"
+  fail "expected a relatedness warning mentioning both issue #150 and #9030, got: $OUT"
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
 echo "150" > "$CANON_DIR/state/last-issue/testagent"
 OUT="$(bash "$DISPATCH" assign testagent 150 "same issue, no --fresh" 2>&1)"
 if ! echo "$OUT" | grep -qi "warning"; then
-  pass "issue #159: no relatedness warning when the dispatched issue is unchanged"
+  pass "no relatedness warning when the dispatched issue is unchanged"
 else
-  fail "issue #159: unexpected relatedness warning for an unchanged issue: $OUT"
+  fail "unexpected relatedness warning for an unchanged issue: $OUT"
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR/state/last-issue/testagent"
 
-echo "== issue #159: last-issue state is written on every assign/handoff, but never on message =="
+echo "== last-issue state is written on every assign/handoff, but never on message =="
 rm -f "$CANON_DIR/state/last-issue/testagent" "$CANON_DIR"/inbox/testagent/*.msg
 bash "$DISPATCH" message testagent 9040 "fyi only" >/dev/null 2>&1
 if [ ! -f "$CANON_DIR/state/last-issue/testagent" ]; then
-  pass "issue #159: message verb does NOT write last-issue state"
+  pass "message verb does NOT write last-issue state"
 else
-  fail "issue #159: message verb should not write last-issue state, found: $(cat "$CANON_DIR/state/last-issue/testagent")"
+  fail "message verb should not write last-issue state, found: $(cat "$CANON_DIR/state/last-issue/testagent")"
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg
 
 bash "$DISPATCH" assign testagent 9041 "real work" >/dev/null 2>&1
 if [ -f "$CANON_DIR/state/last-issue/testagent" ] && [ "$(cat "$CANON_DIR/state/last-issue/testagent")" = "9041" ]; then
-  pass "issue #159: assign verb wrote last-issue state with the dispatched issue number"
+  pass "assign verb wrote last-issue state with the dispatched issue number"
 else
-  fail "issue #159: expected last-issue state '9041' after an assign, found: $(cat "$CANON_DIR/state/last-issue/testagent" 2>/dev/null)"
+  fail "expected last-issue state '9041' after an assign, found: $(cat "$CANON_DIR/state/last-issue/testagent" 2>/dev/null)"
 fi
 rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR/state/last-issue/testagent"
 
-echo "== issue #19: DISPATCH_SESSION derives from THIS project's own orchestrator.yaml -- two projects never share a session =="
+echo "== DISPATCH_SESSION derives from THIS project's own orchestrator.yaml -- two projects never share a session =="
 # This test file exports DISPATCH_CANON_DIR globally (line ~22) so the rest
 # of the suite never touches a real project's discovery -- explicitly unset
 # it (and DISPATCH_SESSION) here so real per-project orchestrator.yaml
-# discovery is exercised, the actual mechanism issue #19's live repro hit.
+# discovery is exercised, the actual mechanism this test's live repro hit.
 PROJECT_A="$(mktemp -d)"
 PROJECT_B="$(mktemp -d)"
 echo "project: project-a" > "$PROJECT_A/orchestrator.yaml"
@@ -1021,9 +1021,9 @@ else
   fail "expected project-b:0.0, got $PANE_B"
 fi
 if [ -n "$PANE_A" ] && [ "$PANE_A" != "$PANE_B" ]; then
-  pass "project A and project B never resolve to the same session (cross-project nudge collision, issue #19)"
+  pass "project A and project B never resolve to the same session (cross-project nudge collision avoided)"
 else
-  fail "CORRECTNESS REGRESSION (issue #19): two different projects resolved to the SAME session ($PANE_A / $PANE_B) -- a nudge from one project would hit the other's pane"
+  fail "two different projects resolved to the SAME session ($PANE_A / $PANE_B) -- a nudge from one project would hit the other's pane"
 fi
 rm -rf "$PROJECT_A" "$PROJECT_B"
 

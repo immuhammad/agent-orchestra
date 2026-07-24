@@ -2,8 +2,8 @@
 # lib/harness-root.sh — resolves the CANONICAL .harness directory for
 # inbox/state/log writes.
 #
-# Generalized for epic #91a (issue #116): every project runs its own clone
-# of agent-orchestra (clone-per-project, issue #18 item 8) with these
+# Generalized so every project runs its own clone
+# of agent-orchestra (clone-per-project) with these
 # scripts in its own lib/, so resolving off the SCRIPT's own directory (the
 # old `dirname ${BASH_SOURCE[0]}` / "$script_dir" pattern) would anchor
 # state to whichever clone happens to be invoked instead of the project it
@@ -20,12 +20,12 @@
 #      worktree's MAIN checkout instead (via --git-common-dir) — every
 #      worktree gets its own tracked copy of orchestrator.yaml, so a naive
 #      walk-up alone would re-split mailboxes/state across worktrees
-#      (issue #99, still a live risk under the new discovery rule).
+#      (still a live risk under the new discovery rule).
 #   4. FAILS LOUD if no orchestrator.yaml is found and ORC_PROJECT_ROOT is
 #      unset: prints to stderr, returns 1, prints NOTHING to stdout. A
 #      caller must treat empty output as an error, never silently fall
 #      back to its own script directory (that silent fallback was the
-#      #116 bug this replaces).
+#      bug this replaces).
 set -uo pipefail
 
 # harness_canonical_dir [start_dir] — echoes the canonical .harness

@@ -50,7 +50,7 @@ expect_denied "git commit is denied"                  "git commit -m 'agy note'"
 expect_denied "git reset is denied"                    "git reset HEAD~1"
 expect_denied "git reset --hard is still denied (pre-existing rule)" "git reset --hard origin/uat"
 
-echo "== issue #60 task A: gh pr checkout / git switch denied for agy =="
+echo "== gh pr checkout / git switch denied for agy =="
 expect_denied "gh pr checkout is denied"                "gh pr checkout 60"
 expect_denied "git switch is denied"                    "git switch main"
 
@@ -60,7 +60,7 @@ expect_denied "git push --force is still denied"      "git push --force origin u
 expect_denied "push -f shorthand is still denied"      "git push -f origin uat"
 expect_denied "git clean is still denied"              "git clean -fd"
 
-echo "== issue #18 B-i: the OLD project-specific career-ops/ ban is gone (project-agnostic) =="
+echo "== the OLD project-specific career-ops/ ban is gone (project-agnostic) =="
 expect_allowed "write into career-ops/ is no longer specially denied" "echo hi > career-ops/x.txt"
 
 echo "== T27: read ops remain allowed for review =="

@@ -22,7 +22,7 @@ AUTO_RESUME_LOG="$(mktemp)"
 AUTO_RESUME_MAX_PER_DAY=2
 AUTO_RESUME_QUOTA_STOP_FLAG="$(mktemp -u)"
 rm -f "$AUTO_RESUME_STATE_FILE" # ar_ensure_state_file should recreate it
-# issue #125: park detection/ownership read the hook-written pane state
+# Park detection/ownership read the hook-written pane state
 # file -- point it at a throwaway dir, and skip the post-resume
 # state-flip verification wait (no real hooks fire in a plain-sh pane).
 PANE_STATE_DIR="$(mktemp -d)"
@@ -43,7 +43,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# #11: every scenario below pins "now" via AUTO_RESUME_NOW_EPOCH instead of
+# Every scenario below pins "now" via AUTO_RESUME_NOW_EPOCH instead of
 # racing the real wall clock against fixed resets_at fixtures -- the whole
 # point of this fix is that a resume decision is a real TIME comparison
 # now, so the tests drive that clock explicitly rather than relying on
@@ -88,7 +88,7 @@ new_test_pane() {
   echo "$TEST_SESSION:$name"
 }
 
-# issue #125: "parked" is a STATE-FILE fact now, not a screen fact. These
+# "parked" is a STATE-FILE fact now, not a screen fact. These
 # helpers write the pane's hook-state file exactly the way
 # hooks/pane-state.sh would (state + session_id) -- simulating the parked
 # session's own hooks firing, which IS the park signal. write_to_pane
@@ -135,7 +135,7 @@ else
   fail "should stay parked with budget untouched before now reaches the stored resets_at"
 fi
 
-# #11 regression case: the freshest poll's resets_at DRIFTS (a few minutes
+# Regression case: the freshest poll's resets_at DRIFTS (a few minutes
 # later than what was stored at parking) but real wall-clock time has NOT
 # actually reached the STORED deadline yet. Pre-fix, this string difference
 # alone would have been read as a rollover and resumed the pane mid-window
@@ -144,18 +144,18 @@ fi
 # "now", never the freshest poll's value.
 ar_poll_pane "$PANE" "2026-07-11T14:05:00Z" "85"
 if [ "$(ar_read --arg p "$PANE" '.panes[$p].state')" = "parked" ] && [ "$(ar_read '.budget.count')" = "0" ]; then
-  pass "#11: a drifted (but not yet reached) resets_at does NOT trigger a resume"
+  pass "a drifted (but not yet reached) resets_at does NOT trigger a resume"
 else
-  fail "#11 regression: drift alone triggered a resume before real time reached the stored deadline"
+  fail "regression: drift alone triggered a resume before real time reached the stored deadline"
 fi
 
 # Time genuinely reaches the stored deadline, but usage is STILL high
-# (belt-and-braces, #11). Must not resume, and must NOT drop tracking --
+# (belt-and-braces). Must not resume, and must NOT drop tracking --
 # next iteration should get another chance once usage actually drops.
 AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T14:00:00Z")"
 ar_poll_pane "$PANE" "2026-07-11T19:00:00Z" "72"
 if [ "$(ar_read --arg p "$PANE" '.panes[$p].state')" = "parked" ] && [ "$(ar_read '.budget.count')" = "0" ]; then
-  pass "#11 belt-and-braces: window time-reset but usage still >=50% -- no resume, tracking kept"
+  pass "belt-and-braces: window time-reset but usage still >=50% -- no resume, tracking kept"
 else
   fail "should stay parked (tracking kept) when usage is still high at the moment of a real time-reset"
 fi
@@ -183,13 +183,13 @@ else
   fail "expected an auto-resume message in the pane's scrollback"
 fi
 
-echo "== #80/#81/#86 (was T31/#68-E): resume path submits via the shared send_submit =="
+echo "== resume path submits via the shared send_submit =="
 # Claude Code's TUI drops an Enter that arrives in the same send-keys burst
 # as the pasted text. The resume path submits through the shared
-# send_submit helper (moved to send-lib.sh in issue #86 -- see
+# send_submit helper (moved to send-lib.sh -- see
 # send-lib.test.sh for send_submit's own retry-shape/wrap-confirm checks).
 # Note: gatekeeper's alerts no longer call send_submit/notify() directly at
-# all -- issue #105 replaced that with a durable dispatch.sh message to
+# all -- that was replaced with a durable dispatch.sh message to
 # Orchestra (see gatekeeper.test.sh's Task 1/2 cases and
 # gk_alert_orchestra in gatekeeper.sh).
 if grep -q 'send_submit "\$pane" "Quota window reset' "$LIB/auto-resume.sh"; then
@@ -198,7 +198,7 @@ else
   fail "resume path should submit via send_submit, not a raw send-keys burst"
 fi
 if grep -q 'gk_alert_orchestra' "$LIB/gatekeeper.sh" && grep -q 'dispatch_main assign orchestra' "$LIB/gatekeeper.sh"; then
-  pass "gatekeeper alerts route through dispatch_main assign orchestra (issue #105), not a direct pane keystroke"
+  pass "gatekeeper alerts route through dispatch_main assign orchestra, not a direct pane keystroke"
 else
   fail "gatekeeper should route alerts through gk_alert_orchestra/dispatch_main, not send_submit directly"
 fi
@@ -255,7 +255,7 @@ if [ "$(ar_read --arg p "$PANE4" '.panes[$p].state')" != "parked" ]; then
   fail "setup failed: pane4 should be parked before the touch test"
 fi
 # Simulate Ahmad (or anything else) taking the session over: its own
-# hooks fire and the state moves off failsafe (issue #125: a "touch" is a
+# hooks fire and the state moves off failsafe (a "touch" is a
 # state transition now, not a screen change).
 simulate_state "$PANE4" busy
 ar_poll_pane "$PANE4" "2026-07-11T14:00:00Z" "85" # no reset yet, but the pane changed
@@ -275,8 +275,8 @@ else
   fail "touched-pane skip must not spend budget, got count=$(ar_read '.budget.count')"
 fi
 
-echo "== #125 (supersedes #73/#80): parked pane + ARBITRARY passive screen output + window reset -> auto-continues =="
-# The whole #73/#80 fingerprint saga existed because ownership was a
+echo "== parked pane + ARBITRARY passive screen output + window reset -> auto-continues =="
+# The whole fingerprint saga existed because ownership was a
 # screen property: passive output (gatekeeper alerts, watch nudges,
 # counter repaints) landing in a parked pane changed the screen and
 # dropped tracking. With state-file ownership the screen is simply not an
@@ -289,9 +289,9 @@ simulate_parked_pane "$PANE5" "sid-5"
 ar_mark_pending "$PANE5" "driver"
 ar_poll_pane "$PANE5" "2026-07-11T14:00:00Z" "85"
 if [ "$(ar_read --arg p "$PANE5" '.panes[$p].state')" = "parked" ] && [ "$(ar_read --arg p "$PANE5" '.panes[$p].session_id')" = "sid-5" ]; then
-  pass "#125: pane parks with the parking session_id recorded"
+  pass "pane parks with the parking session_id recorded"
 else
-  fail "#125: pane should park with session_id in the tracking entry"
+  fail "pane should park with session_id in the tracking entry"
 fi
 
 # Dirty the screen aggressively -- alerts, nudges, even the literal old
@@ -303,37 +303,37 @@ sleep 0.3
 
 ar_poll_pane "$PANE5" "2026-07-11T14:00:00Z" "85" # no reset yet
 if [ "$(ar_read --arg p "$PANE5" '.panes[$p].state')" = "parked" ]; then
-  pass "#125: pane stays parked through arbitrary passive screen output (state unchanged, screen ignored)"
+  pass "pane stays parked through arbitrary passive screen output (state unchanged, screen ignored)"
 else
-  fail "#125 REGRESSION: passive screen output alone dropped tracking -- ownership is reading the screen again"
+  fail "REGRESSION: passive screen output alone dropped tracking -- ownership is reading the screen again"
 fi
 
 AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
 ar_poll_pane "$PANE5" "2026-07-11T19:00:00Z" "10" # window reset + low usage
 if [ "$(ar_read --arg p "$PANE5" '.panes[$p] // empty')" = "" ]; then
-  pass "#125: tracking cleared after the reset was handled"
+  pass "tracking cleared after the reset was handled"
 else
-  fail "#125 REGRESSION: pane never auto-continued -- tracking still present after a genuine reset"
+  fail "REGRESSION: pane never auto-continued -- tracking still present after a genuine reset"
 fi
 if tmux capture-pane -p -t "$PANE5" 2>&1 | grep -q "auto-resuming"; then
-  pass "#125: pane received the auto-resume message despite the dirtied screen (the #73 live incident stays fixed)"
+  pass "pane received the auto-resume message despite the dirtied screen (the fingerprint-saga live incident stays fixed)"
 else
-  fail "#125 REGRESSION (the #73 live incident): pane never got auto-continued after the window reset"
+  fail "REGRESSION (the fingerprint-saga live incident): pane never got auto-continued after the window reset"
 fi
 if [ "$(ar_read '.budget.count')" = "1" ]; then
-  pass "#125: auto-resume consumed budget normally"
+  pass "auto-resume consumed budget normally"
 else
-  fail "#125: expected budget count 1 after the auto-resume, got $(ar_read '.budget.count')"
+  fail "expected budget count 1 after the auto-resume, got $(ar_read '.budget.count')"
 fi
 
-echo "== #125: question ANSWERED (session's hooks flip failsafe -> busy) -> no injection, tracking dropped =="
+echo "== question ANSWERED (session's hooks flip failsafe -> busy) -> no injection, tracking dropped =="
 AUTO_RESUME_NOW_EPOCH="$NOW0"
 PANE6="$(new_test_pane)"
 simulate_parked_pane "$PANE6" "sid-6"
 ar_mark_pending "$PANE6" "driver"
 ar_poll_pane "$PANE6" "2026-07-11T14:00:00Z" "85"
 if [ "$(ar_read --arg p "$PANE6" '.panes[$p].state')" != "parked" ]; then
-  fail "#125 setup failed: pane6 should be parked before the answered-question test"
+  fail "setup failed: pane6 should be parked before the answered-question test"
 fi
 # Ahmad answers: the session's own UserPromptSubmit hook fires and writes
 # busy -- THAT is the moved-on signal, not any screen content.
@@ -341,22 +341,22 @@ simulate_state "$PANE6" busy "sid-6"
 AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
 ar_poll_pane "$PANE6" "2026-07-11T19:00:00Z" "10" # window reset + low usage, but the pane moved on
 if [ "$(ar_read --arg p "$PANE6" '.panes[$p] // empty')" = "" ]; then
-  pass "#125: answered pane's tracking was dropped"
+  pass "answered pane's tracking was dropped"
 else
-  fail "#125: answered pane should have its tracking dropped, not left parked"
+  fail "answered pane should have its tracking dropped, not left parked"
 fi
 if tmux capture-pane -p -t "$PANE6" 2>&1 | grep -q "auto-resuming"; then
-  fail "#125 REGRESSION: auto-resume injected into a pane whose state had already moved past failsafe"
+  fail "REGRESSION: auto-resume injected into a pane whose state had already moved past failsafe"
 else
-  pass "#125: no auto-resume injected once the pane's state moved past failsafe"
+  pass "no auto-resume injected once the pane's state moved past failsafe"
 fi
 if grep -q "not ours to resume anymore" "$AUTO_RESUME_LOG"; then
-  pass "#125: answered-pane skip was logged with the amux rationale"
+  pass "answered-pane skip was logged with the amux rationale"
 else
-  fail "#125: expected a 'not ours to resume anymore' log line for the answered pane"
+  fail "expected a 'not ours to resume anymore' log line for the answered pane"
 fi
 
-echo "== #125: session RESTART while parked (same state, NEW session_id) -> ownership dropped, no injection =="
+echo "== session RESTART while parked (same state, NEW session_id) -> ownership dropped, no injection =="
 # A fresh session in the pane writes its own session_id (SessionStart
 # hook; still failsafe if the quota flag is up). Same state, different
 # identity -- the resume text would land in a session that never asked
@@ -367,24 +367,24 @@ simulate_parked_pane "$PANE7" "sid-old"
 ar_mark_pending "$PANE7" "worker"
 ar_poll_pane "$PANE7" "2026-07-11T14:00:00Z" "85"
 if [ "$(ar_read --arg p "$PANE7" '.panes[$p].state')" = "parked" ] && [ "$(ar_read --arg p "$PANE7" '.panes[$p].role')" = "worker" ]; then
-  pass "#125: pane parks (role field still recorded for logging/back-compat)"
+  pass "pane parks (role field still recorded for logging/back-compat)"
 else
-  fail "#125: pane should park with role=worker recorded"
+  fail "pane should park with role=worker recorded"
 fi
 simulate_parked_pane "$PANE7" "sid-new" # restarted session claims the pane
 ar_poll_pane "$PANE7" "2026-07-11T14:00:00Z" "85"
 if [ "$(ar_read --arg p "$PANE7" '.panes[$p] // empty')" = "" ]; then
-  pass "#125: a new session_id in the same pane drops ownership immediately"
+  pass "a new session_id in the same pane drops ownership immediately"
 else
-  fail "#125 REGRESSION: ownership survived a session restart -- the resume would inject into a stranger session"
+  fail "REGRESSION: ownership survived a session restart -- the resume would inject into a stranger session"
 fi
 if tmux capture-pane -p -t "$PANE7" 2>&1 | grep -q "auto-resuming"; then
-  fail "#125 REGRESSION: auto-resume injected into a restarted (different) session"
+  fail "REGRESSION: auto-resume injected into a restarted (different) session"
 else
-  pass "#125: no injection into the restarted session"
+  pass "no injection into the restarted session"
 fi
 
-echo "== #73: window NOT reset -> no action regardless (driver) =="
+echo "== window NOT reset -> no action regardless (driver) =="
 AUTO_RESUME_NOW_EPOCH="$NOW0"
 PANE8="$(new_test_pane)"
 simulate_parked_pane "$PANE8"
@@ -392,17 +392,17 @@ ar_mark_pending "$PANE8" "driver"
 ar_poll_pane "$PANE8" "2026-07-11T14:00:00Z" "85"
 ar_poll_pane "$PANE8" "2026-07-11T14:00:00Z" "85" # unchanged resets_at, now still before it
 if [ "$(ar_read --arg p "$PANE8" '.panes[$p].state')" = "parked" ]; then
-  pass "#73: driver pane with no window reset yet stays parked, no action taken"
+  pass "driver pane with no window reset yet stays parked, no action taken"
 else
-  fail "#73: driver pane should stay parked when the window has not actually reset"
+  fail "driver pane should stay parked when the window has not actually reset"
 fi
 if tmux capture-pane -p -t "$PANE8" 2>&1 | grep -q "auto-resuming"; then
-  fail "#73 REGRESSION: driver pane was auto-resumed despite no window reset"
+  fail "REGRESSION: driver pane was auto-resumed despite no window reset"
 else
-  pass "#73: no premature auto-resume for the driver without a real window reset"
+  pass "no premature auto-resume for the driver without a real window reset"
 fi
 
-echo "== #125: state file CLEARED while parked (pane died, liveness cleaned it) -> tracking dropped, no injection =="
+echo "== state file CLEARED while parked (pane died, liveness cleaned it) -> tracking dropped, no injection =="
 # The crash path: the parked session's process dies, watch.sh's
 # pane-liveness detects the dead pane and calls pane_state_clear. No
 # state file = no ownership = drop -- never type into whatever is in
@@ -414,20 +414,20 @@ simulate_parked_pane "$PANE9" "sid-9"
 ar_mark_pending "$PANE9" "driver"
 ar_poll_pane "$PANE9" "2026-07-11T14:00:00Z" "85"
 if [ "$(ar_read --arg p "$PANE9" '.panes[$p].state')" != "parked" ]; then
-  fail "#125 setup failed: pane9 should be parked before the cleared-state test"
+  fail "setup failed: pane9 should be parked before the cleared-state test"
 fi
 clear_pane_state "$PANE9"
 AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2026-07-11T19:00:00Z")"
 ar_poll_pane "$PANE9" "2026-07-11T19:00:00Z" "10" # window reset + low usage, but the state is gone
 if [ "$(ar_read --arg p "$PANE9" '.panes[$p] // empty')" = "" ]; then
-  pass "#125: cleared-state pane's tracking was dropped"
+  pass "cleared-state pane's tracking was dropped"
 else
-  fail "#125 REGRESSION: tracking survived a cleared state file (dead pane) -- the resume would fire blind"
+  fail "REGRESSION: tracking survived a cleared state file (dead pane) -- the resume would fire blind"
 fi
 if tmux capture-pane -p -t "$PANE9" 2>&1 | grep -q "auto-resuming"; then
-  fail "#125 REGRESSION: auto-resume injected into a pane with no state at all (post-crash)"
+  fail "REGRESSION: auto-resume injected into a pane with no state at all (post-crash)"
 else
-  pass "#125: no injection into a pane whose state was cleared (post-crash safety)"
+  pass "no injection into a pane whose state was cleared (post-crash safety)"
 fi
 
 echo "== weekly (seven_day) never wires into auto-resume =="
@@ -445,7 +445,7 @@ else
   fail "expected ar_mark_pending to be wired into the 5h alert paths"
 fi
 
-echo "== #11: ar_epoch_from_iso8601 cross-platform parse =="
+echo "== ar_epoch_from_iso8601 cross-platform parse =="
 EPOCH_A="$(ar_epoch_from_iso8601 "2026-07-11T12:00:00Z")"
 EPOCH_B="$(ar_epoch_from_iso8601 "2026-07-11T13:00:00Z")"
 if [ -n "$EPOCH_A" ] && [ -n "$EPOCH_B" ] && [ "$((EPOCH_B - EPOCH_A))" = "3600" ]; then
@@ -459,7 +459,7 @@ else
   fail "ar_epoch_from_iso8601 should return empty for unparseable input, not guess"
 fi
 
-echo "== #32: ar_epoch_from_iso8601 parses the REAL usage-API shape (fractional seconds + numeric offset) =="
+echo "== ar_epoch_from_iso8601 parses the REAL usage-API shape (fractional seconds + numeric offset) =="
 # The exact literal from the 4.5h dead-room outage (.harness/budget.log,
 # 2026-07-12 19:53:53): BSD `date` on macOS can take neither GNU-style
 # `date -d` NOR its own `-j -f "%Y-%m-%dT%H:%M:%SZ"` fallback here -- the
@@ -484,7 +484,7 @@ else
   fail "expected the -05:00 fixture to resolve to the same instant $WANT_EPOCH, got '$NEG_OFFSET_EPOCH'"
 fi
 
-echo "== #32: a genuinely null/absent resets_at still fails CLOSED to manual-clear =="
+echo "== a genuinely null/absent resets_at still fails CLOSED to manual-clear =="
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 : > "$AUTO_RESUME_LOG"
 ar_write_quota_stop_flag "5h" "81" "agy" ""
@@ -495,7 +495,7 @@ else
 fi
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 
-echo "== #32: ar_write_quota_stop_flag no longer logs a parse failure for the real outage literal =="
+echo "== ar_write_quota_stop_flag no longer logs a parse failure for the real outage literal =="
 : > "$AUTO_RESUME_LOG"
 ar_write_quota_stop_flag "5h" "81" "agy" "$REAL_TS"
 if grep -q "could not parse resets_at" "$AUTO_RESUME_LOG"; then
@@ -510,7 +510,7 @@ else
 fi
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 
-echo "== #10: quota-stop flag write/clear (the #11<->#10 seam) =="
+echo "== quota-stop flag write/clear =="
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 ar_write_quota_stop_flag "5h" "85" "agy" "2026-07-11T14:00:00Z"
 if [ -f "$AUTO_RESUME_QUOTA_STOP_FLAG" ]; then
@@ -547,7 +547,7 @@ else
   fail "expected a 'quota-stop flag cleared' log line"
 fi
 
-echo "== #10: weekly/both flags do NOT auto-clear (require the manual clear path) =="
+echo "== weekly/both flags do NOT auto-clear (require the manual clear path) =="
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 ar_write_quota_stop_flag "weekly" "90" "none"
 AUTO_RESUME_NOW_EPOCH="$(ar_epoch_from_iso8601 "2099-01-01T00:00:00Z")" # far future -- would clear a 5h-style flag
@@ -567,7 +567,7 @@ else
 fi
 rm -f "$AUTO_RESUME_QUOTA_STOP_FLAG"
 
-echo "== #10-rework finding 5: 'both' flag WITH a 5h resets_at downgrades to 'weekly' on reset, not permanently stuck =="
+echo "== 'both' flag WITH a 5h resets_at downgrades to 'weekly' on reset, not permanently stuck =="
 # The original bug: gatekeeper.sh wrote the "both" flag with NO resets_at
 # at all, so even once the 5h window genuinely reset and Claude quota
 # came back, ar_clear_quota_stop_flag_if_reset had nothing to compare

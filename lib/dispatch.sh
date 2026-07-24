@@ -29,11 +29,11 @@ source "$DIR/harness-root.sh"
 source "$DIR/orc-config.sh"
 # shellcheck source=./pane-state-lib.sh
 source "$DIR/pane-state-lib.sh"
-# issue #99: inbox/deferred-nudges are per-repo STATE, not per-checkout --
+# inbox/deferred-nudges are per-repo STATE, not per-checkout --
 # every worktree has its own gitignored .harness/inbox, so a dispatch run
 # from inside a worktree must still land in the MAIN checkout's inbox, not
 # the worktree's own empty copy. CANON_DIR is that canonical .harness dir,
-# resolved off the CALLER's cwd (issue #116: these scripts no longer live
+# resolved off the CALLER's cwd (these scripts no longer live
 # inside the project they serve). DISPATCH_CANON_DIR overrides outright.
 if [ -n "${DISPATCH_CANON_DIR:-}" ]; then
   CANON_DIR="$DISPATCH_CANON_DIR"
@@ -42,21 +42,21 @@ elif ! CANON_DIR="$(harness_canonical_dir "$PWD")"; then
   exit 1
 fi
 
-# issue #33: pane-state-lib.sh's PANE_STATE_DIR default resolves off
+# pane-state-lib.sh's PANE_STATE_DIR default resolves off
 # CANON_DIR at SOURCE time, which was too early above (CANON_DIR wasn't
 # resolved yet) -- set it explicitly now that CANON_DIR is known, so
 # pane_is_idle's hook-state read (below) lands in the same place
 # hooks/pane-state.sh writes to.
 PANE_STATE_DIR="$CANON_DIR/state/pane-state"
 
-# issue #125: the deferred-nudge queue is GONE. Senders only ever write
+# the deferred-nudge queue is GONE. Senders only ever write
 # the durable .msg; a busy receiver picks it up at turn end via the
 # check-inbox Stop hook, and lib/broker.sh (watch loop) owns every retry
 # with .ack verification and bounded escalation. The old queue was the
-# #118 failure class: fire-and-forget keystrokes that stranded unsubmitted
+# failure class: fire-and-forget keystrokes that stranded unsubmitted
 # and re-deferred forever.
 
-# issue #105: which tmux session pane_for_agent targets. Overridable so a
+# which tmux session pane_for_agent targets. Overridable so a
 # caller that's NOT a human at the real control room (gatekeeper.sh's
 # quota-crossing alerts, tests) can redirect every pane target to a
 # throwaway session instead -- without this, gatekeeper.sh's own
@@ -65,7 +65,7 @@ PANE_STATE_DIR="$CANON_DIR/state/pane-state"
 # regardless (found writing this ticket's own tests: a real 80%+ crossing
 # during a test run would have nudged the REAL harness:0.0 pane).
 #
-# issue #19 (cross-project nudge collision, live-repro'd): a hardcoded
+# cross-project nudge collision, live-repro'd: a hardcoded
 # "harness" default is harmless with ONE project's control room running,
 # but with two clone-per-project rooms live at once it nudges the WRONG
 # project's session -- dispatch.sh sent `check inbox` keystrokes into a
@@ -79,8 +79,8 @@ DISPATCH_SESSION="${DISPATCH_SESSION:-$(ORC_CONFIG_FILE="$(dirname "$CANON_DIR")
 # (production: "harness"), window 0, tiled. Agents without a live pane in
 # the orc.sh layout (or an unmapped/typo'd name) just don't get nudged --
 # the .msg is still written and will be picked up whenever the receiver
-# polls its inbox. scribe/copilot deliberately have NO entry here (issue
-# #89: pane 3 retired) -- dispatch_main special-cases them to
+# polls its inbox. scribe/copilot deliberately have NO entry here
+# (pane 3 retired) -- dispatch_main special-cases them to
 # scribe_spawn_headless before pane_for_agent/nudge_agent are ever
 # consulted, so falling through to the empty-mapping default here is
 # correct, not a gap.
@@ -94,9 +94,9 @@ pane_for_agent() {
 }
 
 # inbox_dir_name <agent> -- resolves the on-disk inbox directory for an
-# agent name. `scribe` is the current display name (issue #89) AND the
+# agent name. `scribe` is the current display name AND the
 # current physical directory -- a fresh clone-per-project room is seeded
-# with inbox/scribe/, not inbox/copilot/ (issue #22: aliasing scribe TO
+# with inbox/scribe/, not inbox/copilot/ (aliasing scribe TO
 # copilot made dispatch hard-fail in every fresh room, since no clone has a
 # copilot/ dir or history to preserve). `copilot` is kept as a legacy verb
 # that aliases INTO scribe/, so a caller still using the old name lands
@@ -111,7 +111,7 @@ inbox_dir_name() {
 
 # pane_busy_markers <agent> -- busy-indicator regex (kept accepting an
 # agent arg for call-site compatibility; no longer used, see below).
-# issue #97 review round 2 (agy finding 2, reproduced live): a bare-word
+# reproduced live: a bare-word
 # substring match anywhere in the tail false-flagged busy on ORDINARY
 # PROSE merely containing one of these words on a genuinely idle pane
 # (e.g. "...thinking about this differently, working through the edge
@@ -150,7 +150,7 @@ pane_busy_markers() {
 #   pane_current_command as a version string (e.g. "2.1.206"), not
 #   "claude" -- that still falls through to the TUI branch below correctly
 #   (it matches none of bash/zsh/sh/fish), just worth knowing when reading
-#   this case statement (issue #86 Task 3 live observation).
+#   this case statement (Task 3 live observation).
 # - otherwise (a TUI: claude, agy, copilot, node, ...) -> capture the last
 #   10 lines and look for busy markers (spinner/status text a TUI shows
 #   mid-generation), using that AGENT's own marker set (see
@@ -165,7 +165,7 @@ pane_busy_markers() {
 # whatever it's mid-generating.
 pane_is_idle() {
   local target="$1" agent="${2:-}" cmd tail markers pane_id hook_state
-  # issue #33: a Claude Code pane's own hooks (UserPromptSubmit/
+  # a Claude Code pane's own hooks (UserPromptSubmit/
   # PreToolUse -> busy, Stop -> idle) write ground truth, keyed by
   # $TMUX_PANE -- authoritative wherever it's fresh, since it needs no
   # guessing about what's rendered on screen (unlike the capture-pane
@@ -188,8 +188,8 @@ pane_is_idle() {
   esac
   # send_meaningful_tail (send-lib.sh), not a raw capture-pane|tail -10: a
   # tall pane blank-pads below its real content, and a naive tail on the
-  # unfiltered capture can grab pure padding instead of text (issue #86,
-  # found dogfooding Task 3's own test).
+  # unfiltered capture can grab pure padding instead of text
+  # (found dogfooding Task 3's own test).
   tail="$(send_meaningful_tail "$target" 10)"
   markers="$(pane_busy_markers "$agent")"
   if echo "$tail" | grep -Eiq "$markers"; then
@@ -200,7 +200,7 @@ pane_is_idle() {
   if echo "$tail" | grep -Eq '^[[:space:]]*[>❯][[:space:]]*$'; then
     return 0
   fi
-  # issue #97 review round 2 (agy finding 1, reproduced live): an EARLIER
+  # reproduced live: an EARLIER
   # version of this fix dropped the anchor entirely (matched a prompt char
   # at the start of ANY line, trailing content or not) to handle stuck
   # unsubmitted nudge text on the prompt line -- but that also matches any
@@ -255,7 +255,7 @@ nudge_agent() {
     echo "dispatch.sh: no tmux '${target%%:*}' session running, skipping nudge" >&2
     return 0
   fi
-  # issue #125 / #150: state-driven, no deferred queue. The pane's own hook state
+  # State-driven, no deferred queue. The pane's own hook state
   # (ground truth for hook-enabled panes) decides: idle -> one immediate typed
   # wake (safe -- idle is not a guess); busy -> nothing, the check-inbox
   # Stop hook delivers at turn end; failsafe -> nothing, the broker holds
@@ -263,7 +263,7 @@ nudge_agent() {
   # falls back to the screen heuristic as a generic last resort for this one
   # immediate-wake decision. Either way lib/broker.sh owns retries with
   # .ack verification, so a skipped wake here is a delay, never a loss.
-  # (send_submit itself keeps the #86 confirm/retry typing discipline.)
+  # (send_submit itself keeps the confirm/retry typing discipline.)
   local pane_id hook_state
   pane_id="$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null || echo '')"
   hook_state=""
@@ -290,9 +290,9 @@ nudge_agent() {
   esac
 }
 
-# scribe_spawn_headless <msg_file> <ack_file> -- issue #89: scribe has
+# scribe_spawn_headless <msg_file> <ack_file> -- scribe has
 # no standing pane anymore (pane 3 retired -- no recurring scribe job
-# remained after #85's mechanical issue-close). A dispatch to scribe/copilot
+# remained after a mechanical issue-close). A dispatch to scribe/copilot
 # spawns a ONE-SHOT headless run instead of nudging a pane: `claude -p
 # --model haiku` reads the .msg content, does the judgment task, and writes
 # its own one-line receipt to the .ack path, then exits. The inbox stays
@@ -308,7 +308,7 @@ scribe_spawn_headless() {
   local spawn_id scratch_dir soul_preamble soul_file
   msg_body="$(cat "$msg_file" 2>/dev/null)"
 
-  # issue #12: scribe has no standing pane/SessionStart hook to inject a
+  # scribe has no standing pane/SessionStart hook to inject a
   # SOUL.md card into (unlike orchestra/builder, see hooks/session-
   # start.sh) -- its identity card rides in the spawn prompt itself
   # instead. Same "no file, no line, no nag" precedent as the Claude-lane
@@ -321,7 +321,7 @@ scribe_spawn_headless() {
 
 "
   fi
-  # issue #18 B3: this used to hardcode "career-ops-harness" (this
+  # this used to hardcode "career-ops-harness" (this
   # harness's original single-consumer project) -- project-agnostic now,
   # reading THIS project's own name from orchestrator.yaml like every
   # other role/session-name derivation in this file.
@@ -335,7 +335,7 @@ scribe_spawn_headless() {
   spawn_id="$(date '+%Y%m%d%H%M%S')-$$"
   mkdir -p "$CANON_DIR/state"
   log_file="$CANON_DIR/state/scribe-${spawn_id}.log"
-  # agy PROBE 1 (PR #30 REQUEST-CHANGES): gh issue/pr comment needs
+  # agy PROBE 1 (REQUEST-CHANGES review): gh issue/pr comment needs
   # --body-file <tmpfile> (the guard false-positives on inline --body), and
   # creating that tmpfile is a Write to a path that is NOT $ack_file -- the
   # scribe deadlocked on an unanswerable permission prompt the moment it
@@ -349,7 +349,7 @@ scribe_spawn_headless() {
   # prose (e.g. "doesn't") opens an unterminated single-quote from its
   # point of view -- breaks the WHOLE script's parse, not just this
   # function (found the hard way writing this very function).
-  prompt="${soul_preamble}You are the scribe agent for ${project_name}, spawned one-shot to handle a single dispatched task (issue #89: scribe has no standing pane -- this headless run IS the scribe for this one message).
+  prompt="${soul_preamble}You are the scribe agent for ${project_name}, spawned one-shot to handle a single dispatched task (scribe has no standing pane -- this headless run IS the scribe for this one message).
 
 Dispatch message:
 $msg_body
@@ -358,12 +358,12 @@ Do the judgment task described above. If you need to post a gh issue/PR comment 
 When finished, write exactly one line -- what you did, or SKIPPED: <reason> if it does not apply -- to this file: $ack_file
 Do nothing else outside the scope of this message."
 
-  # issue #23, reworked after agy's PR #30 REQUEST-CHANGES (3 findings):
+  # Reworked after a REQUEST-CHANGES review round (3 findings):
   #  (a) ORC_ONESHOT=1 tells check-handoff.sh's Stop hook to exempt this
   #      session -- a one-shot's own .session-start marker is always newer
   #      than any handoff.md written before it spawned, and per AGENTS.md's
   #      single-writer rule the scribe must never write that file anyway.
-  #      SAFE ONLY because issue #31 protects .claude/.agents/ by default
+  #      SAFE ONLY because .claude/.agents/ is protected by default
   #      now (see check-handoff.sh's comment) -- otherwise this flag would
   #      be spoofable by editing the Stop hook's own command.
   #  (b) --allowedTools grants EXACTLY what the scribe's job needs: the gh
@@ -393,7 +393,7 @@ Do nothing else outside the scope of this message."
 }
 
 # dispatch_write_msg <base_path_without_ext> <body_file (or empty)> <msg (or empty, used only if body_file is empty)>
-# -- issue #90. Allocates a collision-free "<base>[-N].msg" filename and
+# -- allocates a collision-free "<base>[-N].msg" filename and
 # writes it ATOMICALLY (temp file in the SAME directory, then `mv -n`),
 # so a half-written file is never observable as complete and two
 # concurrent writers can never silently clobber each other. Prints the
@@ -437,7 +437,7 @@ dispatch_main() {
   local VERB="${1:?$USAGE}"
   local AGENT="${2:?$USAGE}"
   local ISSUE="${3:?$USAGE}"
-  # issue #59: a real dispatch body is 3-8KB of structured text -- passing
+  # A real dispatch body is 3-8KB of structured text -- passing
   # that as a POSITIONAL string arg forces the CALLER into command
   # substitution ("$(cat file)"), which is exactly the kind of construct
   # guard.sh cannot safely verify and correctly refuses to trust. --body-file
@@ -459,9 +459,9 @@ dispatch_main() {
     MSG="${4:?$USAGE}"
     shift 4
   fi
-  # issue #159: remaining args are optional and order-independent -- a bare
+  # Remaining args are optional and order-independent -- a bare
   # integer is the pre-existing ack-poll TIMEOUT (unchanged shape for every
-  # pre-#159 caller); --fresh and --wait-idle <secs> are new, additive-only
+  # existing caller); --fresh and --wait-idle <secs> are new, additive-only
   # flags no old caller ever passes, so a no-flag call parses identically
   # to before (TIMEOUT still defaults to 120 when nothing follows MSG/
   # --body-file).
@@ -500,7 +500,7 @@ dispatch_main() {
     return 1
   fi
 
-  # issue #159: --fresh reorders dispatch around a mandatory /clear of the
+  # --fresh reorders dispatch around a mandatory /clear of the
   # receiving pane BEFORE the .msg exists at all -- a nudge (or the
   # receiver's own check-inbox Stop hook) racing an in-flight /clear could
   # otherwise pick up the .msg an instant before the pane resets, losing
@@ -515,7 +515,7 @@ dispatch_main() {
         ;;
     esac
 
-    # issue #159 agy-parity probe (timeboxed, ~1h): 'agy --help'/'agy
+    # Agy-parity probe (timeboxed, ~1h): 'agy --help'/'agy
     # changelog' (v1.1.6) expose no external, outside-triggerable
     # conversation-reset -- --continue/--conversation only pick which
     # conversation a NEW process's startup resumes, not a live mid-session
@@ -528,7 +528,7 @@ dispatch_main() {
     # already re-fires its hooks, see hooks/check-inbox-stop-agy.sh) is the
     # documented agy-fresh path instead.
     if [ "$AGENT" = "agy" ]; then
-      echo "dispatch.sh: --fresh has no agy equivalent (probed issue #159: no outside-triggerable conversation-reset in agy's CLI) -- restart the agy pane instead of --fresh" >&2
+      echo "dispatch.sh: --fresh has no agy equivalent (probed: no outside-triggerable conversation-reset in agy's CLI) -- restart the agy pane instead of --fresh" >&2
       return 1
     fi
 
@@ -548,7 +548,7 @@ dispatch_main() {
       return 1
     fi
 
-    # Ground-truth idle, same rule as typed wakes (issue #125): busy or
+    # Ground-truth idle, same rule as typed wakes: busy or
     # failsafe REFUSES loudly, no queued clear, no fallthrough to a plain
     # dispatch. --wait-idle is an optional bounded grace poll (builder's
     # call per the Gate-1 plan) -- the hard refusal still stands once it
@@ -601,7 +601,7 @@ dispatch_main() {
     echo "dispatch.sh: --fresh confirmed SessionStart(clear) evidence for '$AGENT' ($fresh_target) -- proceeding to dispatch"
   fi
 
-  # issue #159 (relatedness signal): a plain assign/handoff (no --fresh) to
+  # Relatedness signal: a plain assign/handoff (no --fresh) to
   # the SAME agent with a DIFFERENT issue than its last dispatch is a loud
   # warning, not a refusal -- the receiving pane's context may still hold
   # the PREVIOUS issue's residue. --fresh already handles the transition
@@ -616,7 +616,7 @@ dispatch_main() {
     fi
   fi
 
-  # issue #90 (live incident): two dispatches to the same agent+issue
+  # Live incident: two dispatches to the same agent+issue
   # inside the same wall-clock second used to compute the identical
   # <ts>-<issue>.msg filename, and a plain `>` write let the second
   # silently clobber the first (a builder dead-flag was lost this way).
@@ -635,13 +635,13 @@ dispatch_main() {
 
   [ "$VERB" = "message" ] && return 0
 
-  # issue #159: record the last-dispatched issue for this agent (every
+  # Record the last-dispatched issue for this agent (every
   # assign/handoff, --fresh or not) so the NEXT plain dispatch can compare
   # against it -- see the relatedness-warning check above.
   mkdir -p "$LAST_ISSUE_DIR"
   echo "$ISSUE" > "$LAST_ISSUE_FILE"
 
-  # issue #89: scribe/copilot has no standing pane to nudge -- spawn its
+  # scribe/copilot has no standing pane to nudge -- spawn its
   # one-shot headless run instead. Every other agent still goes through the
   # normal pane nudge.
   case "$AGENT" in

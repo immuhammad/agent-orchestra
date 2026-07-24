@@ -81,7 +81,7 @@ else
   fail "expected to wait close to 5s for the held lock, only waited ${ELAPSED}s"
 fi
 
-echo "== issue #99: log-decision.sh resolves to the MAIN checkout's decisions.log, even run from a worktree =="
+echo "== log-decision.sh resolves to the MAIN checkout's decisions.log, even run from a worktree =="
 SCRATCH_ROOT="$(mktemp -d)"
 SCRATCH_ROOT="$(cd "$SCRATCH_ROOT" && pwd -P)"
 MAIN_REPO="$SCRATCH_ROOT/main-repo"
@@ -89,7 +89,7 @@ mkdir -p "$MAIN_REPO"
 git -C "$MAIN_REPO" init -q
 git -C "$MAIN_REPO" config user.email "test@test.local"
 git -C "$MAIN_REPO" config user.name "test"
-# orchestrator.yaml is the project-root marker (issue #116); committed so
+# orchestrator.yaml is the project-root marker; committed so
 # `git worktree add` gives the worktree its own tracked copy too, which is
 # what exercises the git-common-dir redirect below (a naive walk-up alone
 # would stop at the worktree's own copy).
@@ -106,12 +106,12 @@ git -C "$MAIN_REPO" worktree add -q -b feature/scratch "$WT_REPO" >/dev/null 2>&
 if grep -q 'worktree-canonical test' "$MAIN_REPO/.harness/decisions.log" 2>/dev/null; then
   pass "decision logged from inside a worktree landed in the MAIN checkout's decisions.log"
 else
-  fail "expected the decision in the main checkout's decisions.log (#99 regression)"
+  fail "expected the decision in the main checkout's decisions.log (the split-log regression)"
 fi
 if [ ! -f "$WT_REPO/.harness/decisions.log" ]; then
   pass "the worktree's own decisions.log was never created (no split log)"
 else
-  fail "the worktree should NOT have its own decisions.log (#99 regression): $(cat "$WT_REPO/.harness/decisions.log")"
+  fail "the worktree should NOT have its own decisions.log (the split-log regression): $(cat "$WT_REPO/.harness/decisions.log")"
 fi
 rm -rf "$SCRATCH_ROOT"
 

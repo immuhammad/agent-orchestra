@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/orc-install-skills.test.sh -- issue #8: bin/orc-install-skills
+# tests/orc-install-skills.test.sh -- bin/orc-install-skills
 # dual-installs the tracked skills/ source tree into .claude/skills/ and
 # .agents/skills/, is idempotent/convergent on re-run, and has a --check
 # mode (no writes) that reports missing/stale skills, following
@@ -39,9 +39,9 @@ else
   fail "installed skill names diverge from skills/ source"
 fi
 if [ -f "$TARGET1/.claude/skills/dispatching-parallel-agents/SKILL.md" ] && [ -f "$TARGET1/.agents/skills/subagent-driven-development/SKILL.md" ]; then
-  pass "issue #8: the two newly-vendored skills (dispatching-parallel-agents, subagent-driven-development) install correctly"
+  pass "the two newly-vendored skills (dispatching-parallel-agents, subagent-driven-development) install correctly"
 else
-  fail "issue #8: the two newly-vendored skills did not install correctly"
+  fail "the two newly-vendored skills did not install correctly"
 fi
 
 echo "== re-running the installer on an already-installed target is a no-op (same resulting skill set) =="

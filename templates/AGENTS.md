@@ -82,7 +82,7 @@ evaluated on adoption, not bulk-imported.
   waived entirely). Write the one-line `.ack` at pickup. Mid-work
   decision points go to Orchestra as `FLAG:` dispatches — they pause
   the task, not the pickup.
-- Delivery (issue #125) is state-driven, never screen-guessed. Each
+- Delivery is state-driven, never screen-guessed. Each
   Claude pane's own hooks write ground truth
   (`busy|idle|failsafe` + session_id, `hooks/pane-state.sh` →
   `.harness/state/pane-state/`): a BUSY receiver picks its inbox up at
@@ -101,7 +101,7 @@ evaluated on adoption, not bulk-imported.
   the LIVE dir only — never re-read the archive. Screen heuristics
   survive ONLY as a generic last-resort fallback for TUIs lacking native
   hook support.
-- **Context hygiene (`--fresh`, issue #159).** `dispatch.sh assign|handoff
+- **Context hygiene (`--fresh`).** `dispatch.sh assign|handoff
   <agent> <issue> <msg> --fresh` clears the receiving Claude Code pane's
   context before the dispatch exists at all, so an unrelated issue never
   pays for (and can't be misled by) a prior ticket's residue. Ordering is
@@ -186,7 +186,7 @@ evaluated on adoption, not bulk-imported.
   unresolvable = skipped, not retried forever; (2) runs the broker
   (`lib/broker.sh`): ack-verified delivery/retry/escalation, inbox
   archival + retention, events rotation — the deferred-nudge queue is
-  gone (#118 class); (3) flags Orchestra via the inbox if an agent pane
+  gone; (3) flags Orchestra via the inbox if an agent pane
   drops back to a plain shell, clearing that pane's stale hook state.
   `watch.sh` never merges anything itself.
 - **Escalation path.** Builder AND Reviewer (any non-Orchestra agent)

@@ -19,12 +19,12 @@
 #
 # No post-compact companion file: compaction's own summary already covers
 # in-context continuity going forward; the risk here is only pre-loss disk
-# truth, so only a PreCompact hook is needed (see issue #40).
+# truth, so only a PreCompact hook is needed.
 set -euo pipefail
 
 INPUT=$(cat)
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-# issue #116: hooks fire with cwd = the consumer project (Claude Code
+# Hooks fire with cwd = the consumer project (Claude Code
 # invokes them from the project root), so HANDOFF stays cwd-relative, not
 # anchored to this hook script's own directory. handoff-lib.sh moved to
 # ../lib/ (a sibling of hooks/) in the new layout.

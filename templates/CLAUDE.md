@@ -1,7 +1,7 @@
 # CLAUDE.md — Claude Code lane
 
-> Template shipped by [agent-orchestra](https://github.com/immuhammad/agent-orchestra)
-> (issue #18). Copy this into your project root alongside `AGENTS.md`, fill
+> Template shipped by [agent-orchestra](https://github.com/immuhammad/agent-orchestra).
+> Copy this into your project root alongside `AGENTS.md`, fill
 > in the `<PROJECT>` placeholders, and delete this blockquote. `AGENTS.md`
 > is this project's single source of truth for harness rules — this file
 > adds Claude-Code-specific notes only and must never contradict it.
@@ -27,7 +27,7 @@ Handoff Protocol for the full read-order and what's ephemeral
   skill pack location (`.claude/skills/`), permission config. Delete this
   line once filled in.>
 - Protected paths are OS-immutable while `bin/orc-protect on` is set
-  (guard-layer redesign #141): writes into `.claude/`, `.agents/`,
+  (guard-layer redesign): writes into `.claude/`, `.agents/`,
   `orchestrator.yaml` fail with EPERM at the kernel, whatever tool or
   shell shape attempts them. For a LEGITIMATE config edit or template
   re-sync: `bin/orc-protect off`, edit, `bin/orc-protect on` — and say

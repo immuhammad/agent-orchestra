@@ -1,6 +1,6 @@
 #!/bin/bash
-# tests/room-branch.test.sh — TDD tests for lib/room-branch-lib.sh (issue #60
-# task B). Hermetic: every repo is a throwaway mktemp dir with its own
+# tests/room-branch.test.sh — TDD tests for lib/room-branch-lib.sh
+# (task B). Hermetic: every repo is a throwaway mktemp dir with its own
 # orchestrator.yaml, never the real project checkout, and ORC_PROJECT_ROOT is
 # unset so harness_canonical_dir walks up from each temp root instead of
 # picking up whatever real .harness/ the test happens to run under.
@@ -97,7 +97,7 @@ R10="$(mk_repo)"
 printf 'integration_branch: release\n' > "$R10/orchestrator.yaml"
 assert_eq "configured integration_branch is honored" "release" "$(room_branch_integration_branch "$R10")"
 
-echo "== room_branch_restore_command_allowed (issue #60 task E) =="
+echo "== room_branch_restore_command_allowed (task E) =="
 R11="$(mk_repo)"
 printf 'integration_branch: uat\n' > "$R11/orchestrator.yaml"
 if room_branch_restore_command_allowed "git checkout uat" "$R11"; then

@@ -89,7 +89,7 @@ else
   fail "expected both prior content and the new checkpoint to be present"
 fi
 
-echo "== T31 (issue #68 item A): a SECOND firing REPLACES the checkpoint, doesn't append another =="
+echo "== T31: a SECOND firing REPLACES the checkpoint, doesn't append another =="
 HANDOFF5="$TMP/handoff5.md"
 printf '# HANDOFF\n\n## Current state\nsome prior content\n' > "$HANDOFF5"
 echo '{"session_id":"first","trigger":"manual"}' | PRE_COMPACT_HANDOFF_FILE="$HANDOFF5" bash "$HOOK"

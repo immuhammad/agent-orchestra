@@ -2,7 +2,7 @@
 # tests/harness-root.test.sh — tests for harness_canonical_dir.
 # Run: ./tests/harness-root.test.sh
 #
-# Rewritten for issue #116's root-resolution generalization: the function
+# Rewritten for the root-resolution generalization: the function
 # no longer resolves off a script's own directory (there is no longer a
 # script directory inside the consumer project to resolve off of --
 # lib/harness-root.sh now lives in agent-orchestra's own repo). It instead
@@ -62,7 +62,7 @@ else
   fail "expected $MAIN/.harness, got $GOT_NESTED"
 fi
 
-echo "== harness_canonical_dir: from a WORKTREE, still resolves to the MAIN checkout's .harness (issue #99) =="
+echo "== harness_canonical_dir: from a WORKTREE, still resolves to the MAIN checkout's .harness =="
 WT="$SCRATCH/wt-issue-1"
 git -C "$MAIN" worktree add -q -b feature/scratch "$WT" >/dev/null 2>&1
 # The worktree gets its OWN tracked copy of orchestrator.yaml (git
@@ -79,12 +79,12 @@ else
   fail "expected worktree to resolve to $MAIN/.harness (the canonical repo root), got $GOT_WT"
 fi
 if [ "$GOT_WT" != "$WT/.harness" ]; then
-  pass "worktree's OWN .harness (the split-mailbox bug, #99) is NOT what got returned"
+  pass "worktree's OWN .harness (the split-mailbox bug) is NOT what got returned"
 else
   fail "worktree_canonical_dir must never return the worktree's own .harness"
 fi
 
-echo "== issue #18 (item 8): a NESTED clone-per-project dev target (its own orchestrator.yaml, inside an OUTER project's tree) resolves to its own .harness, not the outer one =="
+echo "== a NESTED clone-per-project dev target (its own orchestrator.yaml, inside an OUTER project's tree) resolves to its own .harness, not the outer one =="
 OUTER="$SCRATCH/outer-harness"
 mkdir -p "$OUTER"
 echo "project: outer" > "$OUTER/orchestrator.yaml"
@@ -142,7 +142,7 @@ fi
 if [ ! -d "$WT/.harness/inbox/testagent" ] || ! ls "$WT"/.harness/inbox/testagent/*-999.msg >/dev/null 2>&1; then
   pass "the worktree's OWN inbox copy stayed empty (mailbox no longer splits)"
 else
-  fail "the worktree's own inbox copy should NOT have received the message (#99 regression)"
+  fail "the worktree's own inbox copy should NOT have received the message (the split-mailbox regression)"
 fi
 
 echo ""
