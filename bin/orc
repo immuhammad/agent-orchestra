@@ -361,13 +361,20 @@ orc_up() {
 # only prompts for the same keys and writes an equivalent answers file
 # before calling the core. Tests drive the core directly.
 #
-# No --force / re-init story is specified anywhere in issue #5 (zero
-# comments, terse body) -- refuses loudly by default and stops there;
-# adding an overwrite escape hatch is left for a future ticket (flagged
-# to Orchestra, see decisions.log). Likewise "orc up --dry-run" doesn't
-# exist (orc up takes no flags at all yet) -- not added here; post-init
-# verification instead reuses the two static verifiers this repo already
-# has (check-hook-wiring.sh, orc-install-skills --check).
+# --force (issue #116, Gate-1 plan on the issue) resyncs an EXISTING
+# room's templates-derived files (AGENTS.md/CLAUDE.md/GEMINI.md/souls/*/
+# skill pack/.claude/settings.json/.agents/hooks.json) against the
+# CURRENT templates, backing up any hand-edited file first (drift is
+# detected against .harness/state/init-manifest, a sha256 baseline
+# written at every init/--force -- no manifest at all means a pre-#116
+# project, treated conservatively as all-drifted). orchestrator.yaml
+# itself is only rewritten when --force is paired with an explicit
+# --answers file; bare --force reads it as the answers source instead.
+# See orc_init_force below; orc_init_core (this function) stays the
+# fresh-room path only. Likewise "orc up --dry-run" doesn't exist (orc up
+# takes no flags at all yet) -- not added here; post-init verification
+# instead reuses the two static verifiers this repo already has
+# (check-hook-wiring.sh, orc-install-skills --check).
 ORC_TEMPLATES_DIR="$ORC_SCRIPT_DIR/../templates"
 
 # orc_init_read_answer <answers_file> <key> [default] -- a KEY=value line
@@ -539,6 +546,58 @@ orc_init_render_soul() {
   done < "$src"
 }
 
+# orc_init_render_orchestrator_yaml <answers_file> <dest> -- builds
+# orchestrator.yaml's content from an answers file. Shared by
+# orc_init_core's fresh-room write (wrapped in a noclobber TOCTOU guard
+# there) and orc_init_force's --answers-driven full re-init (issue #116) --
+# one source of yaml-shape truth for both paths. ticket_tracker joined the
+# persisted scalars here: bare --force's own answers source IS this file,
+# and TICKET_TRACKER is the one answer that changes generated prose
+# (AGENTS.md's PICK line) -- without persisting it, a resync would
+# silently regress a non-default tracker back to gh-issues. GATE_APPROVER/
+# GITHUB_REMOTE stay out: neither is ever rendered into any file's content
+# (GATE_APPROVER is a one-time stdout courtesy, GITHUB_REMOTE has no
+# consumer at all), so there's nothing for --force to lose by not
+# persisting them.
+orc_init_render_orchestrator_yaml() {
+  local answers_file="$1" dest="$2"
+  local project branch paths tracker role rk model eff path_arr p
+  project="$(orc_init_read_answer "$answers_file" PROJECT)"
+  branch="$(orc_init_read_answer "$answers_file" INTEGRATION_BRANCH main)"
+  paths="$(orc_init_read_answer "$answers_file" PROTECTED_PATHS)"
+  tracker="$(orc_init_read_answer "$answers_file" TICKET_TRACKER gh-issues)"
+  {
+    echo "project: $project"
+    echo "integration_branch: $branch"
+    echo "ticket_tracker: $tracker"
+    echo ""
+    echo "protected_paths:"
+    if [ -n "$paths" ]; then
+      path_arr=()
+      IFS=',' read -ra path_arr <<< "$paths"
+      for p in "${path_arr[@]}"; do
+        echo "  - $p"
+      done
+    fi
+    echo ""
+    echo "roles:"
+    for role in orchestra implementer tester reviewer scribe; do
+      rk="$(echo "$role" | tr '[:lower:]' '[:upper:]')"
+      model="$(orc_init_read_answer "$answers_file" "ROLE_${rk}_MODEL")"
+      eff="$(orc_init_read_answer "$answers_file" "ROLE_${rk}_EFFORT" default)"
+      echo "  $role:"
+      echo "    model: $model"
+      echo "    effort: $eff"
+    done
+    echo ""
+    echo "budgets:"
+    echo "  claude:"
+    echo "    failsafe_pct: $(orc_init_read_answer "$answers_file" BUDGET_CLAUDE_PCT 80)"
+    echo "  agy:"
+    echo "    failsafe_pct: $(orc_init_read_answer "$answers_file" BUDGET_AGY_PCT 80)"
+  } > "$dest" 2>/dev/null
+}
+
 # orc_init_core <answers_file> <target_dir> -- the whole non-interactive
 # wizard: validate, refuse if already initialized, write every file,
 # install skills, run the post-init verifiers. Nothing is written unless
@@ -574,7 +633,7 @@ orc_init_core() {
   # symlink, broken or not) together catch every case: a real file, a
   # working symlink, and a broken one.
   if [ -e "$target/orchestrator.yaml" ] || [ -L "$target/orchestrator.yaml" ]; then
-    echo "orc init: REFUSE -- $target/orchestrator.yaml already exists. orc init never overwrites an already-initialized project (no --force in this version)." >&2
+    echo "orc init: REFUSE -- $target/orchestrator.yaml already exists. Run 'orc init --force' to resync it instead." >&2
     return 1
   fi
 
@@ -583,47 +642,20 @@ orc_init_core() {
     return 1
   fi
 
-  local project branch paths gate role rk model eff path_arr p
+  local project gate
   project="$(orc_init_read_answer "$answers_file" PROJECT)"
-  branch="$(orc_init_read_answer "$answers_file" INTEGRATION_BRANCH main)"
-  paths="$(orc_init_read_answer "$answers_file" PROTECTED_PATHS)"
   gate="$(orc_init_read_answer "$answers_file" GATE_APPROVER "the human running this harness")"
 
   # agy PR #117 finding 3: TOCTOU between the -e/-L refusal check above
   # and this write -- noclobber makes the write itself an atomic
   # create-only operation at the filesystem level, so a file that
   # appears in that window (a second orc init racing the same target)
-  # fails the write instead of silently overwriting it.
+  # fails the write instead of silently overwriting it. The actual yaml
+  # content comes from orc_init_render_orchestrator_yaml (issue #116,
+  # shared with --force's full-re-init path) -- this is just the
+  # TOCTOU-safe write wrapper around it.
   set -o noclobber
-  if ! {
-    echo "project: $project"
-    echo "integration_branch: $branch"
-    echo ""
-    echo "protected_paths:"
-    if [ -n "$paths" ]; then
-      path_arr=()
-      IFS=',' read -ra path_arr <<< "$paths"
-      for p in "${path_arr[@]}"; do
-        echo "  - $p"
-      done
-    fi
-    echo ""
-    echo "roles:"
-    for role in orchestra implementer tester reviewer scribe; do
-      rk="$(echo "$role" | tr '[:lower:]' '[:upper:]')"
-      model="$(orc_init_read_answer "$answers_file" "ROLE_${rk}_MODEL")"
-      eff="$(orc_init_read_answer "$answers_file" "ROLE_${rk}_EFFORT" default)"
-      echo "  $role:"
-      echo "    model: $model"
-      echo "    effort: $eff"
-    done
-    echo ""
-    echo "budgets:"
-    echo "  claude:"
-    echo "    failsafe_pct: $(orc_init_read_answer "$answers_file" BUDGET_CLAUDE_PCT 80)"
-    echo "  agy:"
-    echo "    failsafe_pct: $(orc_init_read_answer "$answers_file" BUDGET_AGY_PCT 80)"
-  } > "$target/orchestrator.yaml" 2>/dev/null; then
+  if ! orc_init_render_orchestrator_yaml "$answers_file" "$target/orchestrator.yaml"; then
     set +o noclobber
     echo "orc init: REFUSE -- $target/orchestrator.yaml appeared between the check above and this write (race with another orc init?). orc init never overwrites an already-initialized project." >&2
     return 1
@@ -686,6 +718,8 @@ orc_init_core() {
 
   bash "$ORC_SCRIPT_DIR/orc-install-skills" "$target"
 
+  orc_init_write_manifest "$target"
+
   echo "orc init: wrote a new control room for '$project' at $target"
   echo "orc init: Gate 1/Gate 2 approver: $gate"
 
@@ -699,6 +733,309 @@ orc_init_core() {
   if [ "$verify_failed" -eq 1 ]; then
     echo "orc init: WARNING -- the room was written but a post-init verifier failed above; something is wrong with this installation, not the answers you gave." >&2
     return 1
+  fi
+}
+
+# orc_init_sha256 <path> -- portable content hash for issue #116's drift
+# manifest. macOS ships shasum but not sha256sum by default; Linux CI has
+# sha256sum. Prefer sha256sum when present (the common CI case) and fall
+# back to shasum -a 256 otherwise.
+orc_init_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# orc_init_manifest_targets -- the templates-derived paths issue #116's
+# --force tracks for drift detection, one relative path per line.
+# orchestrator.yaml is tracked too: --force + an explicit answers file
+# fully rewrites it, and a hand-edited orchestrator.yaml deserves the same
+# backup-first courtesy as everything else -- bare --force never reads or
+# writes it regardless (see orc_init_force), so tracking it here doesn't
+# widen bare --force's scope. The installed skill pack is NOT tracked:
+# bin/orc-install-skills is already its own idempotent, unconditionally-
+# overwriting install/prune tool (issue #8) -- re-running it is the
+# established mechanism, not a manifest-driven one.
+orc_init_manifest_targets() {
+  printf '%s\n' \
+    AGENTS.md CLAUDE.md GEMINI.md review-protocol.md \
+    souls/orchestra.md souls/builder.md souls/reviewer.md souls/scribe.md \
+    .claude/settings.json .agents/hooks.json orchestrator.yaml
+}
+
+# orc_init_manifest_path <target>
+orc_init_manifest_path() {
+  echo "$1/.harness/state/init-manifest"
+}
+
+# orc_init_write_manifest <target> -- (re)writes the sha256 manifest from
+# whichever of orc_init_manifest_targets currently exists on disk. Run at
+# the end of EVERY init/--force (fresh rooms get a baseline immediately,
+# so their FIRST --force already has one to compare against -- only a
+# genuinely pre-#116 project ever hits the missing-manifest fallback).
+# Skips the rewrite when the computed content is byte-identical to what's
+# already there: a --force run that changed nothing must not churn the
+# manifest's own mtime either (issue #116's idempotence guarantee covers
+# this file too, not just the tracked content files).
+orc_init_write_manifest() {
+  local target="$1" mpath tmp rel abs
+  mpath="$(orc_init_manifest_path "$target")"
+  mkdir -p "$(dirname "$mpath")"
+  tmp="$(mktemp "$mpath.XXXXXX")"
+  while IFS= read -r rel; do
+    abs="$target/$rel"
+    [ -f "$abs" ] || continue
+    printf '%s  %s\n' "$(orc_init_sha256 "$abs")" "$rel" >> "$tmp"
+  done < <(orc_init_manifest_targets)
+  if [ -f "$mpath" ] && cmp -s "$tmp" "$mpath"; then
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$mpath"
+  fi
+}
+
+# orc_init_manifest_hash <target> <relpath> -- the sha256 init-manifest
+# recorded for relpath at its last write, or empty if untracked/no
+# manifest at all. Empty is the MISSING-MANIFEST signal orc_init_apply_file
+# treats as drifted by default (issue #116's conservative fallback for a
+# pre-#116 project that never had a baseline to compare against).
+orc_init_manifest_hash() {
+  local target="$1" rel="$2" mpath
+  mpath="$(orc_init_manifest_path "$target")"
+  [ -f "$mpath" ] || return 0
+  awk -v r="$rel" '$2 == r { print $1; exit }' "$mpath"
+}
+
+# orc_init_apply_file <target> <relpath> <new_content_path> <backup_rel>
+# -- issue #116, always consumes new_content_path (moves it into place or
+# discards it):
+#   dest missing                                  -> plain write
+#   dest present, hash matches init-manifest AND
+#     matches the freshly rendered content          -> untouched entirely
+#     (no write at all -- preserves mtime, the idempotence guarantee)
+#   dest present, hash matches init-manifest BUT
+#     differs from the freshly rendered content      -> plain overwrite
+#     (template/answers changed upstream; nothing hand-edited to protect)
+#   dest present, hash does NOT match init-manifest
+#     (hand-edited since last generation, OR no
+#      manifest entry at all -- conservative default) -> back up to
+#     backup_rel first (LOUD, one line to stdout), then overwrite
+orc_init_apply_file() {
+  local target="$1" rel="$2" newpath="$3" backup_rel="$4"
+  local dest="$target/$rel"
+  mkdir -p "$(dirname "$dest")"
+
+  if [ ! -e "$dest" ]; then
+    mv "$newpath" "$dest"
+    return 0
+  fi
+
+  local old_hash manifest_hash new_hash
+  old_hash="$(orc_init_sha256 "$dest")"
+  manifest_hash="$(orc_init_manifest_hash "$target" "$rel")"
+
+  if [ -n "$manifest_hash" ] && [ "$old_hash" = "$manifest_hash" ]; then
+    new_hash="$(orc_init_sha256 "$newpath")"
+    if [ "$old_hash" = "$new_hash" ]; then
+      rm -f "$newpath"
+    else
+      mv "$newpath" "$dest"
+    fi
+    return 0
+  fi
+
+  mkdir -p "$target/$backup_rel/$(dirname "$rel")"
+  cp -p "$dest" "$target/$backup_rel/$rel"
+  echo "orc init --force: DRIFT BACKUP -- $rel changed since it was last generated (hand-edited?) -- backed up to $backup_rel/$rel before overwriting"
+  mv "$newpath" "$dest"
+}
+
+# orc_init_answers_from_yaml <target> <out_answers_file> -- issue #116:
+# bare --force's answers source is the room's OWN orchestrator.yaml, not
+# a fresh answers file -- reconstructs the same flat KEY=value shape
+# orc_init_read_answer expects, via orc-config.sh's already-tested
+# readers (the same round trip tests/orc-init.test.sh's own "orchestrator.
+# yaml round-trips through orc-config.sh's own readers" case exercises).
+# GATE_APPROVER/GITHUB_REMOTE have no recoverable value (see
+# orc_init_render_orchestrator_yaml's comment) -- GATE_APPROVER falls
+# back to its usual default, GITHUB_REMOTE is left empty; neither affects
+# any generated file's content.
+orc_init_answers_from_yaml() {
+  local target="$1" out="$2"
+  local ORC_CONFIG_FILE="$target/orchestrator.yaml"
+  local rk lc
+  {
+    echo "PROJECT=$(orc_get_scalar project)"
+    echo "INTEGRATION_BRANCH=$(orc_get_scalar integration_branch)"
+    echo "TICKET_TRACKER=$(orc_get_scalar ticket_tracker)"
+    echo "PROTECTED_PATHS=$(orc_protected_paths | paste -sd, -)"
+    echo "GATE_APPROVER=the human running this harness"
+    for rk in ORCHESTRA IMPLEMENTER TESTER REVIEWER SCRIBE; do
+      lc="$(echo "$rk" | tr '[:upper:]' '[:lower:]')"
+      echo "ROLE_${rk}_MODEL=$(orc_get_role_model "$lc")"
+      echo "ROLE_${rk}_EFFORT=$(orc_get_role_effort "$lc")"
+    done
+    echo "BUDGET_CLAUDE_PCT=$(orc_get_budget_pct claude)"
+    echo "BUDGET_AGY_PCT=$(orc_get_budget_pct agy)"
+  } > "$out"
+}
+
+# orc_init_force <target> [explicit_answers_file] -- issue #116, Gate-1
+# plan on the issue: the --force re-init/resync story. Precondition:
+# target must ALREADY be an initialized room (has orchestrator.yaml) --
+# --force resyncs an EXISTING room; a brand-new target still goes through
+# plain `orc init`.
+#
+#   bare --force             -- resync the templates-derived set
+#     (AGENTS.md/CLAUDE.md/GEMINI.md/souls/*/skill pack/.claude/
+#     settings.json/.agents/hooks.json) using the room's OWN
+#     orchestrator.yaml as the answers source (orc_init_answers_from_yaml).
+#     orchestrator.yaml itself is out of scope entirely in this shape --
+#     never read for drift, never rewritten, never backed up.
+#   --force --answers FILE   -- the same resync, PLUS a full re-init of
+#     orchestrator.yaml from FILE -- still drift-checked like everything
+#     else (a hand-edited orchestrator.yaml gets backed up first).
+#
+# .harness/** stays untouched beyond this function's OWN bookkeeping
+# (init-manifest, init-backups/): decisions.log, handoff.md, inbox/,
+# rules.md, and every other pre-existing state/ entry are never targeted
+# by any write this function makes.
+#
+# orc-protect (bin/orc-protect, kernel immutability on .claude/.agents/
+# orchestrator.yaml) is lifted for the duration if the target is
+# currently protected, and restored once the resync finishes -- the
+# off->edit->on dance folded INTO --force itself, per the Gate-1 plan,
+# rather than a FLAG-worthy collision.
+orc_init_force() {
+  local target="$1" explicit_answers="${2:-}"
+
+  case "$target" in
+    /*) : ;;
+    *) target="./$target" ;;
+  esac
+  if [ ! -d "$target" ] || { [ ! -f "$target/orchestrator.yaml" ] && [ ! -L "$target/orchestrator.yaml" ]; }; then
+    echo "orc init: REFUSE -- $target has no orchestrator.yaml yet. --force resyncs an EXISTING room; run plain 'orc init' to create a new one." >&2
+    return 1
+  fi
+  target="$(cd -- "$target" && pwd)"
+
+  if [ -n "$explicit_answers" ] && [ ! -f "$explicit_answers" ]; then
+    echo "orc init: no such answers file: $explicit_answers" >&2
+    return 1
+  fi
+
+  local answers_file="$explicit_answers" synth=""
+  if [ -z "$answers_file" ]; then
+    synth="$(mktemp)"
+    orc_init_answers_from_yaml "$target" "$synth"
+    answers_file="$synth"
+  fi
+
+  if ! orc_init_validate "$answers_file"; then
+    [ -n "$synth" ] && rm -f "$synth"
+    echo "orc init: aborting -- fix the answers above and re-run. Nothing was written." >&2
+    return 1
+  fi
+
+  local was_protected=0
+  if bash "$ORC_SCRIPT_DIR/orc-protect" status "$target" >/dev/null 2>&1; then
+    was_protected=1
+    echo "orc init --force: $target is orc-protect'd -- lifting immutability for the resync (restoring it once done)."
+    bash "$ORC_SCRIPT_DIR/orc-protect" off "$target" >&2 || true
+  fi
+
+  local ts backup_rel project
+  ts="$(date +%Y%m%d%H%M%S)"
+  backup_rel=".harness/state/init-backups/$ts"
+  project="$(orc_init_read_answer "$answers_file" PROJECT)"
+
+  # orchestrator.yaml: only in scope with an explicit answers file (a
+  # full re-init) -- bare --force leaves it alone entirely, per plan item 3.
+  if [ -z "$synth" ]; then
+    local new_yaml
+    new_yaml="$(mktemp "$target/orchestrator.yaml.XXXXXX")"
+    orc_init_render_orchestrator_yaml "$answers_file" "$new_yaml"
+    orc_init_apply_file "$target" "orchestrator.yaml" "$new_yaml" "$backup_rel"
+  fi
+
+  local new_agents new_claude new_gemini new_review new_settings new_hooks
+  local new_soul_orchestra new_soul_builder new_soul_reviewer new_soul_scribe
+
+  new_agents="$(mktemp "$target/AGENTS.md.XXXXXX")"
+  orc_init_render_agents_md "$answers_file" "$ORC_TEMPLATES_DIR/AGENTS.md" "$new_agents"
+  orc_init_apply_file "$target" "AGENTS.md" "$new_agents" "$backup_rel"
+
+  new_claude="$(mktemp "$target/CLAUDE.md.XXXXXX")"
+  orc_init_render_project_doc "$ORC_TEMPLATES_DIR/CLAUDE.md" "$new_claude" "$project"
+  orc_init_apply_file "$target" "CLAUDE.md" "$new_claude" "$backup_rel"
+
+  mkdir -p "$target/souls"
+  new_soul_orchestra="$(mktemp "$target/souls/orchestra.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/orchestra.md" "$new_soul_orchestra" \
+    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_EFFORT high)" "0.0"
+  orc_init_apply_file "$target" "souls/orchestra.md" "$new_soul_orchestra" "$backup_rel"
+
+  new_soul_builder="$(mktemp "$target/souls/builder.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/builder.md" "$new_soul_builder" \
+    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_EFFORT default)" "0.1"
+  orc_init_apply_file "$target" "souls/builder.md" "$new_soul_builder" "$backup_rel"
+
+  new_soul_reviewer="$(mktemp "$target/souls/reviewer.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/reviewer.md" "$new_soul_reviewer" \
+    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_EFFORT high)" "0.2"
+  orc_init_apply_file "$target" "souls/reviewer.md" "$new_soul_reviewer" "$backup_rel"
+
+  new_soul_scribe="$(mktemp "$target/souls/scribe.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/scribe.md" "$new_soul_scribe" \
+    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_EFFORT low)" "headless (no standing pane)"
+  orc_init_apply_file "$target" "souls/scribe.md" "$new_soul_scribe" "$backup_rel"
+
+  # GEMINI.md: base project-doc render + the reviewer soul appended under
+  # a ## SOUL heading, same two-step composition orc_init_core's fresh
+  # path uses -- reusing souls/reviewer.md's content we JUST wrote above
+  # rather than rendering the reviewer soul a second time.
+  new_gemini="$(mktemp "$target/GEMINI.md.XXXXXX")"
+  orc_init_render_project_doc "$ORC_TEMPLATES_DIR/GEMINI.md" "$new_gemini" "$project"
+  {
+    echo ""
+    echo "## SOUL"
+    echo ""
+    cat "$target/souls/reviewer.md"
+  } >> "$new_gemini"
+  orc_init_apply_file "$target" "GEMINI.md" "$new_gemini" "$backup_rel"
+
+  new_review="$(mktemp "$target/review-protocol.md.XXXXXX")"
+  cp "$ORC_TEMPLATES_DIR/review-protocol.md" "$new_review"
+  orc_init_apply_file "$target" "review-protocol.md" "$new_review" "$backup_rel"
+
+  mkdir -p "$target/.claude" "$target/.agents"
+  new_settings="$(mktemp "$target/.claude/settings.json.XXXXXX")"
+  cp "$ORC_TEMPLATES_DIR/settings.json" "$new_settings"
+  orc_init_apply_file "$target" ".claude/settings.json" "$new_settings" "$backup_rel"
+
+  new_hooks="$(mktemp "$target/.agents/hooks.json.XXXXXX")"
+  cp "$ORC_TEMPLATES_DIR/agents-hooks.json" "$new_hooks"
+  orc_init_apply_file "$target" ".agents/hooks.json" "$new_hooks" "$backup_rel"
+
+  bash "$ORC_SCRIPT_DIR/orc-install-skills" "$target"
+
+  orc_init_write_manifest "$target"
+
+  if [ "$was_protected" -eq 1 ]; then
+    bash "$ORC_SCRIPT_DIR/orc-protect" on "$target" >&2 || true
+  fi
+
+  [ -n "$synth" ] && rm -f "$synth"
+
+  echo "orc init --force: resync complete for $target"
+  if [ -d "$target/$backup_rel" ]; then
+    echo "orc init --force: drifted files were backed up under $backup_rel"
   fi
 }
 
@@ -767,15 +1104,27 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     up) orc_up ;;
     init)
       shift
-      if [ "${1:-}" = "--answers" ]; then
-        shift
-        orc_init_core "$1" "${2:-$PWD}"
+      force=0
+      answers=""
+      target=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --force) force=1; shift ;;
+          --answers) answers="$2"; shift 2 ;;
+          *) target="$1"; shift ;;
+        esac
+      done
+      target="${target:-$PWD}"
+      if [ "$force" -eq 1 ]; then
+        orc_init_force "$target" "$answers"
+      elif [ -n "$answers" ]; then
+        orc_init_core "$answers" "$target"
       else
-        orc_init_interactive "${1:-$PWD}"
+        orc_init_interactive "$target"
       fi
       ;;
     *)
-      echo "usage: orc.sh up|init [--answers <file>] [target_dir]" >&2
+      echo "usage: orc.sh up|init [--force] [--answers <file>] [target_dir]" >&2
       exit 1
       ;;
   esac
