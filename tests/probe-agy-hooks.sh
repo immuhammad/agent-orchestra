@@ -1,144 +1,73 @@
 #!/bin/bash
-# tests/probe-agy-hooks.sh — Manual, reproducible probe for agy hook semantics
-# This is a NOT-CI, manual-run, quota-consuming script that serves as the 
-# standing merge gate for any future hook changes for Antigravity (agy).
-#
-# It proves:
-# (a) Each wired event actually fires (in interactive context).
-# (b) The payload delivery mechanism and raw dump shape.
-# (c) A banned pattern actually DENIED end-to-end.
-# (d) Stop-hook semantics.
-
 set -euo pipefail
 
 PROBE_DIR="/tmp/agy-probe-workspace-$$"
 mkdir -p "$PROBE_DIR/.agents"
 
-echo "Building scratch workspace at $PROBE_DIR..."
+echo "project: orc-probe" > "$PROBE_DIR/orchestrator.yaml"
 
-cat << 'EOF' > "$PROBE_DIR/.agents/hooks.json"
+cat << 'JSON' > "$PROBE_DIR/.agents/hooks.json"
 {
-  "test-project": {
-    "PreInvocation": [
-      {
-        "type": "command",
-        "command": "bash .agents/probe-hook.sh PreInvocation"
-      }
-    ],
+  "orc-probe": {
     "PreToolUse": [
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "bash .agents/guard-mock.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash .agents/probe-hook.sh PreToolUse"
-          }
+          { "type": "command", "command": "bash deny-probe.sh" }
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "type": "command",
-        "command": "bash .agents/probe-hook.sh PostToolUse"
-      }
-    ],
-    "PostInvocation": [
-      {
-        "type": "command",
-        "command": "bash .agents/probe-hook.sh PostInvocation"
-      }
-    ],
     "Stop": [
-      {
-        "type": "command",
-        "command": "bash .agents/probe-hook.sh Stop"
-      },
-      {
-        "type": "command",
-        "command": "bash .agents/stop-block-mock.sh"
-      }
+      { "type": "command", "command": "bash stop-probe.sh" }
     ]
   }
 }
-EOF
+JSON
 
-cat << 'EOF' > "$PROBE_DIR/.agents/probe-hook.sh"
+cat << 'SH' > "$PROBE_DIR/.agents/deny-probe.sh"
 #!/bin/bash
-EVENT=$1
-LOG_FILE="$PWD/probe-events.log"
-echo "=== EVENT: $EVENT ===" >> "$LOG_FILE"
-INPUT=$(cat)
-echo "$INPUT" >> "$LOG_FILE"
-if [ "$EVENT" = "Stop" ]; then
-  echo '{"decision":"allow"}'
-fi
-EOF
-chmod +x "$PROBE_DIR/.agents/probe-hook.sh"
+echo "=== DENY-PROBE fired ===" >> "$PWD/../probe.log"
+echo '{"decision":"deny", "reason":"PROBE-DENY-e2e: this command is blocked by the probe gate"}'
+exit 0
+SH
+chmod +x "$PROBE_DIR/.agents/deny-probe.sh"
 
-cat << 'EOF' > "$PROBE_DIR/.agents/guard-mock.sh"
+cat << 'SH' > "$PROBE_DIR/.agents/stop-probe.sh"
 #!/bin/bash
-INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.toolCall.args.CommandLine // .toolCall.args.commandLine // empty')
-if echo "$COMMAND" | grep -q "git commit"; then
-  echo '{"decision":"deny", "reason":"mock: Command blocked"}'
-  exit 0
-fi
+echo "=== EVENT: Stop ===" >> "$PWD/../probe.log"
 echo '{"decision":"allow"}'
 exit 0
-EOF
-chmod +x "$PROBE_DIR/.agents/guard-mock.sh"
-
-cat << 'EOF' > "$PROBE_DIR/.agents/stop-block-mock.sh"
-#!/bin/bash
-# Simulates check-inbox-stop-agy.sh blocking behavior exactly once
-INPUT=$(cat)
-if [ ! -f "$PWD/stop-blocked.marker" ]; then
-  touch "$PWD/stop-blocked.marker"
-  echo '{"decision":"continue","reason":"Mock inbox message pending"}'
-  exit 0
-fi
-echo '{"decision":"allow"}'
-exit 0
-EOF
-chmod +x "$PROBE_DIR/.agents/stop-block-mock.sh"
-
-cd "$PROBE_DIR"
+SH
+chmod +x "$PROBE_DIR/.agents/stop-probe.sh"
 
 SESSION_NAME="agy-probe-$$"
-echo "Booting agy in throwaway tmux session: $SESSION_NAME..."
+PROMPT='Use your run_command tool to execute exactly: echo probe-ok-77. Report verbatim what happened including any denial message. Then stop.'
 
-tmux new-session -d -s "$SESSION_NAME" "cd $PROBE_DIR && agy -p \"Please use run_command to execute 'git commit -m probe' and then finish.\" --project-id test-project --add-dir $PROBE_DIR --dangerously-skip-permissions | tee session.log"
+tmux new-session -d -s "$SESSION_NAME" -c "$PROBE_DIR" -x 200 -y 50 "agy --project orc-probe --add-dir $PROBE_DIR --dangerously-skip-permissions"
 
-echo "Waiting for session to complete (up to 3 minutes)..."
-TIMEOUT=180
-while tmux has-session -t "$SESSION_NAME" 2>/dev/null; do
-  sleep 2
-  TIMEOUT=$((TIMEOUT - 2))
-  if [ $TIMEOUT -le 0 ]; then
-    echo "Timeout! Killing tmux session..."
-    tmux kill-session -t "$SESSION_NAME"
-    break
-  fi
+sleep 30
+
+tmux set-buffer "$PROMPT"
+tmux paste-buffer -t "$SESSION_NAME"
+sleep 2
+tmux send-keys -t "$SESSION_NAME" Enter
+
+for i in $(seq 1 24); do
+  sleep 5
+  if grep -q 'EVENT: Stop' "$PROBE_DIR/probe.log" 2>/dev/null; then break; fi
 done
+sleep 3
+
+tmux capture-pane -t "$SESSION_NAME" -p > "$PROBE_DIR/tmux-screen.txt"
+tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
 
 echo "=== PROBE RESULTS ==="
-echo "Events Log:"
-cat probe-events.log || echo "No events logged!"
+cat "$PROBE_DIR/tmux-screen.txt"
 
-echo "Session Output:"
-cat session.log || echo "No session output!"
-
-echo "Checking for denied tool call in output..."
-if grep -q "Tool call denied by pre-tool hook" session.log; then
+if grep -q "PROBE-DENY-e2e" "$PROBE_DIR/tmux-screen.txt"; then
   echo "SUCCESS: Denied tool call found in output."
 else
   echo "FAILURE: Denied tool call not found."
+  exit 1
 fi
-
-echo "Cleaning up..."
-rm -rf "$PROBE_DIR"
-echo "Probe complete."
+echo "done"

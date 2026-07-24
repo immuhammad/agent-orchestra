@@ -101,7 +101,7 @@ if [ -f "$AGENTS_HOOKS_TEMPLATE" ]; then
     SCRIPT_PATH=$(echo "$cmd_str" | awk '{print $2}')
     if [[ "$SCRIPT_PATH" == "../"* ]]; then
       # Resolve it relative to .agents (where agy executes from)
-      RESOLVED_PATH="$REPO_ROOT/.agents/$SCRIPT_PATH"
+      RESOLVED_PATH="$REPO_ROOT/${SCRIPT_PATH#../}"
       if [ -f "$RESOLVED_PATH" ]; then
         pass "path resolves correctly relative to .agents: $SCRIPT_PATH"
       else

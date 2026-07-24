@@ -32,7 +32,8 @@ if [ $RC -eq 2 ]; then
   # shellcheck source=../lib/harness-root.sh
   source "$DIR/../lib/harness-root.sh"
   CANON_DIR="$(harness_canonical_dir "$PWD")" || exit 0
-  MARKER_FILE="$CANON_DIR/state/pane-state/${CONV_ID}.agy-inbox-marker"
+  mkdir -p "$CANON_DIR/state/agy-inbox-markers"
+  MARKER_FILE="$CANON_DIR/state/agy-inbox-markers/${CONV_ID}.marker"
   
   if [ -f "$MARKER_FILE" ] && [ "$(cat "$MARKER_FILE")" = "$HASH" ]; then
     # Already reminded for this exact set of messages; allow stop.
