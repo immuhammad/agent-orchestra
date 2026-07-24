@@ -841,6 +841,162 @@ else
   fail "unknown verb should be rejected (status=$STATUS): $OUT"
 fi
 
+echo "== issue #159: --fresh ordering -- .msg is written only AFTER SessionStart(clear) evidence (simulated slow SessionStart) =="
+mkdir -p "$CANON_DIR/inbox/freshtest"
+rm -f "$CANON_DIR"/inbox/freshtest/*.msg
+FRESH_TARGET="$TEST_SESSION:0.0"
+FRESH_PANE_ID="$(tmux display-message -p -t "$FRESH_TARGET" '#{pane_id}')"
+FRESH_SAFE_ID="$(pane_state_sanitize "$FRESH_PANE_ID")"
+echo "idle $(date '+%s') sid-fresh1" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
+
+pane_for_agent() {
+  case "$1" in
+    freshtest) echo "$FRESH_TARGET" ;;
+    *) echo "" ;;
+  esac
+}
+
+export DISPATCH_FRESH_POLL_INTERVAL_S=1
+export DISPATCH_FRESH_CLEAR_TIMEOUT_S=15
+FRESH_OUT_FILE="$(mktemp)"
+
+(
+  # Simulate a SLOW SessionStart: only after a delay does the receiver's
+  # own hook actually fire and write a FRESH idle state (a real /clear
+  # normally does this promptly -- slowing it down here is what proves the
+  # ordering, not a comment).
+  sleep 4
+  echo "idle $(date '+%s') sid-fresh2" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
+) &
+FRESH_DELAY_PID=$!
+
+dispatch_main assign freshtest 159 "BUILD msg" --fresh >"$FRESH_OUT_FILE" 2>&1 &
+FRESH_DISPATCH_PID=$!
+
+sleep 2
+if ! ls "$CANON_DIR"/inbox/freshtest/*.msg >/dev/null 2>&1; then
+  pass "issue #159: .msg not yet written 2s in, while --fresh is still waiting for SessionStart(clear) evidence"
+else
+  fail "issue #159 ORDERING REGRESSION: .msg appeared before the delayed SessionStart(clear) evidence"
+fi
+
+wait "$FRESH_DISPATCH_PID"
+FRESH_DISPATCH_STATUS=$?
+wait "$FRESH_DELAY_PID"
+
+if [ "$FRESH_DISPATCH_STATUS" -eq 0 ] && ls "$CANON_DIR"/inbox/freshtest/*-159.msg >/dev/null 2>&1; then
+  pass "issue #159: --fresh wrote the .msg only after the delayed SessionStart(clear) evidence appeared"
+else
+  fail "issue #159: expected --fresh to succeed once evidence appeared (status=$FRESH_DISPATCH_STATUS): $(cat "$FRESH_OUT_FILE")"
+fi
+rm -f "$FRESH_OUT_FILE"
+rm -f "$CANON_DIR"/inbox/freshtest/*.msg
+
+echo "== issue #159: --fresh at a busy pane refuses LOUDLY -- nothing typed, no .msg written =="
+echo "busy $(date '+%s') sid-busy1" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
+tmux send-keys -t "$FRESH_TARGET" "clear" Enter 2>&1
+sleep 0.5
+FRESH_BEFORE_CAPTURE="$(tmux capture-pane -p -t "$FRESH_TARGET")"
+
+FRESH_REFUSE_OUT="$(dispatch_main assign freshtest 160 "should refuse" --fresh 2>&1)"
+FRESH_REFUSE_STATUS=$?
+
+FRESH_AFTER_CAPTURE="$(tmux capture-pane -p -t "$FRESH_TARGET")"
+
+if [ "$FRESH_REFUSE_STATUS" -ne 0 ] && echo "$FRESH_REFUSE_OUT" | grep -qi "refus"; then
+  pass "issue #159: --fresh at a busy pane refuses loudly (nonzero exit + explicit refusal message)"
+else
+  fail "issue #159: expected a loud refusal for --fresh at a busy pane (status=$FRESH_REFUSE_STATUS): $FRESH_REFUSE_OUT"
+fi
+if ! ls "$CANON_DIR"/inbox/freshtest/*.msg >/dev/null 2>&1; then
+  pass "issue #159: no .msg written when --fresh refuses on a busy pane"
+else
+  fail "issue #159 REGRESSION: a .msg was written despite --fresh refusing on a busy pane"
+fi
+if [ "$FRESH_BEFORE_CAPTURE" = "$FRESH_AFTER_CAPTURE" ]; then
+  pass "issue #159: --fresh refusal typed NOTHING into the busy pane"
+else
+  fail "issue #159 REGRESSION: --fresh refusal on a busy pane still typed something into it (before != after capture)"
+fi
+
+echo "== issue #159: --fresh --wait-idle grants a bounded grace period before refusing =="
+echo "busy $(date '+%s') sid-busy2" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
+(
+  sleep 2
+  echo "idle $(date '+%s') sid-wait1" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
+  sleep 6
+  echo "idle $(date '+%s') sid-wait2" > "$PANE_STATE_DIR/$FRESH_SAFE_ID"
+) &
+FRESH_WAIT_BG_PID=$!
+FRESH_WAIT_OUT="$(dispatch_main assign freshtest 161 "waits then proceeds" --fresh --wait-idle 5 2>&1)"
+FRESH_WAIT_STATUS=$?
+wait "$FRESH_WAIT_BG_PID"
+if [ "$FRESH_WAIT_STATUS" -eq 0 ] && ls "$CANON_DIR"/inbox/freshtest/*-161.msg >/dev/null 2>&1; then
+  pass "issue #159: --wait-idle waited for the pane to go idle instead of refusing immediately"
+else
+  fail "issue #159: expected --wait-idle to wait then proceed (status=$FRESH_WAIT_STATUS): $FRESH_WAIT_OUT"
+fi
+rm -f "$CANON_DIR"/inbox/freshtest/*.msg
+
+unset -f pane_for_agent
+source "$DISPATCH"
+
+echo "== issue #159: --fresh refuses outright for agy (no probed conversation-reset equivalent) =="
+rm -f "$CANON_DIR"/inbox/agy/*.msg 2>/dev/null || true
+mkdir -p "$CANON_DIR/inbox/agy"
+OUT="$(bash "$DISPATCH" assign agy 162 "should refuse" --fresh 2>&1)"
+STATUS=$?
+if [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -qi "no agy equivalent"; then
+  pass "issue #159: --fresh refuses outright for agy, pointing at a pane restart instead"
+else
+  fail "issue #159: expected --fresh to refuse for agy with a clear explanation (status=$STATUS): $OUT"
+fi
+if ! ls "$CANON_DIR"/inbox/agy/*.msg >/dev/null 2>&1; then
+  pass "issue #159: no .msg written when --fresh refuses for agy"
+else
+  fail "issue #159 REGRESSION: a .msg was written despite --fresh refusing for agy"
+fi
+rm -f "$CANON_DIR"/inbox/agy/*.msg
+
+echo "== issue #159: relatedness warning fires exactly when agent+issue differ and --fresh is absent =="
+mkdir -p "$CANON_DIR/state/last-issue"
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+echo "150" > "$CANON_DIR/state/last-issue/testagent"
+OUT="$(bash "$DISPATCH" assign testagent 9030 "different issue, no --fresh" 2>&1)"
+if echo "$OUT" | grep -qi "warning" && echo "$OUT" | grep -q "150" && echo "$OUT" | grep -q "9030"; then
+  pass "issue #159: relatedness warning fires for a different issue with no --fresh, naming both issues"
+else
+  fail "issue #159: expected a relatedness warning mentioning both issue #150 and #9030, got: $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+
+echo "150" > "$CANON_DIR/state/last-issue/testagent"
+OUT="$(bash "$DISPATCH" assign testagent 150 "same issue, no --fresh" 2>&1)"
+if ! echo "$OUT" | grep -qi "warning"; then
+  pass "issue #159: no relatedness warning when the dispatched issue is unchanged"
+else
+  fail "issue #159: unexpected relatedness warning for an unchanged issue: $OUT"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR/state/last-issue/testagent"
+
+echo "== issue #159: last-issue state is written on every assign/handoff, but never on message =="
+rm -f "$CANON_DIR/state/last-issue/testagent" "$CANON_DIR"/inbox/testagent/*.msg
+bash "$DISPATCH" message testagent 9040 "fyi only" >/dev/null 2>&1
+if [ ! -f "$CANON_DIR/state/last-issue/testagent" ]; then
+  pass "issue #159: message verb does NOT write last-issue state"
+else
+  fail "issue #159: message verb should not write last-issue state, found: $(cat "$CANON_DIR/state/last-issue/testagent")"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg
+
+bash "$DISPATCH" assign testagent 9041 "real work" >/dev/null 2>&1
+if [ -f "$CANON_DIR/state/last-issue/testagent" ] && [ "$(cat "$CANON_DIR/state/last-issue/testagent")" = "9041" ]; then
+  pass "issue #159: assign verb wrote last-issue state with the dispatched issue number"
+else
+  fail "issue #159: expected last-issue state '9041' after an assign, found: $(cat "$CANON_DIR/state/last-issue/testagent" 2>/dev/null)"
+fi
+rm -f "$CANON_DIR"/inbox/testagent/*.msg "$CANON_DIR/state/last-issue/testagent"
+
 echo "== issue #19: DISPATCH_SESSION derives from THIS project's own orchestrator.yaml -- two projects never share a session =="
 # This test file exports DISPATCH_CANON_DIR globally (line ~22) so the rest
 # of the suite never touches a real project's discovery -- explicitly unset

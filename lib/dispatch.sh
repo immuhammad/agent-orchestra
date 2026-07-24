@@ -433,7 +433,7 @@ dispatch_write_msg() {
 }
 
 dispatch_main() {
-  local USAGE="usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg>|--body-file <path> [timeout_s]"
+  local USAGE="usage: dispatch.sh <handoff|assign|message> <agent> <issue> <msg>|--body-file <path> [timeout_s] [--fresh] [--wait-idle secs]"
   local VERB="${1:?$USAGE}"
   local AGENT="${2:?$USAGE}"
   local ISSUE="${3:?$USAGE}"
@@ -447,18 +447,44 @@ dispatch_main() {
   # mismatch or embedded NUL-adjacent oddity in the body can't silently
   # change what lands in the inbox. The short positional-string form still
   # works unchanged for short messages.
-  local MSG="" BODY_FILE="" TIMEOUT
+  local MSG="" BODY_FILE="" TIMEOUT=120 FRESH=0 WAIT_IDLE=0
   if [ "${4:-}" = "--body-file" ]; then
     BODY_FILE="${5:?$USAGE}"
     if [ ! -f "$BODY_FILE" ]; then
       echo "dispatch.sh: --body-file '$BODY_FILE' does not exist" >&2
       return 1
     fi
-    TIMEOUT="${6:-120}"
+    shift 5
   else
     MSG="${4:?$USAGE}"
-    TIMEOUT="${5:-120}"
+    shift 4
   fi
+  # issue #159: remaining args are optional and order-independent -- a bare
+  # integer is the pre-existing ack-poll TIMEOUT (unchanged shape for every
+  # pre-#159 caller); --fresh and --wait-idle <secs> are new, additive-only
+  # flags no old caller ever passes, so a no-flag call parses identically
+  # to before (TIMEOUT still defaults to 120 when nothing follows MSG/
+  # --body-file).
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --fresh)
+        FRESH=1
+        shift
+        ;;
+      --wait-idle)
+        WAIT_IDLE="${2:?$USAGE}"
+        shift 2
+        ;;
+      *[!0-9]*|'')
+        echo "dispatch.sh: unrecognized argument '$1'" >&2
+        return 1
+        ;;
+      *)
+        TIMEOUT="$1"
+        shift
+        ;;
+    esac
+  done
   local INBOX="$CANON_DIR/inbox/$(inbox_dir_name "$AGENT")"
 
   case "$VERB" in
@@ -472,6 +498,122 @@ dispatch_main() {
   if [ ! -d "$INBOX" ]; then
     echo "dispatch.sh: no inbox for agent '$AGENT' (expected $INBOX)" >&2
     return 1
+  fi
+
+  # issue #159: --fresh reorders dispatch around a mandatory /clear of the
+  # receiving pane BEFORE the .msg exists at all -- a nudge (or the
+  # receiver's own check-inbox Stop hook) racing an in-flight /clear could
+  # otherwise pick up the .msg an instant before the pane resets, losing
+  # it. Only meaningful for assign/handoff (message never nudges, so
+  # there is nothing to race).
+  if [ "$FRESH" -eq 1 ]; then
+    case "$VERB" in
+      assign|handoff) ;;
+      *)
+        echo "dispatch.sh: --fresh is only valid with assign/handoff (got '$VERB')" >&2
+        return 1
+        ;;
+    esac
+
+    # issue #159 agy-parity probe (timeboxed, ~1h): 'agy --help'/'agy
+    # changelog' (v1.1.6) expose no external, outside-triggerable
+    # conversation-reset -- --continue/--conversation only pick which
+    # conversation a NEW process's startup resumes, not a live mid-session
+    # reset, and agy's TUI has no documented slash-command list to probe
+    # further without burning quota on a live session (tests/probe-agy-
+    # hooks.sh's own standing caution). Typing a Claude-Code-shaped
+    # "/clear" into agy's live pane is worse than a no-op: agy may read it
+    # as a literal prompt and actually act on it. Until agy grows a real
+    # mechanism, --fresh refuses outright for it; a pane restart (which
+    # already re-fires its hooks, see hooks/check-inbox-stop-agy.sh) is the
+    # documented agy-fresh path instead.
+    if [ "$AGENT" = "agy" ]; then
+      echo "dispatch.sh: --fresh has no agy equivalent (probed issue #159: no outside-triggerable conversation-reset in agy's CLI) -- restart the agy pane instead of --fresh" >&2
+      return 1
+    fi
+
+    local fresh_target fresh_pane_id fresh_state fresh_waited=0
+    fresh_target="$(pane_for_agent "$AGENT")"
+    if [ -z "$fresh_target" ]; then
+      echo "dispatch.sh: --fresh has no pane mapping for agent '$AGENT' -- refusing (nothing typed, no .msg written)" >&2
+      return 1
+    fi
+    if ! tmux has-session -t "${fresh_target%%:*}" 2>/dev/null; then
+      echo "dispatch.sh: --fresh found no tmux '${fresh_target%%:*}' session for '$AGENT' -- refusing (nothing typed, no .msg written)" >&2
+      return 1
+    fi
+    fresh_pane_id="$(tmux display-message -p -t "$fresh_target" '#{pane_id}' 2>/dev/null || echo '')"
+    if [ -z "$fresh_pane_id" ]; then
+      echo "dispatch.sh: --fresh could not resolve a pane_id for '$AGENT' ($fresh_target) -- refusing (nothing typed, no .msg written)" >&2
+      return 1
+    fi
+
+    # Ground-truth idle, same rule as typed wakes (issue #125): busy or
+    # failsafe REFUSES loudly, no queued clear, no fallthrough to a plain
+    # dispatch. --wait-idle is an optional bounded grace poll (builder's
+    # call per the Gate-1 plan) -- the hard refusal still stands once it
+    # elapses.
+    while true; do
+      fresh_state="$(pane_state_effective "$fresh_pane_id" 2>/dev/null || echo '')"
+      [ "$fresh_state" = "idle" ] && break
+      if [ "$fresh_waited" -ge "$WAIT_IDLE" ]; then
+        echo "dispatch.sh: --fresh refuses -- '$AGENT' ($fresh_target) is not idle (state: '${fresh_state:-unknown}') -- nothing typed, no .msg written" >&2
+        return 1
+      fi
+      sleep 1
+      fresh_waited=$((fresh_waited + 1))
+    done
+
+    # Ordering is the load-bearing design (Gate-1 plan): record the moment
+    # /clear is sent, then require the SessionStart(clear) evidence -- the
+    # receiving pane's OWN idle write -- to land AFTER that moment before
+    # the .msg is allowed to exist. A write already on disk from before
+    # this send proves nothing; a nudge/Stop-hook pickup racing an
+    # in-flight /clear must never see a stale pre-clear .msg because in
+    # this path there simply isn't one yet.
+    local fresh_sent_at fresh_elapsed=0 fresh_poll_interval fresh_evidence_timeout fresh_age fresh_write_epoch fresh_now
+    fresh_poll_interval="${DISPATCH_FRESH_POLL_INTERVAL_S:-1}"
+    fresh_evidence_timeout="${DISPATCH_FRESH_CLEAR_TIMEOUT_S:-30}"
+    fresh_sent_at="$(date '+%s')"
+    send_submit "$fresh_target" "/clear"
+
+    while true; do
+      fresh_state="$(pane_state_effective "$fresh_pane_id" 2>/dev/null || echo '')"
+      fresh_age="$(pane_state_age "$fresh_pane_id" 2>/dev/null || echo '')"
+      if [ "$fresh_state" = "idle" ] && [ -n "$fresh_age" ]; then
+        fresh_now="$(date '+%s')"
+        fresh_write_epoch=$((fresh_now - fresh_age))
+        # Strict > (not >=): epoch-second granularity means a stale
+        # pre-clear write can land in the SAME second as fresh_sent_at --
+        # send_submit's own typing delay (>1s) already guarantees a real
+        # SessionStart(clear) write lands strictly later in production.
+        if [ "$fresh_write_epoch" -gt "$fresh_sent_at" ]; then
+          break
+        fi
+      fi
+      if [ "$fresh_elapsed" -ge "$fresh_evidence_timeout" ]; then
+        echo "dispatch.sh: --fresh timed out after ${fresh_evidence_timeout}s waiting for SessionStart(clear) evidence on '$AGENT' ($fresh_target) -- refusing to write .msg (would race the clear)" >&2
+        return 1
+      fi
+      sleep "$fresh_poll_interval"
+      fresh_elapsed=$((fresh_elapsed + fresh_poll_interval))
+    done
+    echo "dispatch.sh: --fresh confirmed SessionStart(clear) evidence for '$AGENT' ($fresh_target) -- proceeding to dispatch"
+  fi
+
+  # issue #159 (relatedness signal): a plain assign/handoff (no --fresh) to
+  # the SAME agent with a DIFFERENT issue than its last dispatch is a loud
+  # warning, not a refusal -- the receiving pane's context may still hold
+  # the PREVIOUS issue's residue. --fresh already handles the transition
+  # properly, so it never warns.
+  local LAST_ISSUE_DIR="$CANON_DIR/state/last-issue"
+  local LAST_ISSUE_FILE="$LAST_ISSUE_DIR/$(inbox_dir_name "$AGENT")"
+  if [ "$VERB" != "message" ] && [ "$FRESH" -ne 1 ] && [ -f "$LAST_ISSUE_FILE" ]; then
+    local prev_issue
+    prev_issue="$(cat "$LAST_ISSUE_FILE" 2>/dev/null)"
+    if [ -n "$prev_issue" ] && [ "$prev_issue" != "$ISSUE" ]; then
+      echo "dispatch.sh: WARNING -- dispatching issue #$ISSUE to '$AGENT' but its last dispatch (no --fresh) was issue #$prev_issue; pane context may still hold #$prev_issue's residue -- consider --fresh" >&2
+    fi
   fi
 
   # issue #90 (live incident): two dispatches to the same agent+issue
@@ -492,6 +634,12 @@ dispatch_main() {
   echo "dispatch.sh: wrote $file"
 
   [ "$VERB" = "message" ] && return 0
+
+  # issue #159: record the last-dispatched issue for this agent (every
+  # assign/handoff, --fresh or not) so the NEXT plain dispatch can compare
+  # against it -- see the relatedness-warning check above.
+  mkdir -p "$LAST_ISSUE_DIR"
+  echo "$ISSUE" > "$LAST_ISSUE_FILE"
 
   # issue #89: scribe/copilot has no standing pane to nudge -- spawn its
   # one-shot headless run instead. Every other agent still goes through the

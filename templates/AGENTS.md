@@ -101,6 +101,29 @@ evaluated on adoption, not bulk-imported.
   the LIVE dir only — never re-read the archive. Screen heuristics
   survive ONLY as a generic last-resort fallback for TUIs lacking native
   hook support.
+- **Context hygiene (`--fresh`, issue #159).** `dispatch.sh assign|handoff
+  <agent> <issue> <msg> --fresh` clears the receiving Claude Code pane's
+  context before the dispatch exists at all, so an unrelated issue never
+  pays for (and can't be misled by) a prior ticket's residue. Ordering is
+  load-bearing: (a) verify the pane's ground-truth state is IDLE; (b) type
+  `/clear` via the existing send discipline (send text, verify landed,
+  Enter separately); (c) bounded-poll for the SessionStart(clear)
+  evidence — the pane's own idle write landing STRICTLY after the moment
+  `/clear` was sent; (d) only THEN write the `.msg` + nudge — a nudge or
+  Stop-hook pickup racing an in-flight `/clear` must never see a
+  pre-clear `.msg`, because in this path there isn't one yet. A busy or
+  failsafe pane REFUSES loudly by default — nothing typed, no `.msg`
+  written; an optional `--wait-idle <secs>` grants a bounded grace poll
+  before that refusal, but the hard rule stands once it elapses. A plain
+  (no `--fresh`) dispatch to the SAME agent with a DIFFERENT issue than
+  its last one (tracked per-agent in `.harness/state/last-issue/<agent>`,
+  written on every assign/handoff regardless of `--fresh`) prints a loud
+  one-line warning, not a refusal — a nudge to use `--fresh`, not a gate.
+  `--fresh` has no agy (Antigravity CLI) equivalent — probed and
+  confirmed no outside-triggerable conversation-reset exists in its CLI
+  (only `--continue`/`--conversation`, which pick what a NEW process
+  resumes, not a live mid-session reset) — and refuses outright for agy;
+  restart the agy pane instead.
 - Pane map (window index 0, 3 agent panes on top / 2 monitor panes below) matches `bin/orc`'s layout:
   0=orchestra 1=builder 2=reviewer 3=gatekeeper 4=watch — Scribe has no
   standing pane; a dispatch spawns it as a one-shot headless run instead
