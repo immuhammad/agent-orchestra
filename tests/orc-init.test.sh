@@ -260,9 +260,15 @@ echo "== agy PR #117 finding 3: orchestrator.yaml is written with noclobber (TOC
 # impractical to reproduce deterministically in a single-threaded test
 # suite. This confirms the noclobber guard is actually present around
 # the orchestrator.yaml write, which is the mechanism the fix relies on.
+# issue #116: the yaml-building heredoc moved into a shared function
+# (orc_init_render_orchestrator_yaml, reused by --force's full re-init
+# path) -- the call site checked here is now that function call, not the
+# literal heredoc redirect; the function's own `} > "$dest" 2>/dev/null`
+# still performs the actual write, so noclobber (a shell OPTION, not
+# subshell-scoped) still governs it exactly as before.
 if awk '
   /set -o noclobber/ { on = NR }
-  /} > "\$target\/orchestrator\.yaml"/ { if (on && NR - on < 40) found = 1 }
+  /orc_init_render_orchestrator_yaml "\$answers_file" "\$target\/orchestrator\.yaml"/ { if (on && NR - on < 40) found = 1 }
   /set \+o noclobber/ { if (on && NR > on) off = 1 }
   END { exit !(found && off) }
 ' "$DIR/../bin/orc"; then
