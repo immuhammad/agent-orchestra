@@ -1,24 +1,14 @@
 {
   "agy-guard": {
-    "SessionStart": [
+    "PreInvocation": [
       {
         "type": "command",
-        "command": "bash ../hooks/session-start.sh < /dev/null"
-      },
-      {
-        "type": "command",
-        "command": "bash ../hooks/pane-state.sh idle < /dev/null"
-      }
-    ],
-    "turn-start": [
-      {
-        "type": "command",
-        "command": "bash ../hooks/pane-state.sh busy < /dev/null"
+        "command": "bash ../hooks/pane-state.sh busy"
       }
     ],
     "PreToolUse": [
       {
-        "matcher": ".*",
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
@@ -34,7 +24,7 @@
           },
           {
             "type": "command",
-            "command": "bash ../hooks/pane-state.sh busy < /dev/null"
+            "command": "bash ../hooks/pane-state.sh busy"
           }
         ]
       }
@@ -42,11 +32,11 @@
     "Stop": [
       {
         "type": "command",
-        "command": "bash ../hooks/check-inbox-stop.sh < /dev/null"
+        "command": "bash ../hooks/check-inbox-stop-agy.sh"
       },
       {
         "type": "command",
-        "command": "bash ../hooks/pane-state.sh idle < /dev/null"
+        "command": "bash ../hooks/pane-state.sh idle"
       }
     ]
   }
