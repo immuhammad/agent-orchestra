@@ -279,11 +279,11 @@ orc_build_session() {
     # inheritance). hooks/check-handoff.sh reads this to gate the
     # handoff.md nag to Orchestra only -- a pane with no ORC_ROLE (a
     # session started outside this room) is correctly treated as unknown,
-    # never nagged. agy isn't a Claude Code session (never fires Claude
-    # Code hooks at all), so it gets no ORC_ROLE.
+    # never nagged. agy isn't a Claude Code session, but it now participates
+    # in native hooks, so it gets ORC_ROLE=agy.
     tmux send-keys -t "$session:0.0" "$(sl_build_launch_cmd orchestra "$orchestra_model" --dangerously-skip-permissions)" C-m
     tmux send-keys -t "$session:0.1" "$(sl_build_launch_cmd builder "$implementer_model" --dangerously-skip-permissions)" C-m
-    tmux send-keys -t "$session:0.2" 'agy --dangerously-skip-permissions' C-m
+    tmux send-keys -t "$session:0.2" 'ORC_ROLE=agy agy --dangerously-skip-permissions' C-m
     # issue #105 Task 3: the supervisor respawns gatekeeper.sh with bounded
     # backoff if it ever exits, instead of leaving pane 3 with a dead
     # process until a human notices.

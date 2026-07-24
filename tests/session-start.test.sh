@@ -21,7 +21,7 @@ trap 'rm -rf "$TMP"' EXIT
 # checkout's real .harness/.
 SANDBOX="$TMP/sandbox"
 mkdir -p "$SANDBOX/.harness"
-OUT="$(cd "$SANDBOX" && bash "$HOOK" 2>/dev/null)"
+OUT="$(cd "$SANDBOX" && bash "$HOOK" < /dev/null 2>/dev/null)"
 
 echo "== additionalContext is valid JSON =="
 if echo "$OUT" | python3 -m json.tool >/dev/null 2>&1; then
@@ -57,7 +57,7 @@ echo "== issue #23: ORC_ONESHOT=1 emits NO room-state additionalContext (minimal
 # handoff.md duty (its own Stop hook already exempts it via ORC_ONESHOT,
 # see check-handoff.sh) -- it should never see this pane-agent briefing.
 : > "$SANDBOX/.harness/.session-start"
-ONESHOT_OUT="$(cd "$SANDBOX" && ORC_ONESHOT=1 bash "$HOOK" 2>/dev/null)"
+ONESHOT_OUT="$(cd "$SANDBOX" && ORC_ONESHOT=1 bash "$HOOK" < /dev/null 2>/dev/null)"
 if echo "$ONESHOT_OUT" | grep -qi "HARNESS ACTIVE\|handoff.md\|decisions.log\|quota"; then
   fail "ORC_ONESHOT=1 should suppress the room-state briefing entirely, got: $ONESHOT_OUT"
 else

@@ -32,7 +32,7 @@ fi
 
 ROLE="${ORC_ROLE:-}"
 case "$ROLE" in
-  orchestra|builder) ;;
+  orchestra|builder|reviewer|agy) ;;
   *) exit 0 ;;
 esac
 

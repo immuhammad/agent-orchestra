@@ -327,7 +327,7 @@ else
 fi
 tmux send-keys -t "$GHOST_TARGET" C-c 2>&1
 
-echo "== issue #33: pane_is_idle falls back to screen-scraping when no hook state file exists (e.g. agy's pane) =="
+echo "== issue #33: pane_is_idle falls back to screen-scraping when no hook state file exists =="
 NOSTATE_TARGET="$TEST_SESSION:0.0"
 NOSTATE_PANE_ID="$(tmux display-message -p -t "$NOSTATE_TARGET" '#{pane_id}')"
 rm -f "$PANE_STATE_DIR/$(pane_state_sanitize "$NOSTATE_PANE_ID")"
@@ -644,7 +644,7 @@ ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
 [ -n "$ACK_PATH" ] && echo "DONE: scribe handled it" > "$ACK_PATH"
 FAKECLAUDE
 chmod +x "$SOUL_FAKE_BIN/claude"
-PATH="$SOUL_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$SOUL_CLAUDE_CALLS" DISPATCH_CANON_DIR="$SOUL_PROJECT_ROOT/.harness" bash "$DISPATCH" assign scribe 9011 "do the judgment task" >/dev/null 2>&1
+OUT_SOUL="$(PATH="$SOUL_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$SOUL_CLAUDE_CALLS" DISPATCH_CANON_DIR="$SOUL_PROJECT_ROOT/.harness" bash "$DISPATCH" assign scribe 9011 "do the judgment task" 2>&1)"
 sleep 1
 if grep -q "SCRIBE-SOUL-MARKER" "$SOUL_CLAUDE_CALLS"; then
   pass "issue #12: souls/scribe.md content rides the headless spawn prompt"
@@ -782,7 +782,16 @@ FRESH_ROOM="$(mktemp -d)"
 mkdir -p "$FRESH_ROOM/inbox/scribe"
 CLAUDE_CALLS2="$FRESH_ROOM/claude-calls.log"
 : > "$CLAUDE_CALLS2"
-OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS2" DISPATCH_CANON_DIR="$FRESH_ROOM" bash "$DISPATCH" assign scribe 9020 "fresh room task" 2>&1)"
+FRESH_FAKE_BIN="$FRESH_ROOM/bin"
+mkdir -p "$FRESH_FAKE_BIN"
+cat > "$FRESH_FAKE_BIN/claude" <<'FAKECLAUDE'
+#!/bin/bash
+echo "$*" >> "$CLAUDE_CALLS_FILE"
+ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
+[ -n "$ACK_PATH" ] && echo "DONE: scribe handled it" > "$ACK_PATH"
+FAKECLAUDE
+chmod +x "$FRESH_FAKE_BIN/claude"
+OUT="$(PATH="$FRESH_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS2" DISPATCH_CANON_DIR="$FRESH_ROOM" bash "$DISPATCH" assign scribe 9020 "fresh room task" 2>&1)"
 sleep 1
 if ls "$FRESH_ROOM"/inbox/scribe/*-9020.msg >/dev/null 2>&1; then
   pass "issue #22: assign scribe writes .msg into inbox/scribe/ in a fresh room with no copilot/ dir"
@@ -796,7 +805,16 @@ LEGACY_ROOM="$(mktemp -d)"
 mkdir -p "$LEGACY_ROOM/inbox/scribe"
 CLAUDE_CALLS3="$LEGACY_ROOM/claude-calls.log"
 : > "$CLAUDE_CALLS3"
-OUT="$(PATH="$FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS3" DISPATCH_CANON_DIR="$LEGACY_ROOM" bash "$DISPATCH" assign copilot 9021 "legacy verb task" 2>&1)"
+LEGACY_FAKE_BIN="$LEGACY_ROOM/bin"
+mkdir -p "$LEGACY_FAKE_BIN"
+cat > "$LEGACY_FAKE_BIN/claude" <<'FAKECLAUDE'
+#!/bin/bash
+echo "$*" >> "$CLAUDE_CALLS_FILE"
+ACK_PATH="$(echo "$*" | grep -Eo '/[^ ]*\.ack' | tail -1)"
+[ -n "$ACK_PATH" ] && echo "DONE: scribe handled it" > "$ACK_PATH"
+FAKECLAUDE
+chmod +x "$LEGACY_FAKE_BIN/claude"
+OUT="$(PATH="$LEGACY_FAKE_BIN:$PATH" CLAUDE_CALLS_FILE="$CLAUDE_CALLS3" DISPATCH_CANON_DIR="$LEGACY_ROOM" bash "$DISPATCH" assign copilot 9021 "legacy verb task" 2>&1)"
 sleep 1
 if ls "$LEGACY_ROOM"/inbox/scribe/*-9021.msg >/dev/null 2>&1; then
   pass "issue #22: legacy 'copilot' verb resolves into inbox/scribe/ (inverted alias)"
@@ -853,6 +871,9 @@ else
 fi
 rm -rf "$PROJECT_A" "$PROJECT_B"
 
+
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
+

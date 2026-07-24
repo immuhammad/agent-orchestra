@@ -90,6 +90,29 @@ if [ -f "$AGENTS_HOOKS_TEMPLATE" ]; then
   fi
 fi
 
+echo "== issue #150: agents-hooks.json parse and path resolution test =="
+if [ -f "$AGENTS_HOOKS_TEMPLATE" ]; then
+  # Find all unique command strings
+  COMMANDS=$(jq -r '.. | objects | select(.type == "command") | .command' "$AGENTS_HOOKS_TEMPLATE" | sort -u)
+  while IFS= read -r cmd_str; do
+    [ -z "$cmd_str" ] && continue
+    # Extract the script path (second token, stripping < /dev/null if present)
+    # E.g. "bash ../hooks/session-start.sh < /dev/null" -> "../hooks/session-start.sh"
+    SCRIPT_PATH=$(echo "$cmd_str" | awk '{print $2}')
+    if [[ "$SCRIPT_PATH" == "../"* ]]; then
+      # Resolve it relative to .agents (where agy executes from)
+      RESOLVED_PATH="$REPO_ROOT/${SCRIPT_PATH#../}"
+      if [ -f "$RESOLVED_PATH" ]; then
+        pass "path resolves correctly relative to .agents: $SCRIPT_PATH"
+      else
+        fail "path does NOT resolve relative to .agents: $SCRIPT_PATH (expected $RESOLVED_PATH)"
+      fi
+    else
+      fail "expected script path to start with ../ (since agy runs from .agents), got: $cmd_str"
+    fi
+  done <<< "$COMMANDS"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -29,7 +29,7 @@ STATE="${1:?usage: pane-state.sh <busy|idle|failsafe>}"
 # Claude Code always sends hook JSON on stdin -- read it for session_id
 # (never block the pipeline: jq failure degrades to an empty id).
 INPUT="$(cat)"
-SESSION_ID="$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo '')"
+SESSION_ID="$(echo "$INPUT" | jq -r '.session_id // .conversationId // empty' 2>/dev/null || echo '')"
 
 [ -z "${TMUX_PANE:-}" ] && exit 0
 
