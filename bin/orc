@@ -955,10 +955,21 @@ orc_init_force() {
   # unprotected). Disarmed (`trap - EXIT`) right before the matching
   # normal-path cleanup further down, so a clean run never double-fires
   # it; while armed, it's the safety net for an abort anywhere in
-  # between. $was_protected/$synth/$target are all already in scope here
-  # and stay in scope for the rest of this function's own execution --
-  # the only window in which this trap can actually fire.
-  trap '[ "$was_protected" -eq 1 ] && { bash "$ORC_SCRIPT_DIR/orc-protect" on "$target" >&2 || true; }; [ -n "$synth" ] && rm -f "$synth"; true' EXIT
+  # between.
+  #
+  # round 2 (live CI failure, Linux/bash 5.2): a trap referencing this
+  # function's OWN `local` vars ($was_protected/$synth/$target) hit
+  # "unbound variable" the moment set -e's abort actually fired --
+  # confirmed in isolation that bash 5 tears down a function's local
+  # scope as part of the set -e unwind BEFORE the EXIT trap runs, while
+  # macOS's bash 3.2 does not (the bug never showed up locally). Globals
+  # dedicated to this trap sidestep the whole question of unwind-vs-trap
+  # timing -- safe since orc_init_force never re-enters itself within one
+  # process.
+  ORC_INIT_FORCE_TARGET="$target"
+  ORC_INIT_FORCE_WAS_PROTECTED="$was_protected"
+  ORC_INIT_FORCE_SYNTH="$synth"
+  trap '[ "$ORC_INIT_FORCE_WAS_PROTECTED" -eq 1 ] && { bash "$ORC_SCRIPT_DIR/orc-protect" on "$ORC_INIT_FORCE_TARGET" >&2 || true; }; [ -n "$ORC_INIT_FORCE_SYNTH" ] && rm -f "$ORC_INIT_FORCE_SYNTH"; true' EXIT
 
   local ts backup_rel project
   ts="$(date +%Y%m%d%H%M%S)"

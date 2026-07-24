@@ -28,8 +28,33 @@ file_sha256() {
   fi
 }
 file_mtime() {
-  stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null
+  # GNU stat's `-f` means "filesystem mode" (a different flag entirely
+  # from BSD's per-file format flag) -- it does NOT cleanly fail on
+  # Linux, it prints filesystem info to stdout (varying between calls as
+  # disk usage fluctuates) alongside an unrelated error, so a naive
+  # `stat -f ... || stat -c ...` fallback silently captures garbage
+  # instead of ever reaching the GNU branch. Detect the dialect first via
+  # `stat --version` (GNU-only) instead of relying on exit status.
+  if stat --version >/dev/null 2>&1; then
+    stat -c '%Y' "$1" 2>/dev/null
+  else
+    stat -f '%m' "$1" 2>/dev/null
+  fi
 }
+
+# Enforcement cases need the OS immutability privilege: always present
+# on macOS (chflags uchg is owner-settable), absent for unprivileged
+# Linux users (chattr +i needs CAP_LINUX_IMMUTABLE -- e.g. plain CI
+# runners) -- same capability probe tests/orc-protect.test.sh already
+# uses, so both suites agree on when to skip.
+CAP_PROBE="$TMP/cap-probe"
+touch "$CAP_PROBE"
+if [ "$(uname -s)" = Darwin ]; then
+  if chflags uchg "$CAP_PROBE" 2>/dev/null; then CAN_FLAG=1; chflags nouchg "$CAP_PROBE"; else CAN_FLAG=0; fi
+else
+  if chattr +i "$CAP_PROBE" 2>/dev/null; then CAN_FLAG=1; chattr -i "$CAP_PROBE"; else CAN_FLAG=0; fi
+fi
+rm -f "$CAP_PROBE"
 
 write_answers() { # $1 = path, stdin = KEY=value lines
   cat > "$1"
@@ -257,40 +282,48 @@ else
 fi
 
 echo "== orc-protect'd room: --force lifts and restores immutability around the resync =="
-ROOM7="$TMP/room7"
-bash "$ORC" init --answers "$ANSWERS1" "$ROOM7" >/dev/null 2>&1
-bash "$ORC_BIN_DIR/orc-protect" on "$ROOM7" >/dev/null 2>&1
-OUT="$(bash "$ORC" init --force "$ROOM7" 2>&1)"
-STATUS=$?
-bash "$ORC_BIN_DIR/orc-protect" status "$ROOM7" >/dev/null 2>&1
-STILL_PROTECTED=$?
-if [ "$STATUS" -eq 0 ] && [ "$STILL_PROTECTED" -eq 0 ]; then
-  pass "--force resyncs an orc-protect'd room without error and re-protects it afterward"
+if [ "$CAN_FLAG" -eq 0 ]; then
+  echo "SKIP: no immutability privilege here (unprivileged Linux?) -- orc-protect round-trip cases skipped"
 else
-  fail "expected --force to lift+restore orc-protect cleanly, got status=$STATUS still-protected-exit=$STILL_PROTECTED: $OUT"
+  ROOM7="$TMP/room7"
+  bash "$ORC" init --answers "$ANSWERS1" "$ROOM7" >/dev/null 2>&1
+  bash "$ORC_BIN_DIR/orc-protect" on "$ROOM7" >/dev/null 2>&1
+  OUT="$(bash "$ORC" init --force "$ROOM7" 2>&1)"
+  STATUS=$?
+  bash "$ORC_BIN_DIR/orc-protect" status "$ROOM7" >/dev/null 2>&1
+  STILL_PROTECTED=$?
+  if [ "$STATUS" -eq 0 ] && [ "$STILL_PROTECTED" -eq 0 ]; then
+    pass "--force resyncs an orc-protect'd room without error and re-protects it afterward"
+  else
+    fail "expected --force to lift+restore orc-protect cleanly, got status=$STATUS still-protected-exit=$STILL_PROTECTED: $OUT"
+  fi
+  bash "$ORC_BIN_DIR/orc-protect" off "$ROOM7" >/dev/null 2>&1 || true
 fi
-bash "$ORC_BIN_DIR/orc-protect" off "$ROOM7" >/dev/null 2>&1 || true
 
 echo "== agy PR #162 finding 1: a mid-sync failure still restores orc-protect (no fail-open) =="
-ROOM8="$TMP/room8"
-bash "$ORC" init --answers "$ANSWERS1" "$ROOM8" >/dev/null 2>&1
-bash "$ORC_BIN_DIR/orc-protect" on "$ROOM8" >/dev/null 2>&1
-# force a failure partway through the resync (after protection is
-# lifted, before it would normally be restored): souls/ made unwritable
-# so the FIRST soul's mktemp write inside orc_init_force aborts the
-# whole script under set -e, exactly the class of abort finding 1 flags.
-chmod 555 "$ROOM8/souls"
-OUT="$(bash "$ORC" init --force "$ROOM8" 2>&1)"
-STATUS=$?
-chmod 755 "$ROOM8/souls"
-bash "$ORC_BIN_DIR/orc-protect" status "$ROOM8" >/dev/null 2>&1
-STILL_PROTECTED=$?
-if [ "$STATUS" -ne 0 ] && [ "$STILL_PROTECTED" -eq 0 ]; then
-  pass "a mid-sync abort still leaves the room orc-protect'd, not fail-open"
+if [ "$CAN_FLAG" -eq 0 ]; then
+  echo "SKIP: no immutability privilege here (unprivileged Linux?) -- orc-protect round-trip cases skipped"
 else
-  fail "expected a mid-sync failure to still restore orc-protect (status=$STATUS should be nonzero, still-protected-exit=$STILL_PROTECTED should be 0): $OUT"
+  ROOM8="$TMP/room8"
+  bash "$ORC" init --answers "$ANSWERS1" "$ROOM8" >/dev/null 2>&1
+  bash "$ORC_BIN_DIR/orc-protect" on "$ROOM8" >/dev/null 2>&1
+  # force a failure partway through the resync (after protection is
+  # lifted, before it would normally be restored): souls/ made unwritable
+  # so the FIRST soul's mktemp write inside orc_init_force aborts the
+  # whole script under set -e, exactly the class of abort finding 1 flags.
+  chmod 555 "$ROOM8/souls"
+  OUT="$(bash "$ORC" init --force "$ROOM8" 2>&1)"
+  STATUS=$?
+  chmod 755 "$ROOM8/souls"
+  bash "$ORC_BIN_DIR/orc-protect" status "$ROOM8" >/dev/null 2>&1
+  STILL_PROTECTED=$?
+  if [ "$STATUS" -ne 0 ] && [ "$STILL_PROTECTED" -eq 0 ]; then
+    pass "a mid-sync abort still leaves the room orc-protect'd, not fail-open"
+  else
+    fail "expected a mid-sync failure to still restore orc-protect (status=$STATUS should be nonzero, still-protected-exit=$STILL_PROTECTED should be 0): $OUT"
+  fi
+  bash "$ORC_BIN_DIR/orc-protect" off "$ROOM8" >/dev/null 2>&1 || true
 fi
-bash "$ORC_BIN_DIR/orc-protect" off "$ROOM8" >/dev/null 2>&1 || true
 
 echo "== --force on a target with no orchestrator.yaml at all refuses (it resyncs, it doesn't create) =="
 OUT="$(bash "$ORC" init --force "$TMP/never-initialized" 2>&1)"
