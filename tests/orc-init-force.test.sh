@@ -271,6 +271,27 @@ else
 fi
 bash "$ORC_BIN_DIR/orc-protect" off "$ROOM7" >/dev/null 2>&1 || true
 
+echo "== agy PR #162 finding 1: a mid-sync failure still restores orc-protect (no fail-open) =="
+ROOM8="$TMP/room8"
+bash "$ORC" init --answers "$ANSWERS1" "$ROOM8" >/dev/null 2>&1
+bash "$ORC_BIN_DIR/orc-protect" on "$ROOM8" >/dev/null 2>&1
+# force a failure partway through the resync (after protection is
+# lifted, before it would normally be restored): souls/ made unwritable
+# so the FIRST soul's mktemp write inside orc_init_force aborts the
+# whole script under set -e, exactly the class of abort finding 1 flags.
+chmod 555 "$ROOM8/souls"
+OUT="$(bash "$ORC" init --force "$ROOM8" 2>&1)"
+STATUS=$?
+chmod 755 "$ROOM8/souls"
+bash "$ORC_BIN_DIR/orc-protect" status "$ROOM8" >/dev/null 2>&1
+STILL_PROTECTED=$?
+if [ "$STATUS" -ne 0 ] && [ "$STILL_PROTECTED" -eq 0 ]; then
+  pass "a mid-sync abort still leaves the room orc-protect'd, not fail-open"
+else
+  fail "expected a mid-sync failure to still restore orc-protect (status=$STATUS should be nonzero, still-protected-exit=$STILL_PROTECTED should be 0): $OUT"
+fi
+bash "$ORC_BIN_DIR/orc-protect" off "$ROOM8" >/dev/null 2>&1 || true
+
 echo "== --force on a target with no orchestrator.yaml at all refuses (it resyncs, it doesn't create) =="
 OUT="$(bash "$ORC" init --force "$TMP/never-initialized" 2>&1)"
 STATUS=$?

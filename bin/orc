@@ -946,6 +946,20 @@ orc_init_force() {
     bash "$ORC_SCRIPT_DIR/orc-protect" off "$target" >&2 || true
   fi
 
+  # agy PR #162 finding 1: set -e is active for this whole script, so ANY
+  # failing command from here on (mktemp, cp, mkdir, orc-install-skills --
+  # a full disk, a missing template, a permission error) aborts the
+  # process immediately. Without a trap, that abort skips BOTH the
+  # orc-protect restoration below and the $synth cleanup -- the former is
+  # a fail-open security regression (the room is left PERMANENTLY
+  # unprotected). Disarmed (`trap - EXIT`) right before the matching
+  # normal-path cleanup further down, so a clean run never double-fires
+  # it; while armed, it's the safety net for an abort anywhere in
+  # between. $was_protected/$synth/$target are all already in scope here
+  # and stay in scope for the rest of this function's own execution --
+  # the only window in which this trap can actually fire.
+  trap '[ "$was_protected" -eq 1 ] && { bash "$ORC_SCRIPT_DIR/orc-protect" on "$target" >&2 || true; }; [ -n "$synth" ] && rm -f "$synth"; true' EXIT
+
   local ts backup_rel project
   ts="$(date +%Y%m%d%H%M%S)"
   backup_rel=".harness/state/init-backups/$ts"
@@ -1027,6 +1041,7 @@ orc_init_force() {
 
   orc_init_write_manifest "$target"
 
+  trap - EXIT
   if [ "$was_protected" -eq 1 ]; then
     bash "$ORC_SCRIPT_DIR/orc-protect" on "$target" >&2 || true
   fi
