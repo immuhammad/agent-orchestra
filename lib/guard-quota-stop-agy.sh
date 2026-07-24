@@ -1,7 +1,7 @@
 #!/bin/bash
 # lib/guard-quota-stop-agy.sh — PreToolUse gate for agy (Antigravity CLI),
 # wired via .agents/hooks.json. agy counterpart to
-# hooks/quota-stop-gate.sh (issue #10): "a PreToolUse hook in EVERY
+# hooks/quota-stop-gate.sh: "a PreToolUse hook in EVERY
 # session refuses tools" per the Gate-1 plan means agy sessions gate too,
 # not just Claude Code's.
 #
@@ -36,8 +36,8 @@ if [ -n "$COMMAND" ] && qsg_command_allowed "$COMMAND" "$CANON_DIR"; then
   exit 0
 fi
 
-# FLAG/PROBE (finding 4, agy's dedicated security review of PR #17's
-# rework request): the CommandLine-only check above traps agy -- its
+# FLAG/PROBE (finding 4, agy's dedicated security review): the
+# CommandLine-only check above traps agy -- its
 # file-write tools (e.g. write_to_file) have empty CommandLine, so an agy
 # session could never obey the Quota Failsafe's "update handoff.md"
 # instruction while gated.
@@ -61,7 +61,7 @@ if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
   exit 0
 fi
 
-# #40 round 2 (agy's own dedicated security pass on PR #52): the write-only
+# A follow-up round of agy's own dedicated security pass: the write-only
 # check above traps agy on READS too -- its PreToolUse matcher is ".*"
 # (templates/agents-hooks.json), so a gated agy session's read/view tool
 # calls were falling through to the deny at the bottom exactly like

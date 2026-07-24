@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/session-lifecycle.test.sh -- issue #6: lib/session-lifecycle.sh's
+# tests/session-lifecycle.test.sh -- lib/session-lifecycle.sh's
 # per-role session registry (sl_read/write_role_session) and the pure
 # launch-command builder (sl_build_launch_cmd) that decides
 # fresh/resumed/rebuilt at pane-launch time. Run: bash tests/session-lifecycle.test.sh
@@ -126,7 +126,7 @@ case "$CMD" in
   *) fail "expected the normal-exit non-relaunch path in: $CMD" ;;
 esac
 
-echo "== agy PR #135 round 1: a tampered/malformed role-session file must NOT reach the generated shell command unvalidated (injection) =="
+echo "== agy round 1: a tampered/malformed role-session file must NOT reach the generated shell command unvalidated (injection) =="
 sl_write_role_session builder "sid-ok"
 # Overwrite the file directly with an injection payload, bypassing
 # sl_write_role_session entirely -- exactly the "file tampered with"

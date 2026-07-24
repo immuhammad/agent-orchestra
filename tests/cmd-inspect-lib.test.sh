@@ -1,12 +1,12 @@
 #!/bin/bash
 # tests/cmd-inspect-lib.test.sh — unit tests for lib/cmd-inspect-lib.sh's
-# surviving quote-aware scanners (#139: the tokenizer/write-target half
-# was pruned as consumer-less after #147's thin guard.sh dropped its last
+# surviving quote-aware scanners (the tokenizer/write-target half
+# was pruned as consumer-less after the thin guard.sh dropped its last
 # caller; orc_lexical_normalize, orc_split_top_level_segments, and
 # orc_segment_has_unquoted_redirect remain, all consumed by
 # lib/quota-stop-lib.sh's qsg_split_top_level, and the splitter is also
 # guard.sh's own anchor for its destructive-command deny list). Focus:
-# the no-backslash-lookback quote-desync bug (#139) -- a backslash-
+# the no-backslash-lookback quote-desync bug -- a backslash-
 # escaped double-quote inside an already-open double-quoted argument was
 # treated as a real closing quote, letting the arg's remaining text
 # (which can contain `;`/`&&`/`>`) be seen as unquoted. Run: bash
@@ -68,7 +68,7 @@ expect_no_redirect() {
   fi
 }
 
-echo "== #139: escaped double-quote inside a quoted arg must not desync quote state =="
+echo "== escaped double-quote inside a quoted arg must not desync quote state =="
 assert_segments "escaped-quote arg keeps its embedded ; literal (no false split)" \
   "echo ${DQ}a${BS}${DQ}b;c${DQ} d" \
   "echo ${DQ}a${BS}${DQ}b;c${DQ} d"

@@ -6,8 +6,8 @@
 # land in a protected path unguarded (G4) — this hook covers that gap.
 #
 # Protected paths come ONLY from orchestrator.yaml (protected_paths)
-# via orc-config.sh -- EMPTY if the config is missing/malformed (issue #18
-# B-i: no hardcoded project-specific default). This does NOT unprotect
+# via orc-config.sh -- EMPTY if the config is missing/malformed (no
+# hardcoded project-specific default). This does NOT unprotect
 # .claude/ or .agents/: those are checked separately below via
 # orc_is_harness_config_path, regardless of orchestrator.yaml.
 set -euo pipefail
@@ -23,12 +23,13 @@ if [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
-# issue #31: .claude/ and .agents/ wire the harness's own enforcement
+# .claude/ and .agents/ wire the harness's own enforcement
 # (guard.sh, guard-write.sh, quota-stop-gate.sh, the Stop hook) -- protected
 # BY DEFAULT, independent of orchestrator.yaml's protected_paths, so no
 # missing config entry can leave the guard editable/deletable by the agent
-# it constrains (agy's probe-3 on PR #30: an unprotected settings.json let
-# an agent inject ORC_ONESHOT=1 into the Stop hook's own command). This is
+# it constrains (agy's dedicated security review found: an unprotected
+# settings.json let an agent inject ORC_ONESHOT=1 into the Stop hook's
+# own command). This is
 # instructive, not a flat wall -- Ahmad legitimately changes settings, so
 # the message names the sanctioned edit path instead of just forbidding.
 if orc_is_harness_config_path "$FILE_PATH"; then

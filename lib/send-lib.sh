@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/send-lib.sh — shared "type text into a pane and submit it
-# reliably" helper (issue #86 Task 1). Supersedes auto-resume.sh's old
+# reliably" helper. Supersedes auto-resume.sh's old
 # ar_submit, which only gatekeeper.sh/auto-resume.sh used -- dispatch.sh's
 # nudge_agent, the HIGHEST-frequency send path of the three, was still on a
 # bare two-event send with no confirm/retry at all (finding 1).
@@ -16,7 +16,7 @@ set -uo pipefail
 # top, a naive `tail -N` on the raw capture grabs N rows of blank padding,
 # not the content. Filtering blanks first fixes this regardless of pane
 # height or how little has been printed (originally auto-resume.sh's
-# ar_meaningful_tail; moved here in issue #86 so dispatch.sh's pane_is_idle
+# ar_meaningful_tail; moved here so dispatch.sh's pane_is_idle
 # gets the same fix -- found dogfooding Task 3's own test, where a 50-row
 # pane with content only in its first few rows left a raw tail -10 holding
 # nothing but blank lines).
@@ -28,18 +28,19 @@ send_meaningful_tail() {
 #
 # Claude Code's TUI drops an Enter that arrives in the same send-keys burst
 # as pasted text, so text and Enter are always separate events
-# with a beat between them. `-l --` sends the text literally (issue #86
-# finding 4) so a message starting with '-' or matching a tmux key name
+# with a beat between them. `-l --` sends the text literally (finding 4
+# from a dedicated security review) so a message starting with '-' or
+# matching a tmux key name
 # can't be misinterpreted as a flag/key.
 #
 # If the text is STILL sitting on the pane's input line after the Enter,
-# sending MORE Enters doesn't help -- live-proven 2026-07-10 (issue #86):
+# sending MORE Enters doesn't help -- live-proven 2026-07-10:
 # three separate Enter attempts on a stuck input all silently dropped,
 # while clear (C-u) -> retype -> beat -> one fresh Enter submitted first
 # try. So the retry clears and retypes instead of sending another bare
 # Enter.
 #
-# issue #33/#38: C-u ALSO fires before the FIRST type attempt, not only on
+# C-u ALSO fires before the FIRST type attempt, not only on
 # a stuck-input retry. The retry branch above only catches send_submit's
 # OWN text getting stuck; it does nothing about content already sitting on
 # the input line before send_submit was ever called (ghost/hint-adjacent
@@ -54,7 +55,7 @@ send_submit() {
   sleep 1
   tmux send-keys -t "$target" Enter 2>/dev/null
   sleep 0.3
-  # Flatten the captured tail before matching (issue #86 finding 2): tmux
+  # Flatten the captured tail before matching (finding 2): tmux
   # hard-wraps at the pane's column width with no reflow-awareness, so a
   # message longer than the pane is split across physical lines and a
   # single-line grep against the raw capture can never match it -- the

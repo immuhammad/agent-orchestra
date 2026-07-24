@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/session-start.test.sh — issue #18 items 2+3: session-start.sh's
+# tests/session-start.test.sh — items 2+3: session-start.sh's
 # additionalContext must wire Reviewer skills (not just Builder/Orchestra)
 # and must tell every role to read decisions.log (durable context), not
 # just handoff.md (ephemeral). Run: bash tests/session-start.test.sh
@@ -49,7 +49,7 @@ else
   fail "additionalContext should name Reviewer's auto-use skill(s)"
 fi
 
-echo "== issue #23: ORC_ONESHOT=1 emits NO room-state additionalContext (minimal-context spawn) =="
+echo "== ORC_ONESHOT=1 emits NO room-state additionalContext (minimal-context spawn) =="
 # A scribe spawn was observed booting, reading THIS additionalContext's
 # "read handoff.md" + quota-rule briefing, concluding (from a STALE
 # handoff.md) that the room was quota-parked, and self-aborting instead of
@@ -69,7 +69,7 @@ else
   fail "expected valid JSON even for the minimal-context case, got: $ONESHOT_OUT"
 fi
 
-echo "== issue #6: no ORC_ROLE/ORC_SESSION_CLASS at all -> no lifecycle sentence (session started outside orc up) =="
+echo "== no ORC_ROLE/ORC_SESSION_CLASS at all -> no lifecycle sentence (session started outside orc up) =="
 NOENV_OUT="$(cd "$SANDBOX" && env -u ORC_ROLE -u ORC_SESSION_CLASS bash "$HOOK" <<< '{"source":"startup","session_id":"sid-noenv"}' 2>/dev/null)"
 if echo "$NOENV_OUT" | grep -q "SESSION LIFECYCLE"; then
   fail "expected no SESSION LIFECYCLE sentence with no ORC_ROLE/ORC_SESSION_CLASS set, got: $NOENV_OUT"
@@ -85,7 +85,7 @@ LC_SANDBOX="$TMP/lc-sandbox"
 mkdir -p "$LC_SANDBOX/.harness/inbox/orchestra"
 echo "project: lifecycle-test" > "$LC_SANDBOX/orchestrator.yaml"
 
-echo "== issue #6: ORC_SESSION_CLASS=fresh, source=startup -> FRESH sentence + role-session recorded =="
+echo "== ORC_SESSION_CLASS=fresh, source=startup -> FRESH sentence + role-session recorded =="
 FRESH_OUT="$(cd "$LC_SANDBOX" && ORC_ROLE=builder ORC_SESSION_CLASS=fresh TMUX_PANE="%201" bash "$HOOK" <<< '{"source":"startup","session_id":"sid-fresh-1"}' 2>/dev/null)"
 if echo "$FRESH_OUT" | grep -q "SESSION LIFECYCLE: FRESH"; then
   pass "fresh class -> FRESH sentence in additionalContext"
@@ -98,7 +98,7 @@ else
   fail "expected role-session/builder to contain sid-fresh-1"
 fi
 if grep -q '^idle .* sid-fresh-1 fresh$' "$LC_SANDBOX/.harness/state/pane-state/201" 2>/dev/null; then
-  pass "classification recorded into the pane-state file (issue #6 point 4: watch can render it)"
+  pass "classification recorded into the pane-state file (point 4: watch can render it)"
 else
   fail "expected pane-state/201 to end with 'sid-fresh-1 fresh', got: $(cat "$LC_SANDBOX/.harness/state/pane-state/201" 2>/dev/null)"
 fi
@@ -108,7 +108,7 @@ else
   fail "fresh class should not write anything to orchestra's inbox"
 fi
 
-echo "== issue #6: ORC_SESSION_CLASS=resumed, source=resume -> RESUMED sentence, no FLAG =="
+echo "== ORC_SESSION_CLASS=resumed, source=resume -> RESUMED sentence, no FLAG =="
 RESUMED_OUT="$(cd "$LC_SANDBOX" && ORC_ROLE=orchestra ORC_SESSION_CLASS=resumed TMUX_PANE="%202" bash "$HOOK" <<< '{"source":"resume","session_id":"sid-resumed-1"}' 2>/dev/null)"
 if echo "$RESUMED_OUT" | grep -q "SESSION LIFECYCLE: RESUMED"; then
   pass "resumed class -> RESUMED sentence in additionalContext"
@@ -121,7 +121,7 @@ else
   fail "resumed class should not write anything to orchestra's inbox"
 fi
 
-echo "== issue #6: ORC_SESSION_CLASS=rebuilt, source=startup -> REBUILT sentence + durable FLAG to orchestra's inbox =="
+echo "== ORC_SESSION_CLASS=rebuilt, source=startup -> REBUILT sentence + durable FLAG to orchestra's inbox =="
 REBUILT_OUT="$(cd "$LC_SANDBOX" && ORC_ROLE=builder ORC_SESSION_CLASS=rebuilt TMUX_PANE="%203" bash "$HOOK" <<< '{"source":"startup","session_id":"sid-rebuilt-1"}' 2>/dev/null)"
 if echo "$REBUILT_OUT" | grep -q "SESSION LIFECYCLE: REBUILT"; then
   pass "rebuilt class -> REBUILT sentence in additionalContext"
@@ -140,7 +140,7 @@ else
   fail "expected a FLAG .msg in orchestra's inbox mentioning REBUILT, found: ${FLAG_FILES[*]}"
 fi
 
-echo "== issue #6: dedup -- source=clear on an already-rebuilt process does NOT re-flag or re-write state =="
+echo "== dedup -- source=clear on an already-rebuilt process does NOT re-flag or re-write state =="
 rm -f "$LC_SANDBOX"/.harness/inbox/orchestra/*.msg
 BEFORE_STATE="$(cat "$LC_SANDBOX/.harness/state/pane-state/203" 2>/dev/null)"
 CLEAR_OUT="$(cd "$LC_SANDBOX" && ORC_ROLE=builder ORC_SESSION_CLASS=rebuilt TMUX_PANE="%203" bash "$HOOK" <<< '{"source":"clear","session_id":"sid-rebuilt-1"}' 2>/dev/null)"
@@ -162,7 +162,7 @@ else
   fail "expected no new FLAG .msg on a clear re-fire, found $MSG_COUNT_AFTER_CLEAR"
 fi
 
-echo "== issue #12: souls/<role>.md, when present, is injected into additionalContext on startup =="
+echo "== souls/<role>.md, when present, is injected into additionalContext on startup =="
 SOUL_SANDBOX="$TMP/soul-sandbox"
 mkdir -p "$SOUL_SANDBOX/.harness/inbox/orchestra" "$SOUL_SANDBOX/souls"
 echo "project: soul-test" > "$SOUL_SANDBOX/orchestrator.yaml"
@@ -180,7 +180,7 @@ else
   fail "builder's additionalContext should not contain orchestra's soul: $SOUL_OUT"
 fi
 
-echo "== issue #12: no souls/<role>.md on disk -> no SOUL line, no error (untracked/older-room precedent) =="
+echo "== no souls/<role>.md on disk -> no SOUL line, no error (untracked/older-room precedent) =="
 NOSOUL_SANDBOX="$TMP/nosoul-sandbox"
 mkdir -p "$NOSOUL_SANDBOX/.harness/inbox/orchestra"
 echo "project: nosoul-test" > "$NOSOUL_SANDBOX/orchestrator.yaml"

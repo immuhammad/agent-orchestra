@@ -1,7 +1,7 @@
 #!/bin/bash
 # lib/pane-state-lib.sh — per-pane BUSY/IDLE state, written by Claude
 # Code's own hooks (UserPromptSubmit/PreToolUse -> busy, Stop -> idle) and
-# read by dispatch.sh's pane_is_idle (issue #33).
+# read by dispatch.sh's pane_is_idle.
 #
 # Why: screen-scraping (tmux capture-pane) cannot tell Claude Code's input
 # HINT/ghost text from real content, so it misreads busy/idle and nudges
@@ -26,7 +26,7 @@ PANE_STATE_DIR="${PANE_STATE_DIR:-${CANON_DIR:-.}/state/pane-state}"
 # else is REJECTED outright (no stdout, exit 1), not stripped-and-passed-
 # through.
 #
-# SECURITY (issue #33 PR #45 REQUEST-CHANGES, agy): hooks/pane-state.sh
+# SECURITY: hooks/pane-state.sh
 # trusts $TMUX_PANE verbatim, and it's an ordinary inherited env var an
 # agent can `export` before any tool call -- tmux never re-verifies it per
 # hook invocation. The original strip-only sanitizer (`${1#%}`) let a
@@ -46,8 +46,8 @@ pane_state_sanitize() {
 }
 
 # pane_state_write <pane_id> <busy|idle|failsafe> [session_id] [classification]
-# -- called by hooks/pane-state.sh, hooks/rate-limit-handoff.sh, and (issue
-# #6) hooks/session-start.sh, which is the only caller that ever passes a
+# -- called by hooks/pane-state.sh, hooks/rate-limit-handoff.sh, and
+# hooks/session-start.sh, which is the only caller that ever passes a
 # 4th field.
 # One line: "<state> <epoch_seconds> [session_id] [classification]".
 # Single-writer-per-file (only that pane's own hook process ever writes its
@@ -56,7 +56,7 @@ pane_state_sanitize() {
 # best-effort feature, never worth failing a hook over, and never worth
 # trusting an unvalidated value for a filesystem write.
 #
-# issue #6: classification (resumed|rebuilt|fresh) is decided ONCE, at
+# Classification (resumed|rebuilt|fresh) is decided ONCE, at
 # SessionStart, by hooks/session-start.sh -- every OTHER write for this
 # pane (UserPromptSubmit/PreToolUse/Stop busy/idle transitions) calls this
 # with no 4th arg and must not erase it. An omitted classification
@@ -74,7 +74,7 @@ pane_state_write() {
     classification="$(awk '{print $4}' "$file" 2>/dev/null || echo '')"
     [ "$classification" = "-" ] && classification=""
   fi
-  # agy PR #135 round 1: an empty field is written as a literal '-'
+  # An empty field is written as a literal '-'
   # placeholder, never a bare empty string. awk's DEFAULT field splitting
   # collapses consecutive whitespace into a single delimiter, so an empty
   # session_id with a non-empty classification ("idle 123  rebuilt", two
@@ -90,7 +90,7 @@ pane_state_write() {
 # "failsafe" to stdout; prints nothing and returns 1 if missing,
 # malformed, or the pane_id itself is invalid (see pane_state_sanitize).
 #
-# issue #125: NO age-out by default. The old 30s staleness guard
+# NO age-out by default. The old 30s staleness guard
 # self-destructed exactly when ground truth mattered most -- an idle pane
 # fires no hooks, so 'idle' expired 30s after Stop and every long-idle
 # pane fell back to the screen-scrape heuristics; a long thinking stretch
@@ -127,7 +127,7 @@ pane_state_read() {
 }
 
 # pane_state_session <pane_id> -- prints the session_id recorded with the
-# pane's current state (issue #125 ownership checks: "is this still the
+# pane's current state (ownership checks: "is this still the
 # session I parked?" compares identities, not screen fingerprints).
 # Prints nothing / returns 1 if there is none.
 pane_state_session() {
@@ -143,7 +143,7 @@ pane_state_session() {
 }
 
 # pane_state_effective <pane_id> -- pane_state_read with ONE derivation
-# (issue #125, Ahmad's post-park question): "failsafe" is only meaningful
+# (Ahmad's post-park question): "failsafe" is only meaningful
 # while the quota-stop flag exists. The state file records "this session
 # last stopped while the room was gated"; once the gate lifts, a pane
 # that hasn't spoken since is simply idle -- and nothing would ever
@@ -166,7 +166,7 @@ pane_state_effective() {
 }
 
 # pane_state_classification <pane_id> -- prints the resumed|rebuilt|fresh
-# classification recorded for a pane (issue #6), or nothing / returns 1 if
+# classification recorded for a pane, or nothing / returns 1 if
 # none was ever recorded (e.g. a pane whose session predates this feature,
 # or one started outside `orc up`). Consumers (lib/broker.sh's watch
 # header) treat a missing classification as "nothing to show", not an
@@ -184,8 +184,8 @@ pane_state_classification() {
 }
 
 # pane_state_age <pane_id> -- seconds since the pane's last recorded state
-# transition, or nothing / returns 1 if missing/malformed/unknown (issue
-# #134: watch.sh's stuck-pane check reads this only when it already knows
+# transition, or nothing / returns 1 if missing/malformed/unknown.
+# watch.sh's stuck-pane check reads this only when it already knows
 # state == busy, so this is "how long has this pane been busy" there --
 # but the underlying math is the same for any state, so it's not named
 # busy-specific). A repeat write to the SAME state (e.g. PreToolUse firing

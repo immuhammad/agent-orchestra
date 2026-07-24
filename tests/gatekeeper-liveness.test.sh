@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/gatekeeper-liveness.test.sh -- issue #155: two false stale-heartbeat
+# tests/gatekeeper-liveness.test.sh -- two false stale-heartbeat
 # FLAGs in two days, same root class -- a wall-clock GAP (system suspend,
 # room downtime) makes a healthy gatekeeper.sh look dead to the watchdog's
 # staleness check, because the watchdog's OWN sleep pauses across the exact

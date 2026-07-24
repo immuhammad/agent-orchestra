@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/orc-seed-merge-watch.test.sh — TDD tests for
-# lib/orc-seed-merge-watch.sh (issue #18 item 5 / C1): seeds
+# lib/orc-seed-merge-watch.sh: seeds
 # merge-watch-state with every currently-merged PR number so a FRESH room
 # starts caught-up instead of replaying comment+close on old issues and
 # firing a stale "PR #N merged -- PICK next" nudge.
@@ -77,7 +77,7 @@ else
   fail "expected an empty (but present) state file, got: $(ls -la "$STATE3" 2>&1)"
 fi
 
-echo "== orc_seed_merge_watch: uses a broad limit, not merge_watch_check's own 20-PR polling cap (issue #18 item 5: EVERY currently-merged PR) =="
+echo "== orc_seed_merge_watch: uses a broad limit, not merge_watch_check's own 20-PR polling cap (EVERY currently-merged PR) =="
 STATE4="$TMP/limit-state"
 rm -f "$STATE4"
 LIMIT_SEEN="$TMP/limit-seen"

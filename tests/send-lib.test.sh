@@ -1,6 +1,6 @@
 #!/bin/bash
 # .harness/send-lib.test.sh — tests for send-lib.sh's shared send_submit
-# helper (issue #86 Tasks 1+2). Run: bash .harness/send-lib.test.sh
+# helper (Tasks 1+2). Run: bash .harness/send-lib.test.sh
 #
 # Static checks pin down the FIX SHAPE (text/Enter as separate events,
 # literal -l --, wrap-flattened confirm, clear-and-retype on a stuck
@@ -36,7 +36,7 @@ else
   fail "send_submit should send text (-l --, literal) and Enter as separate send-keys calls"
 fi
 
-echo "== send_submit: T2 (#86) confirm flattens the captured tail before matching (wrap-safe) =="
+echo "== send_submit: T2 confirm flattens the captured tail before matching (wrap-safe) =="
 TR_PATTERN="tr -d "
 TR_PATTERN+="'"
 TR_PATTERN+='\n'
@@ -68,10 +68,10 @@ else
   fail "expected exactly 1 Enter in the retry branch, got $RETRY_ENTER_COUNT"
 fi
 
-echo "== send_submit: issue #33 -- ALWAYS clears (C-u) before the FIRST type attempt, not just on retry =="
+echo "== send_submit: ALWAYS clears (C-u) before the FIRST type attempt, not just on retry =="
 # The retry branch already C-u's on a stuck-input RE-attempt (tested
 # above), but that only catches send_submit's OWN text getting stuck. The
-# stranded-input gotcha (live-hit three times per issue #33/#38) is
+# stranded-input gotcha (live-hit three times) is
 # leftover content sitting in the pane BEFORE send_submit is ever called
 # (e.g. ghost/hint text, a half-typed prior message) -- that stray content
 # is still there when the FIRST attempt types over it, corrupting the
@@ -82,10 +82,10 @@ PRE_FIRST_TYPE="$(printf '%s\n' "$SUBMIT_BODY" | head -n "$FIRST_TYPE_LINE")"
 if printf '%s\n' "$PRE_FIRST_TYPE" | grep -qF 'C-u'; then
   pass "send_submit clears (C-u) before its first type attempt, not only on retry"
 else
-  fail "send_submit should C-u clear the pane BEFORE typing the first time (stranded-input gotcha, issue #33/#38)"
+  fail "send_submit should C-u clear the pane BEFORE typing the first time (stranded-input gotcha)"
 fi
 
-echo "== send_submit: live -- clears pre-existing stray input before typing (issue #33 stranded-input gotcha) =="
+echo "== send_submit: live -- clears pre-existing stray input before typing (stranded-input gotcha) =="
 tmux new-session -d -s "$TEST_SESSION" -n stray sh >/dev/null 2>&1
 sleep 1
 # Leave stray, un-submitted text sitting on the input line (no Enter) --
@@ -102,7 +102,7 @@ else
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1
 
-echo "== send_meaningful_tail: filters blank padding before a caller's tail -N (issue #86 dogfood) =="
+echo "== send_meaningful_tail: filters blank padding before a caller's tail -N (dogfood) =="
 tmux new-session -d -s "$TEST_SESSION" -n pad -x 200 -y 50 >/dev/null 2>&1
 tmux send-keys -t "$TEST_SESSION:0.0" "printf 'REALCONTENT\\n'; sleep 30" Enter >/dev/null 2>&1
 sleep 1
@@ -117,7 +117,7 @@ tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1
 
 echo "== send_submit: call sites (nudge_agent, gatekeeper notify(), auto-resume resume path) =="
 if grep -q 'send_submit "\$target" "check inbox"' "$LIB/dispatch.sh"; then
-  pass "dispatch.sh's nudge_agent submits via send_submit (issue #86 finding 1)"
+  pass "dispatch.sh's nudge_agent submits via send_submit (finding 1)"
 else
   fail "nudge_agent should submit via send_submit, not a raw send-keys burst"
 fi

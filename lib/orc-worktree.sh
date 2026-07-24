@@ -40,7 +40,7 @@
 #     same worktree. Run `pause` explicitly once the PR is truly done with.
 #
 #   teardown <issue>
-#     Post-merge cleanup (issue #85, Task 4): removes the worktree at
+#     Post-merge cleanup: removes the worktree at
 #     .worktrees/issue-<N> ONLY if it is clean (`git status --porcelain`
 #     empty) -- a dirty worktree is NOT force-removed, it is FLAGged to
 #     orchestra via the inbox instead, since uncommitted work surviving a
@@ -50,11 +50,11 @@
 #     never deletes a branch" rule below in spirit -- an unmerged branch
 #     must survive and get flagged too, since a merged PR
 #     doesn't necessarily absorb every commit that was ever pushed to its
-#     branch), and finally deletes the REMOTE branch too (#47 -- this never
+#     branch), and finally deletes the REMOTE branch too -- this never
 #     existed before; "GitHub's delete_branch_on_merge didn't fire" was
-#     never GitHub's fault, the code simply never ran it).
+#     never GitHub's fault, the code simply never ran it.
 #
-#     #47: NOT idempotent on a missing worktree or missing LOCAL branch --
+#     NOT idempotent on a missing worktree or missing LOCAL branch --
 #     a real merged PR always has both (start/resume always create them
 #     together), so either being absent is treated as a FAILURE, not a
 #     silent no-op. The previous version treated "I looked and found
@@ -77,7 +77,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-# issue #116: REPO_ROOT is the CONSUMER project's git repo (worktrees are
+# REPO_ROOT is the CONSUMER project's git repo (worktrees are
 # created inside it), not the directory above this script (this script
 # now lives in agent-orchestra's own lib/, a separate repo entirely).
 REPO_ROOT="${ORC_WORKTREE_REPO_ROOT:-$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)}"
@@ -89,7 +89,7 @@ fi
 source "$DIR/dispatch.sh"
 # shellcheck source=./orc-config.sh
 source "$DIR/orc-config.sh"
-# issue #116: "uat" was career-ops-harness's own integration branch name,
+# "uat" was career-ops-harness's own integration branch name,
 # hardcoded here -- generalized to read orchestrator.yaml's
 # integration_branch (same key orc.sh's control-room build already
 # reads), falling back to "uat" only for existing consumers whose config
@@ -102,7 +102,7 @@ usage() {
 }
 
 branch_name() { echo "feature/issue-$1"; }
-# #47: worktrees are created at .worktrees/ (repo-root-relative, gitignored
+# Worktrees are created at .worktrees/ (repo-root-relative, gitignored
 # -- see .gitignore), NOT .claude/worktrees/. The old path here never
 # matched where `start`/`resume` (or a Builder dispatch's own "work in a
 # worktree" convention) actually put anything, so a caller resolving the
@@ -120,8 +120,7 @@ branch_exists_remote() {
 }
 
 # _teardown_remote_branch_state <branch> -- echoes "exists", "absent", or
-# "unknown" for the branch on origin, always returns 0. #47 round 2 (agy's
-# dedicated security pass on PR #65): branch_exists_remote above is a plain
+# "unknown" for the branch on origin, always returns 0. branch_exists_remote above is a plain
 # boolean built on `git ls-remote --exit-code`'s raw exit status, which is
 # 2 when origin explicitly confirms no matching ref exists, but some OTHER
 # non-zero (128, typically) on a network blip, auth failure, or
@@ -129,8 +128,8 @@ branch_exists_remote() {
 # indistinguishable from "confirmed absent". cmd_teardown's remote section
 # used exactly that boolean and, on a network error, fell into "already
 # gone, nothing to delete" -- skipping the delete silently while still
-# logging overall success, the same false-success class #47 itself is
-# about. This distinguishes the three cases explicitly; cmd_teardown is the
+# logging overall success, the same false-success class described above.
+# This distinguishes the three cases explicitly; cmd_teardown is the
 # one caller that needs it. cmd_start's existing branch_exists_remote
 # usage (a simple "does it exist, for refusing to re-point a branch"
 # check) is left untouched -- out of scope for this finding.
@@ -314,7 +313,7 @@ cmd_teardown() {
       echo "orc-worktree.sh: removed worktree at $wt"
     fi
   else
-    # #47: a real merged PR always has a worktree here (start/resume always
+    # A real merged PR always has a worktree here (start/resume always
     # create one) -- "not found" is either a legitimate double-run (harmless
     # in practice: watch.sh's mw_already_processed state file guarantees
     # teardown only ever runs ONCE per merged PR) or exactly the wrong-
@@ -345,12 +344,12 @@ cmd_teardown() {
     failed=1
   fi
 
-  # -- remote branch (#47: never existed before) ----------------------------
+  # -- remote branch (never existed before) ----------------------------
   # Confirmed absence is NOT treated as suspicious the way worktree/local-
   # branch absence is: a branch that was `start`ed but never pushed via
   # `finish` legitimately has no remote counterpart, and that's a normal
   # state, not a sign anything is wrong. An UNKNOWN state (network/auth
-  # error, unreachable remote) is different -- #47 round 2: conflating
+  # error, unreachable remote) is different: conflating
   # "confirmed absent" with "couldn't check" let a network blip skip the
   # delete silently while still reporting overall success.
   local remote_state

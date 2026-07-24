@@ -21,7 +21,7 @@ trap cleanup EXIT
 
 # Source watch.sh (pulls in dispatch.sh + broker.sh too) under
 # test-isolated state files so nothing here touches the real merge-watch/
-# broker/liveness state or the real room's inboxes (issue #125:
+# broker/liveness state or the real room's inboxes (
 # BROKER_INBOX_ROOT especially -- without it broker_check would iterate,
 # wake, and ARCHIVE the live inboxes).
 MERGE_WATCH_STATE="$TMP/merge-watch-state"
@@ -57,7 +57,7 @@ echo "== mw_extract_issue: parses linked issue from title+body text =="
 [ "$(mw_extract_issue 'Resolved #7')" = "7" ] && pass "Resolved #N" || fail "Resolved #N"
 [ -z "$(mw_extract_issue 'no issue reference here')" ] && pass "no match returns empty" || fail "no match should return empty"
 
-echo "== mw_extract_all_issues: T31 (#68 item B) returns EVERY distinct Closes/Fixes/Resolves ref =="
+echo "== mw_extract_all_issues: returns EVERY distinct Closes/Fixes/Resolves ref =="
 MULTI="$(mw_extract_all_issues 'Closes #55.
 Closes #56.')"
 if [ "$(echo "$MULTI" | tr '\n' ' ' | sed 's/ $//')" = "55 56" ]; then
@@ -70,11 +70,11 @@ fi
 DEDUPE="$(mw_extract_all_issues 'Closes #34. Also closes #34 again, and fixes #40.' | tr '\n' ' ' | sed 's/ $//')"
 [ "$DEDUPE" = "34 40" ] && pass "duplicate ref is deduped, order preserved" || fail "expected '34 40' deduped, got: $DEDUPE"
 
-echo "== mw_extract_issue_from_branch: T30 (#56) fallback when title/body have no ref =="
+echo "== mw_extract_issue_from_branch: fallback when title/body have no ref =="
 [ "$(mw_extract_issue_from_branch 'feature/issue-55')" = "55" ] && pass "feature/issue-N branch" || fail "feature/issue-N branch"
 [ -z "$(mw_extract_issue_from_branch 'main')" ] && pass "non-matching branch returns empty" || fail "non-matching branch should return empty"
 
-echo "== issue #18 item 5 (C1): a SEEDED state file locks the seam -- mw_already_processed is true, no replay =="
+echo "== a SEEDED state file locks the seam -- mw_already_processed is true, no replay =="
 : > "$MERGE_WATCH_STATE"
 mw_mark_processed "555"
 if mw_already_processed "555"; then
@@ -89,7 +89,7 @@ else
 fi
 : > "$MERGE_WATCH_STATE"
 
-echo "== #47: mw_dev_target_root -- ORC_WORKTREE_REPO_ROOT wins outright, falls back to an optional dev_target_root config key =="
+echo "== mw_dev_target_root -- ORC_WORKTREE_REPO_ROOT wins outright, falls back to an optional dev_target_root config key =="
 # The actual bug this closes: watch.sh runs from the HARNESS ROOT (per
 # orc.sh's pane launch, no cd of its own), but in a self-dogfood room the
 # real dev target (with the worktree/branch to tear down) is a SEPARATE
@@ -126,9 +126,9 @@ fi
 echo "dev_target_root: project/agent-orchestra" > "$FAKE_PROJECT/orchestrator.yaml"
 EMPTY_ENV_RESULT="$(cd "$FAKE_PROJECT" && ORC_WORKTREE_REPO_ROOT="" mw_dev_target_root)"
 if [ -z "$EMPTY_ENV_RESULT" ]; then
-  pass "#47 round 2 (agy) -- an explicitly-exported EMPTY ORC_WORKTREE_REPO_ROOT is a deliberate 'don't override' signal and still wins over the config key, not falling through to it"
+  pass "round 2 (agy) -- an explicitly-exported EMPTY ORC_WORKTREE_REPO_ROOT is a deliberate 'don't override' signal and still wins over the config key, not falling through to it"
 else
-  fail "#47 round 2 REGRESSION -- an explicit empty ORC_WORKTREE_REPO_ROOT should win outright (stay empty), not fall through to the config key, got '$EMPTY_ENV_RESULT'"
+  fail "round 2 REGRESSION -- an explicit empty ORC_WORKTREE_REPO_ROOT should win outright (stay empty), not fall through to the config key, got '$EMPTY_ENV_RESULT'"
 fi
 rm -f "$FAKE_PROJECT/orchestrator.yaml"
 
@@ -142,7 +142,7 @@ TEARDOWN_CALLS="$TMP/teardown-calls.log"
 : > "$TEARDOWN_CALLS"
 mw_teardown_branch() { echo "$*" >> "$TEARDOWN_CALLS"; }
 
-# mw_notify_pick (issue #105 Task 5) mocked the same way -- it has its own
+# mw_notify_pick mocked the same way -- it has its own
 # dedicated coverage further down, and without this mock every merge-watch
 # case below would call the REAL dispatch_main and write into the real
 # orchestra inbox / nudge a real pane.
@@ -174,7 +174,7 @@ else
   pass "PR #102 correctly not closed"
 fi
 
-echo "== merge_watch_check: T31 (#68 item B) closes EACH linked issue in a multi-Closes PR body =="
+echo "== merge_watch_check: closes EACH linked issue in a multi-Closes PR body =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 mw_fetch_merged_prs() {
@@ -185,12 +185,12 @@ mw_fetch_merged_prs() {
 }
 merge_watch_check
 if grep -q 'issue close 55' "$GH_CALLS" && grep -q 'issue close 56' "$GH_CALLS"; then
-  pass "merge_watch_check closed BOTH #55 and #56 from a two-Closes PR body (dry-run of the real PR #66 case)"
+  pass "merge_watch_check closed BOTH #55 and #56 from a two-Closes PR body (dry-run of a real multi-Closes-ref PR)"
 else
   fail "merge_watch_check should have closed both #55 and #56: $(cat "$GH_CALLS")"
 fi
 
-echo "== merge_watch_check: T30 (#56) falls back to branch name when title+body have no Closes/Fixes/Resolves =="
+echo "== merge_watch_check: falls back to branch name when title+body have no Closes/Fixes/Resolves =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 mw_fetch_merged_prs() {
@@ -227,7 +227,7 @@ else
 fi
 gh() { echo "$*" >> "$GH_CALLS"; }
 
-echo "== merge_watch_check: T5 (#85) tears down the worktree/branch for the PR's own head branch =="
+echo "== merge_watch_check: tears down the worktree/branch for the PR's own head branch =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 : > "$TEARDOWN_CALLS"
@@ -246,7 +246,7 @@ else
   fail "expected a 'removed worktree + merged branch' event: $(cat "$WATCH_EVENTS_LOG" 2>/dev/null)"
 fi
 
-echo "== merge_watch_check: T5 (#85) skipped teardown is logged with its reason, non-fatal =="
+echo "== merge_watch_check: skipped teardown is logged with its reason, non-fatal =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 : > "$TEARDOWN_CALLS"
@@ -268,7 +268,7 @@ else
 fi
 mw_teardown_branch() { echo "$*" >> "$TEARDOWN_CALLS"; }
 
-echo "== merge_watch_check: T5 (#85) no teardown call when the head branch has no feature/issue-N shape =="
+echo "== merge_watch_check: no teardown call when the head branch has no feature/issue-N shape =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 : > "$TEARDOWN_CALLS"
@@ -282,7 +282,7 @@ else
   pass "no teardown call for a head branch that isn't feature/issue-N"
 fi
 
-echo "== merge_watch_check: issue #105 Task 5 -- dispatches a PICK-next nudge to orchestra after each processed PR =="
+echo "== merge_watch_check: dispatches a PICK-next nudge to orchestra after each processed PR =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 : > "$TEARDOWN_CALLS"
@@ -303,9 +303,9 @@ if grep -q 'dispatch_main assign orchestra "\$pr"' "$LIB/watch.sh"; then
 else
   fail "mw_notify_pick should call dispatch_main assign orchestra, not a raw pane write"
 fi
-echo "== #49: the ghost 'PHASE-3-PLAN' wording (no such plan ever existed) is gone from the actual dispatched message =="
+echo "== the ghost 'PHASE-3-PLAN' wording (no such plan ever existed) is gone from the actual dispatched message =="
 if grep -q 'PICK next per PHASE-3-PLAN"' "$LIB/watch.sh"; then
-  fail "#49 REGRESSION -- 'PICK next per PHASE-3-PLAN' (career-ops-harness ghost vocabulary) still present as the live dispatch text in watch.sh"
+  fail "REGRESSION -- 'PICK next per PHASE-3-PLAN' (career-ops-harness ghost vocabulary) still present as the live dispatch text in watch.sh"
 else
   pass "'PICK next per PHASE-3-PLAN' no longer appears as the live dispatch text in watch.sh"
 fi
@@ -330,18 +330,18 @@ rw_fetch_pr_comments() {
 }
 review_watch_check
 if grep -q 'pr ready 201' "$RW_GH_CALLS"; then
-  pass "issue #96: review_watch_check flipped PR #201 to ready via gh pr ready"
+  pass "review_watch_check flipped PR #201 to ready via gh pr ready"
 else
   fail "expected 'gh pr ready 201', got: $(cat "$RW_GH_CALLS")"
 fi
 if grep -q 'builder 70' "$RW_NOTIFY_CALLS" && grep -q 'orchestra 70' "$RW_NOTIFY_CALLS"; then
-  pass "issue #96: review_watch_check notified BOTH builder and orchestra on APPROVE"
+  pass "review_watch_check notified BOTH builder and orchestra on APPROVE"
 else
   fail "expected notifications to both builder and orchestra: $(cat "$RW_NOTIFY_CALLS")"
 fi
 NOTIFY_COUNT="$(wc -l < "$RW_NOTIFY_CALLS" | tr -d ' ')"
 if [ "$NOTIFY_COUNT" -eq 2 ]; then
-  pass "issue #96: exactly 2 notify calls on APPROVE (builder + orchestra), not more"
+  pass "exactly 2 notify calls on APPROVE (builder + orchestra), not more"
 else
   fail "expected exactly 2 notify calls, got $NOTIFY_COUNT: $(cat "$RW_NOTIFY_CALLS")"
 fi
@@ -357,19 +357,19 @@ rw_fetch_pr_comments() {
 }
 review_watch_check
 if grep -q 'pr ready 202' "$RW_GH_CALLS"; then
-  fail "CORRECTNESS REGRESSION (issue #96): REQUEST-CHANGES should NOT flip the PR to ready: $(cat "$RW_GH_CALLS")"
+  fail "CORRECTNESS REGRESSION: REQUEST-CHANGES should NOT flip the PR to ready: $(cat "$RW_GH_CALLS")"
 else
-  pass "issue #96: REQUEST-CHANGES does not flip the PR to ready"
+  pass "REQUEST-CHANGES does not flip the PR to ready"
 fi
 if grep -q 'builder 71' "$RW_NOTIFY_CALLS"; then
-  pass "issue #96: REQUEST-CHANGES notifies builder"
+  pass "REQUEST-CHANGES notifies builder"
 else
   fail "expected a builder notification: $(cat "$RW_NOTIFY_CALLS")"
 fi
 if grep -q 'orchestra' "$RW_NOTIFY_CALLS"; then
-  fail "CORRECTNESS REGRESSION (issue #96): REQUEST-CHANGES should not notify orchestra: $(cat "$RW_NOTIFY_CALLS")"
+  fail "CORRECTNESS REGRESSION: REQUEST-CHANGES should not notify orchestra: $(cat "$RW_NOTIFY_CALLS")"
 else
-  pass "issue #96: REQUEST-CHANGES does not notify orchestra"
+  pass "REQUEST-CHANGES does not notify orchestra"
 fi
 
 echo "== review_watch_check: re-tick with the SAME already-delivered verdict does not re-deliver (idempotent) =="
@@ -385,9 +385,9 @@ rw_fetch_pr_comments() {
 }
 review_watch_check
 if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
-  fail "CORRECTNESS REGRESSION (issue #96): re-tick with the same already-delivered verdict should not re-deliver: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
+  fail "CORRECTNESS REGRESSION: re-tick with the same already-delivered verdict should not re-deliver: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
 else
-  pass "issue #96: re-tick with the same verdict already delivered is a no-op"
+  pass "re-tick with the same verdict already delivered is a no-op"
 fi
 
 echo "== review_watch_check: a PR that moves from REQUEST-CHANGES to a LATER APPROVE delivers the new APPROVE (latest verdict wins, not first) =="
@@ -403,12 +403,12 @@ rw_fetch_pr_comments() {
 }
 review_watch_check
 if grep -q 'pr ready 202' "$RW_GH_CALLS"; then
-  pass "issue #96: the later APPROVE is delivered even though PR #202 already had REQUEST-CHANGES delivered earlier (latest verdict wins)"
+  pass "the later APPROVE is delivered even though PR #202 already had REQUEST-CHANGES delivered earlier (latest verdict wins)"
 else
-  fail "CORRECTNESS REGRESSION (issue #96): expected the new APPROVE to be delivered: $(cat "$RW_GH_CALLS")"
+  fail "CORRECTNESS REGRESSION: expected the new APPROVE to be delivered: $(cat "$RW_GH_CALLS")"
 fi
 if grep -q 'orchestra 71' "$RW_NOTIFY_CALLS"; then
-  pass "issue #96: the new APPROVE notifies orchestra too (the REQUEST-CHANGES round never did)"
+  pass "the new APPROVE notifies orchestra too (the REQUEST-CHANGES round never did)"
 else
   fail "expected an orchestra notification for the new APPROVE: $(cat "$RW_NOTIFY_CALLS")"
 fi
@@ -424,9 +424,9 @@ rw_fetch_pr_comments() {
 }
 review_watch_check
 if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
-  fail "CORRECTNESS REGRESSION (issue #96): an unanchored/malformed verdict-ish comment should never be delivered: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
+  fail "CORRECTNESS REGRESSION: an unanchored/malformed verdict-ish comment should never be delivered: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
 else
-  pass "issue #96: malformed/unanchored verdict-ish comments are skipped, never guessed at"
+  pass "malformed/unanchored verdict-ish comments are skipped, never guessed at"
 fi
 
 echo "== review_watch_check: a PR no longer open+draft (already ready, or already merged) is a structural no-op =="
@@ -441,9 +441,9 @@ rw_fetch_open_draft_prs() {
 }
 review_watch_check
 if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
-  fail "CORRECTNESS REGRESSION (issue #96): a PR no longer open+draft should produce zero calls: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
+  fail "CORRECTNESS REGRESSION: a PR no longer open+draft should produce zero calls: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
 else
-  pass "issue #96: a PR no longer open+draft (already ready/merged) is a structural no-op"
+  pass "a PR no longer open+draft (already ready/merged) is a structural no-op"
 fi
 
 echo "== review_watch_check: a draft PR with no resolvable issue (no Closes/Fixes/Resolves, no feature/issue-N branch) is skipped, not guessed at =="
@@ -459,7 +459,7 @@ review_watch_check
 if [ -s "$RW_GH_CALLS" ] || [ -s "$RW_NOTIFY_CALLS" ]; then
   fail "a draft PR with no resolvable issue should never be delivered: gh=$(cat "$RW_GH_CALLS") notify=$(cat "$RW_NOTIFY_CALLS")"
 else
-  pass "issue #96: a draft PR with no resolvable issue is skipped"
+  pass "a draft PR with no resolvable issue is skipped"
 fi
 
 echo "== review round 2 (agy finding 1): rw_latest_verdict against the REAL (unmocked) rw_fetch_pr_comments -- every test above mocked rw_fetch_pr_comments directly and never actually exercised the real jq newline-sentinel pipeline at all =="
@@ -502,9 +502,9 @@ RW_VERDICT_301="$(
   rw_latest_verdict 301
 )"
 if [ "$RW_VERDICT_301" = "APPROVE" ]; then
-  pass "issue #96 review round 2: a genuine multi-line APPROVE comment (verdict line + probe list on later lines) restores correctly through the real jq pipeline and start-anchors as APPROVE"
+  pass "review round 2: a genuine multi-line APPROVE comment (verdict line + probe list on later lines) restores correctly through the real jq pipeline and start-anchors as APPROVE"
 else
-  fail "CORRECTNESS REGRESSION (issue #96 review round 2): expected APPROVE from a multi-line verdict comment via the real jq pipeline, got '$RW_VERDICT_301'"
+  fail "CORRECTNESS REGRESSION (review round 2): expected APPROVE from a multi-line verdict comment via the real jq pipeline, got '$RW_VERDICT_301'"
 fi
 
 cat > "$TMP/rw-fixture-302.json" <<'EOF'
@@ -527,13 +527,13 @@ RW_VERDICT_302="$(
   rw_latest_verdict 302
 )"
 if [ "$RW_VERDICT_302" = "REQUEST-CHANGES" ]; then
-  pass "issue #96 review round 2: a comment whose LATER line contains 'APPROVE:' (quoted/prose) does NOT match -- the anchor applies to the true first line only, via the real jq pipeline"
+  pass "review round 2: a comment whose LATER line contains 'APPROVE:' (quoted/prose) does NOT match -- the anchor applies to the true first line only, via the real jq pipeline"
 else
-  fail "CORRECTNESS REGRESSION (issue #96 review round 2): a later-line 'APPROVE:' mention should never override the comment's true first-line verdict, got '$RW_VERDICT_302' (expected REQUEST-CHANGES)"
+  fail "CORRECTNESS REGRESSION (review round 2): a later-line 'APPROVE:' mention should never override the comment's true first-line verdict, got '$RW_VERDICT_302' (expected REQUEST-CHANGES)"
 fi
 rm -f "$TMP/rw-fixture-301.json" "$TMP/rw-fixture-302.json"
 
-echo "== issue #125: broker_check -- state-gated wake, ack verification, archive, retention, escalation (isolated) =="
+echo "== broker_check -- state-gated wake, ack verification, archive, retention, escalation (isolated) =="
 tmux new-session -d -s "$TEST_SESSION" -n main
 tmux split-window -h -t "$TEST_SESSION:0"
 # Pane 1 starts busy (simulated heuristic-busy, no hook state).
@@ -557,12 +557,12 @@ echo "payload" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-1.msg"
 
 broker_check
 if [ ! -s "$SUBMIT_CALLS" ]; then
-  pass "issue #125: heuristically-busy pane -> broker holds, no wake typed"
+  pass "heuristically-busy pane -> broker holds, no wake typed"
 else
   fail "broker should not wake a busy pane: $(cat "$SUBMIT_CALLS")"
 fi
 if grep -q "watchtest 20260101000000-1" "$BROKER_PENDING_LIST" 2>/dev/null; then
-  pass "issue #125: undelivered message is listed in the pending file"
+  pass "undelivered message is listed in the pending file"
 else
   fail "expected the pending list to name the undelivered msg: $(cat "$BROKER_PENDING_LIST" 2>/dev/null)"
 fi
@@ -572,13 +572,13 @@ tmux send-keys -t "$TEST_SESSION:0.1" C-c
 sleep 1
 broker_check
 if [ "$(grep -c 'check inbox' "$SUBMIT_CALLS")" = "1" ]; then
-  pass "issue #125: idle pane -> exactly one verified wake"
+  pass "idle pane -> exactly one verified wake"
 else
   fail "expected exactly one wake, got: $(cat "$SUBMIT_CALLS")"
 fi
 broker_check
 if [ "$(grep -c 'check inbox' "$SUBMIT_CALLS")" = "1" ]; then
-  pass "issue #125: within ack_deadline_s no second wake fires (in-flight wake owns the window)"
+  pass "within ack_deadline_s no second wake fires (in-flight wake owns the window)"
 else
   fail "a second wake fired inside the ack deadline: $(cat "$SUBMIT_CALLS")"
 fi
@@ -589,7 +589,7 @@ broker_check
 if [ ! -e "$BROKER_INBOX_ROOT/watchtest/20260101000000-1.msg" ] \
   && [ -e "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.msg" ] \
   && [ -e "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.ack" ]; then
-  pass "issue #125: acked pair archived out of the live inbox"
+  pass "acked pair archived out of the live inbox"
 else
   fail "expected msg+ack archived: live=$(ls "$BROKER_INBOX_ROOT/watchtest" 2>/dev/null) archive=$(ls "$BROKER_INBOX_ROOT/watchtest/archive" 2>/dev/null)"
 fi
@@ -599,32 +599,32 @@ touch -t 202001010000 "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.msg
 touch -t 202001010000 "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.ack"
 broker_check
 if [ ! -e "$BROKER_INBOX_ROOT/watchtest/archive/20260101000000-1.msg" ]; then
-  pass "issue #125: archive pruned past archive_retention_days"
+  pass "archive pruned past archive_retention_days"
 else
   fail "expected the ancient archived pair to be pruned"
 fi
 
-# issue #127: wake dedupe -- multiple pending messages, ONE shared wake,
+# wake dedupe -- multiple pending messages, ONE shared wake,
 # every message's attempt file stamped.
 : > "$SUBMIT_CALLS"
 echo "m3" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-3.msg"
 echo "m4" > "$BROKER_INBOX_ROOT/watchtest/20260101000000-4.msg"
 broker_check
 if [ "$(grep -c 'check inbox' "$SUBMIT_CALLS")" = "1" ]; then
-  pass "issue #127: two pending msgs -> exactly ONE typed wake (per agent, not per message)"
+  pass "two pending msgs -> exactly ONE typed wake (per agent, not per message)"
 else
-  fail "issue #127: expected one shared wake for two msgs, got: $(cat "$SUBMIT_CALLS")"
+  fail "expected one shared wake for two msgs, got: $(cat "$SUBMIT_CALLS")"
 fi
 if [ -f "$BROKER_STATE_DIR/watchtest__20260101000000-3" ] && [ -f "$BROKER_STATE_DIR/watchtest__20260101000000-4" ]; then
-  pass "issue #127: the shared wake is stamped against BOTH messages' attempt files"
+  pass "the shared wake is stamped against BOTH messages' attempt files"
 else
-  fail "issue #127: both attempt files should exist, got: $(ls "$BROKER_STATE_DIR" 2>/dev/null)"
+  fail "both attempt files should exist, got: $(ls "$BROKER_STATE_DIR" 2>/dev/null)"
 fi
 rm -f "$BROKER_INBOX_ROOT/watchtest/20260101000000-3.msg" "$BROKER_INBOX_ROOT/watchtest/20260101000000-4.msg"
 rm -f "$BROKER_STATE_DIR"/watchtest__20260101000000-3 "$BROKER_STATE_DIR"/watchtest__20260101000000-4
 
 # Escalation: attempts exhausted + deadline passed -> durable FLAG --
-# deduped to ONE per agent per pass even with several stuck msgs (#127).
+# deduped to ONE per agent per pass even with several stuck msgs.
 FLAG_CALLS="$TMP/broker-flag-calls.log"
 : > "$FLAG_CALLS"
 dispatch_main() { echo "$*" >> "$FLAG_CALLS"; }
@@ -634,14 +634,14 @@ echo "2 1" > "$BROKER_STATE_DIR/watchtest__20260101000000-2"
 echo "2 1" > "$BROKER_STATE_DIR/watchtest__20260101000000-5"
 broker_check
 if [ "$(grep -c "FLAG: undelivered inbox message for 'watchtest'" "$FLAG_CALLS")" = "1" ]; then
-  pass "issue #125/#127: exhausted wakes escalate as ONE durable FLAG per agent per pass"
+  pass "exhausted wakes escalate as ONE durable FLAG per agent per pass"
 else
   fail "expected exactly one escalation FLAG, got: $(cat "$FLAG_CALLS")"
 fi
 read -r ESC_ATTEMPTS _ < "$BROKER_STATE_DIR/watchtest__20260101000000-2"
 read -r ESC_ATTEMPTS5 _ < "$BROKER_STATE_DIR/watchtest__20260101000000-5"
 if [ "$ESC_ATTEMPTS" = "99" ] && [ "$ESC_ATTEMPTS5" = "99" ]; then
-  pass "issue #125/#127: BOTH stuck messages are marked escalated (attempts=99) so neither re-fires"
+  pass "BOTH stuck messages are marked escalated (attempts=99) so neither re-fires"
 else
   fail "expected attempts=99 on both after escalation, got: $ESC_ATTEMPTS / $ESC_ATTEMPTS5"
 fi
@@ -653,7 +653,7 @@ tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== issue #134: broker_states_summary appends a busy-age suffix for busy panes, so a glance at the header catches a long-running one =="
+echo "== broker_states_summary appends a busy-age suffix for busy panes, so a glance at the header catches a long-running one =="
 PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
 PANE_STATE_DIR="$TMP/pane-state-busyage"
 mkdir -p "$PANE_STATE_DIR"
@@ -674,19 +674,19 @@ printf 'busy %s sess-b rebuilt\n' "$OLD_BUSY_EPOCH" > "$PANE_STATE_DIR/${BA_PANE
 pane_state_write "$BA_PANE1_ID" idle "sid-c"
 SUMMARY="$(broker_states_summary)"
 if echo "$SUMMARY" | grep -q "baorchestra:busy(rebuilt) 8m"; then
-  pass "issue #134: a long-busy pane shows minutes-busy alongside its classification"
+  pass "a long-busy pane shows minutes-busy alongside its classification"
 else
-  fail "issue #134: expected 'baorchestra:busy(rebuilt) 8m' in the summary, got: $SUMMARY"
+  fail "expected 'baorchestra:busy(rebuilt) 8m' in the summary, got: $SUMMARY"
 fi
 if echo "$SUMMARY" | grep -qE "babuilder:idle( |\$)" ; then
-  pass "issue #134: an idle pane shows no busy-age suffix"
+  pass "an idle pane shows no busy-age suffix"
 else
-  fail "issue #134: expected 'babuilder:idle' with no age suffix, got: $SUMMARY"
+  fail "expected 'babuilder:idle' with no age suffix, got: $SUMMARY"
 fi
 PANE_STATE_DIR="$PANE_STATE_DIR_SAVED"
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== issue #6: broker_states_summary appends a (classification) suffix when one is on file =="
+echo "== broker_states_summary appends a (classification) suffix when one is on file =="
 PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
 PANE_STATE_DIR="$TMP/pane-state-lifecycle"
 mkdir -p "$PANE_STATE_DIR"
@@ -706,14 +706,14 @@ pane_state_write "$LC_PANE0_ID" idle "sid-x" "resumed"
 pane_state_write "$LC_PANE1_ID" busy "sid-y"
 SUMMARY="$(broker_states_summary)"
 if echo "$SUMMARY" | grep -q "lcorchestra:idle(resumed)"; then
-  pass "issue #6: a pane with a recorded classification shows it in the summary"
+  pass "a pane with a recorded classification shows it in the summary"
 else
-  fail "issue #6: expected 'lcorchestra:idle(resumed)' in the summary, got: $SUMMARY"
+  fail "expected 'lcorchestra:idle(resumed)' in the summary, got: $SUMMARY"
 fi
 if echo "$SUMMARY" | grep -q "lcbuilder:busy \|lcbuilder:busy\$"; then
-  pass "issue #6: a pane with no classification on file renders exactly as before (no suffix)"
+  pass "a pane with no classification on file renders exactly as before (no suffix)"
 else
-  fail "issue #6: expected 'lcbuilder:busy' with no suffix, got: $SUMMARY"
+  fail "expected 'lcbuilder:busy' with no suffix, got: $SUMMARY"
 fi
 PANE_STATE_DIR="$PANE_STATE_DIR_SAVED"
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
@@ -795,7 +795,7 @@ else
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== issue #134: pane_stuck_check -- idle pane and under-threshold busy pane never flag =="
+echo "== pane_stuck_check -- idle pane and under-threshold busy pane never flag =="
 SC_PANE_STATE_DIR_SAVED="$PANE_STATE_DIR"
 PANE_STATE_DIR="$TMP/pane-state-stuck"
 mkdir -p "$PANE_STATE_DIR"
@@ -818,12 +818,12 @@ dispatch_main() { echo "$*" >> "$STUCK_CALLS"; }
 pane_state_write "$SC_PANE_ID" idle "sid-idle"
 pane_stuck_check
 if [ ! -s "$STUCK_CALLS" ]; then
-  pass "issue #134: an idle pane never triggers a stuck check"
+  pass "an idle pane never triggers a stuck check"
 else
-  fail "issue #134: idle pane should not dispatch anything: $(cat "$STUCK_CALLS")"
+  fail "idle pane should not dispatch anything: $(cat "$STUCK_CALLS")"
 fi
 
-echo "== agy PR #136 round 1: an idle pane with NOTHING tracked must not rewrite STUCK_STATE_FILE on every tick (SSD wear / mtime thrash in a tight polling loop) =="
+echo "== agy round 1: an idle pane with NOTHING tracked must not rewrite STUCK_STATE_FILE on every tick (SSD wear / mtime thrash in a tight polling loop) =="
 WSC_WRITE_CALLS="$TMP/wsc-write-calls.log"
 : > "$WSC_WRITE_CALLS"
 # Spy on wsc_write while preserving its real behavior: rename the real
@@ -838,21 +838,21 @@ pane_stuck_check
 eval "$(declare -f _orig_wsc_write_134 | sed '1s/_orig_wsc_write_134/wsc_write/')"
 unset -f _orig_wsc_write_134
 if [ ! -s "$WSC_WRITE_CALLS" ]; then
-  pass "issue #134: an untracked idle pane never triggers a state-file write, no matter how many ticks pass"
+  pass "an untracked idle pane never triggers a state-file write, no matter how many ticks pass"
 else
-  fail "issue #134: PERFORMANCE: idle pane with nothing tracked should never call wsc_write, got $(wc -l < "$WSC_WRITE_CALLS" | tr -d ' ') calls"
+  fail "PERFORMANCE: idle pane with nothing tracked should never call wsc_write, got $(wc -l < "$WSC_WRITE_CALLS" | tr -d ' ') calls"
 fi
 
 printf 'busy %s sid-fresh -\n' "$(date '+%s')" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
 pane_stuck_check
 if [ ! -s "$STUCK_CALLS" ]; then
-  pass "issue #134: a freshly-busy pane (age well under threshold) never triggers a stuck check"
+  pass "a freshly-busy pane (age well under threshold) never triggers a stuck check"
 else
-  fail "issue #134: under-threshold busy pane should not dispatch anything: $(cat "$STUCK_CALLS")"
+  fail "under-threshold busy pane should not dispatch anything: $(cat "$STUCK_CALLS")"
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== issue #134: pane_stuck_check -- needs TWO consecutive over-threshold observations before flagging (not enough data on the first) =="
+echo "== pane_stuck_check -- needs TWO consecutive over-threshold observations before flagging (not enough data on the first) =="
 STUCK_THRESHOLD_S=1
 rm -f "$STUCK_STATE_FILE"
 : > "$STUCK_CALLS"
@@ -862,40 +862,40 @@ OLD_EPOCH=$(( $(date '+%s') - 90 ))
 printf 'busy %s sid-stuck -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
 pane_stuck_check
 if [ ! -s "$STUCK_CALLS" ]; then
-  pass "issue #134: the FIRST over-threshold observation records a baseline but does not flag yet"
+  pass "the FIRST over-threshold observation records a baseline but does not flag yet"
 else
-  fail "issue #134: first over-threshold observation should not flag: $(cat "$STUCK_CALLS")"
+  fail "first over-threshold observation should not flag: $(cat "$STUCK_CALLS")"
 fi
 
-echo "== issue #134: SECOND observation, screen UNCHANGED -> flags as looping/stuck, exactly once =="
+echo "== SECOND observation, screen UNCHANGED -> flags as looping/stuck, exactly once =="
 pane_stuck_check
 CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
 if [ "$CALL_COUNT" -eq 1 ]; then
-  pass "issue #134: second over-threshold observation with an unchanged screen dispatches exactly one FLAG"
+  pass "second over-threshold observation with an unchanged screen dispatches exactly one FLAG"
 else
-  fail "issue #134: expected exactly 1 dispatch call, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+  fail "expected exactly 1 dispatch call, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
 fi
 if grep -q "STUCK?" "$STUCK_CALLS" && grep -qi "loop" "$STUCK_CALLS"; then
-  pass "issue #134: flag message identifies the pane as looping/stuck"
+  pass "flag message identifies the pane as looping/stuck"
 else
-  fail "issue #134: expected a STUCK?/looping message, got: $(cat "$STUCK_CALLS")"
+  fail "expected a STUCK?/looping message, got: $(cat "$STUCK_CALLS")"
 fi
 if grep -q "^assign orchestra" "$STUCK_CALLS"; then
-  pass "issue #134: a non-orchestra agent's stuck flag uses 'assign' (nudges orchestra)"
+  pass "a non-orchestra agent's stuck flag uses 'assign' (nudges orchestra)"
 else
-  fail "issue #134: expected an 'assign orchestra' dispatch, got: $(cat "$STUCK_CALLS")"
+  fail "expected an 'assign orchestra' dispatch, got: $(cat "$STUCK_CALLS")"
 fi
 
-echo "== issue #134: THIRD observation, still busy+unchanged -> already flagged, no re-dispatch (dedup) =="
+echo "== THIRD observation, still busy+unchanged -> already flagged, no re-dispatch (dedup) =="
 pane_stuck_check
 CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
 if [ "$CALL_COUNT" -eq 1 ]; then
-  pass "issue #134: an already-flagged episode never re-dispatches on later checks"
+  pass "an already-flagged episode never re-dispatches on later checks"
 else
-  fail "issue #134: expected still exactly 1 dispatch call (dedup), got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+  fail "expected still exactly 1 dispatch call (dedup), got $CALL_COUNT: $(cat "$STUCK_CALLS")"
 fi
 
-echo "== issue #134: state flips to idle -> tracking clears; a NEW busy episode over threshold can flag again =="
+echo "== state flips to idle -> tracking clears; a NEW busy episode over threshold can flag again =="
 pane_state_write "$SC_PANE_ID" idle "sid-recovered"
 pane_stuck_check
 OLD_EPOCH=$(( $(date '+%s') - 90 ))
@@ -904,13 +904,13 @@ pane_stuck_check
 pane_stuck_check
 CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
 if [ "$CALL_COUNT" -eq 2 ]; then
-  pass "issue #134: a new busy episode after an idle transition can flag again (episode boundary respected)"
+  pass "a new busy episode after an idle transition can flag again (episode boundary respected)"
 else
-  fail "issue #134: expected 2 total dispatch calls across two episodes, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+  fail "expected 2 total dispatch calls across two episodes, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== issue #134: SECOND observation, screen CHANGED -> classified long-running, not looping =="
+echo "== SECOND observation, screen CHANGED -> classified long-running, not looping =="
 rm -f "$STUCK_STATE_FILE"
 : > "$STUCK_CALLS"
 tmux new-session -d -s "$TEST_SESSION" -n main
@@ -922,13 +922,13 @@ tmux send-keys -t "$TEST_SESSION:0.0" "echo something-new-on-screen-$$" Enter
 sleep 0.3
 pane_stuck_check
 if grep -q "STUCK?" "$STUCK_CALLS" && grep -qi "long-running" "$STUCK_CALLS" && ! grep -qi "loop" "$STUCK_CALLS"; then
-  pass "issue #134: a changed screen between checks classifies as long-running, not looping"
+  pass "a changed screen between checks classifies as long-running, not looping"
 else
-  fail "issue #134: expected a long-running (not looping) message, got: $(cat "$STUCK_CALLS")"
+  fail "expected a long-running (not looping) message, got: $(cat "$STUCK_CALLS")"
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== issue #134: orchestra's own stuck episode uses 'message' (no nudge attempt) =="
+echo "== orchestra's own stuck episode uses 'message' (no nudge attempt) =="
 rm -f "$STUCK_STATE_FILE"
 : > "$STUCK_CALLS"
 tmux new-session -d -s "$TEST_SESSION" -n main
@@ -945,14 +945,14 @@ printf 'busy %s sid-orch -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
 pane_stuck_check
 pane_stuck_check
 if grep -q "^message orchestra" "$STUCK_CALLS"; then
-  pass "issue #134: orchestra's own stuck episode is recorded via 'message' (durable, no nudge)"
+  pass "orchestra's own stuck episode is recorded via 'message' (durable, no nudge)"
 else
-  fail "issue #134: orchestra self-stuck should use 'message': $(cat "$STUCK_CALLS")"
+  fail "orchestra self-stuck should use 'message': $(cat "$STUCK_CALLS")"
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 PANE_STATE_DIR="$SC_PANE_STATE_DIR_SAVED"
 
-echo "== T33 (issue #77): merge_watch_check logs PR events to EVENTS_LOG for the dashboard's PRs section =="
+echo "== merge_watch_check logs PR events to EVENTS_LOG for the dashboard's PRs section =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 : > "$WATCH_EVENTS_LOG"
@@ -971,7 +971,7 @@ else
   fail "expected a 'PR #302 merged, no linked issue found' event: $(cat "$WATCH_EVENTS_LOG" 2>/dev/null)"
 fi
 
-echo "== T33: pane-liveness FLAG/recovery events are logged to EVENTS_LOG =="
+echo "== pane-liveness FLAG/recovery events are logged to EVENTS_LOG =="
 tmux new-session -d -s "$TEST_SESSION" -n main
 tmux split-window -h -t "$TEST_SESSION:0"
 tmux send-keys -t "$TEST_SESSION:0.1" "sleep 20" Enter
@@ -1002,7 +1002,7 @@ else
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
-echo "== T33 (issue #120/#125): watch_render -- compact header with states + pending + liveness; nothing lost from the backing files =="
+echo "== watch_render -- compact header with states + pending + liveness; nothing lost from the backing files =="
 : > "$WATCH_EVENTS_LOG"
 echo "2026-07-05 00:00:00 - PR #999 merged -> closed issue #1" >> "$WATCH_EVENTS_LOG"
 mkdir -p "$BROKER_STATE_DIR"
@@ -1010,84 +1010,84 @@ echo "testagent 20260101000000-9 45s ?" > "$BROKER_PENDING_LIST"
 echo "deadagent" > "$FLAGGED_DEAD_FILE"
 OUT="$(WATCH_PANE_LINES=20 WATCH_EVENTS_SHOWN=999 watch_render)"
 if echo "$OUT" | grep -Eq '^Watch [0-9:]+  60s \| .* \| pending 1 \| 1 dead$'; then
-  pass "issue #125: 1-line header folds interval + agent states + pending count + liveness summary"
+  pass "1-line header folds interval + agent states + pending count + liveness summary"
 else
-  fail "issue #125: expected a 'Watch HH:MM:SS  60s | <states> | pending 1 | 1 dead' header, got: $OUT"
+  fail "expected a 'Watch HH:MM:SS  60s | <states> | pending 1 | 1 dead' header, got: $OUT"
 fi
 if echo "$OUT" | grep -q "PR #999" && echo "$OUT" | grep -q "PENDING: testagent" && echo "$OUT" | grep -q "DEAD: deadagent"; then
-  pass "issue #125: watch_render surfaces the backing files' current contents (nothing silently dropped)"
+  pass "watch_render surfaces the backing files' current contents (nothing silently dropped)"
 else
-  fail "issue #125: watch_render should surface PR #999 / PENDING: testagent / DEAD: deadagent, got: $OUT"
+  fail "watch_render should surface PR #999 / PENDING: testagent / DEAD: deadagent, got: $OUT"
 fi
 : > "$BROKER_PENDING_LIST"
 : > "$FLAGGED_DEAD_FILE"
 
-echo "== issue #120/#125: header collapses to 'pending 0 | all alive' and drops the PENDING:/DEAD: lines when both backing files are empty =="
+echo "== header collapses to 'pending 0 | all alive' and drops the PENDING:/DEAD: lines when both backing files are empty =="
 OUT="$(WATCH_PANE_LINES=20 WATCH_EVENTS_SHOWN=999 watch_render)"
 if echo "$OUT" | grep -Eq '\| pending 0 \| all alive$'; then
-  pass "issue #125: zero-case header reads 'pending 0 | all alive'"
+  pass "zero-case header reads 'pending 0 | all alive'"
 else
-  fail "issue #125: expected 'pending 0 | all alive' in the header, got: $OUT"
+  fail "expected 'pending 0 | all alive' in the header, got: $OUT"
 fi
 if echo "$OUT" | grep -q "PENDING:" || echo "$OUT" | grep -q "DEAD:"; then
-  fail "issue #125: PENDING:/DEAD: lines should not appear when both backing files are empty, got: $OUT"
+  fail "PENDING:/DEAD: lines should not appear when both backing files are empty, got: $OUT"
 else
-  pass "issue #125: no PENDING:/DEAD: lines printed when both backing files are empty"
+  pass "no PENDING:/DEAD: lines printed when both backing files are empty"
 fi
 
-echo "== issue #120/#124: EVENTS tail is ADAPTIVE, off-by-one fixed, truncation explicit =="
+echo "== EVENTS tail is ADAPTIVE, off-by-one fixed, truncation explicit =="
 : > "$WATCH_EVENTS_LOG"
 for i in $(seq 1 20); do echo "2026-07-05 00:00:00 - event $i" >> "$WATCH_EVENTS_LOG"; done
 OUT="$(WATCH_PANE_LINES=10 WATCH_EVENTS_SHOWN=999 watch_render)"
 OUT_LINES="$(echo "$OUT" | wc -l | tr -d ' ')"
 if [ "$OUT_LINES" = "9" ]; then
-  pass "issue #124: rendered output leaves the cursor row free (9 output lines for a 10-row pane, header never scrolls off)"
+  pass "rendered output leaves the cursor row free (9 output lines for a 10-row pane, header never scrolls off)"
 else
-  fail "issue #124: expected exactly 9 rendered lines for WATCH_PANE_LINES=10, got $OUT_LINES: $OUT"
+  fail "expected exactly 9 rendered lines for WATCH_PANE_LINES=10, got $OUT_LINES: $OUT"
 fi
 if echo "$OUT" | grep -qF "(last 6 of 20)"; then
-  pass "issue #120: truncated EVENTS tail states '(last N of TOTAL)' explicitly"
+  pass "truncated EVENTS tail states '(last N of TOTAL)' explicitly"
 else
-  fail "issue #120: expected an explicit '(last 6 of 20)' truncation note, got: $OUT"
+  fail "expected an explicit '(last 6 of 20)' truncation note, got: $OUT"
 fi
 SHOWN_EVENTS="$(echo "$OUT" | grep -c '^  2026-07-05')"
 if [ "$SHOWN_EVENTS" = "6" ]; then
-  pass "issue #120: exactly 6 event lines shown (budget minus the truncation note itself)"
+  pass "exactly 6 event lines shown (budget minus the truncation note itself)"
 else
-  fail "issue #120: expected exactly 6 event lines shown, got $SHOWN_EVENTS: $OUT"
+  fail "expected exactly 6 event lines shown, got $SHOWN_EVENTS: $OUT"
 fi
 
-echo "== issue #124: dynamic PENDING/DEAD lines are DEDUCTED from the events budget (the live header-scroll incident) =="
+echo "== dynamic PENDING/DEAD lines are DEDUCTED from the events budget (the live header-scroll incident) =="
 echo "a 1 1s ?" > "$BROKER_PENDING_LIST"
 echo "b 2 2s ?" >> "$BROKER_PENDING_LIST"
 OUT="$(WATCH_PANE_LINES=10 WATCH_EVENTS_SHOWN=999 watch_render)"
 OUT_LINES="$(echo "$OUT" | wc -l | tr -d ' ')"
 if [ "$OUT_LINES" = "9" ]; then
-  pass "issue #124: with 2 PENDING lines the frame still fits the pane (events shrank to make room)"
+  pass "with 2 PENDING lines the frame still fits the pane (events shrank to make room)"
 else
-  fail "issue #124: expected 9 output lines with 2 PENDING lines present, got $OUT_LINES: $OUT"
+  fail "expected 9 output lines with 2 PENDING lines present, got $OUT_LINES: $OUT"
 fi
 if echo "$OUT" | grep -qF "(last 4 of 20)"; then
-  pass "issue #124: events tail shrank by exactly the dynamic-line count"
+  pass "events tail shrank by exactly the dynamic-line count"
 else
-  fail "issue #124: expected '(last 4 of 20)' with 2 dynamic lines, got: $OUT"
+  fail "expected '(last 4 of 20)' with 2 dynamic lines, got: $OUT"
 fi
 : > "$BROKER_PENDING_LIST"
 
-echo "== issue #120: a bigger WATCH_PANE_LINES shows every event with no truncation note once everything fits =="
+echo "== a bigger WATCH_PANE_LINES shows every event with no truncation note once everything fits =="
 OUT="$(WATCH_PANE_LINES=30 WATCH_EVENTS_SHOWN=999 watch_render)"
 if echo "$OUT" | grep -q "event 1$" && echo "$OUT" | grep -q "event 20$" && ! echo "$OUT" | grep -q "(last"; then
-  pass "issue #120: all 20 events shown with room to spare, no truncation note"
+  pass "all 20 events shown with room to spare, no truncation note"
 else
-  fail "issue #120: expected all 20 events with no truncation note when the pane has room, got: $OUT"
+  fail "expected all 20 events with no truncation note when the pane has room, got: $OUT"
 fi
 
-echo "== issue #125: events_shown caps the display even when the pane has room (Ahmad's 3-5 ask; orchestrator.yaml watch.events_shown) =="
+echo "== events_shown caps the display even when the pane has room (Ahmad's 3-5 ask; orchestrator.yaml watch.events_shown) =="
 OUT="$(WATCH_PANE_LINES=30 WATCH_EVENTS_SHOWN=4 watch_render)"
 if echo "$OUT" | grep -qF "(last 3 of 20)"; then
-  pass "issue #125: WATCH_EVENTS_SHOWN=4 caps the tail to '(last 3 of 20)' despite a 30-row pane"
+  pass "WATCH_EVENTS_SHOWN=4 caps the tail to '(last 3 of 20)' despite a 30-row pane"
 else
-  fail "issue #125: expected '(last 3 of 20)' under an explicit events_shown cap, got: $OUT"
+  fail "expected '(last 3 of 20)' under an explicit events_shown cap, got: $OUT"
 fi
 : > "$WATCH_EVENTS_LOG"
 

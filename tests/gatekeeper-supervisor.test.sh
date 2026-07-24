@@ -1,6 +1,6 @@
 #!/bin/bash
-# .harness/gatekeeper-supervisor.test.sh — tests for the respawn wrapper
-# (issue #105 Task 3). Run: bash .harness/gatekeeper-supervisor.test.sh
+# .harness/gatekeeper-supervisor.test.sh — tests for the respawn wrapper.
+# Run: bash .harness/gatekeeper-supervisor.test.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"

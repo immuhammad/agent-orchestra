@@ -9,13 +9,13 @@
 # session). One source tree, installed twice, so a protocol-shaped skill
 # (code-review) never drifts between the two copies.
 #
-# Idempotent and convergent (issue #8): a real install run first PRUNES
+# Idempotent and convergent: a real install run first PRUNES
 # any target-side skill directory no longer present in this repo's
 # skills/ source tree, then installs/refreshes every current skill --
 # re-running always converges the target to exactly match skills/,
 # regardless of the target's starting state.
 #
-# --check mode (issue #8): verifies WITHOUT writing anything, following
+# --check mode: verifies WITHOUT writing anything, following
 # lib/check-hook-wiring.sh's pattern (derive the expected set from the
 # tracked source AT CHECK TIME, never a hardcoded list). Reports every
 # MISSING skill (in skills/, not installed) and every STALE skill

@@ -19,10 +19,10 @@ ARG="${1:?usage: log-decision.sh \"role|model|decision\"}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=./harness-root.sh
 source "$DIR/harness-root.sh"
-# issue #99: decisions.log is per-repo state, not per-checkout -- this exact
+# decisions.log is per-repo state, not per-checkout -- this exact
 # bug was already hit in practice (an entry got written worktree-local and had
-# to be re-logged by hand). Resolves off the CALLER's cwd (issue #116:
-# this script no longer lives inside the project it serves), lazily --
+# to be re-logged by hand). Resolves off the CALLER's cwd (this script
+# no longer lives inside the project it serves), lazily --
 # only if LOG_FILE or LOCK_DIR is left to its default -- so a caller
 # pinning both explicitly (tests) never needs orchestrator.yaml/
 # ORC_PROJECT_ROOT. `set -e` means a resolution failure (bad exit +
@@ -38,7 +38,7 @@ LOCK_DIR="${LOG_DECISION_LOCK_DIR:-$(_ld_canon_dir)/.decisions.lock}"
 
 IFS='|' read -r ROLE MODEL DECISION <<< "$ARG"
 
-# issue #116: the new deployment model doesn't guarantee .harness/ exists
+# The new deployment model doesn't guarantee .harness/ exists
 # yet on a project's first-ever decision log (previously always true,
 # since this script lived inside .harness/ itself). Without this,
 # `mkdir "$LOCK_DIR"` fails every time (no parent dir), silently forcing

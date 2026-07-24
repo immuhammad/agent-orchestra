@@ -1,16 +1,16 @@
 #!/bin/bash
-# hooks/pane-state.sh <busy|idle|failsafe> — issue #33 + #125: records this
+# hooks/pane-state.sh <busy|idle|failsafe> — records this
 # pane's state transition, keyed by $TMUX_PANE, so dispatch.sh/broker.sh/
 # auto-resume.sh read ground truth instead of guessing from a tmux
 # capture-pane screen-scrape. Wired via templates/settings.json:
 #   SessionStart              -> pane-state.sh idle  (a fresh session
 #                                claims the pane: its new session_id
-#                                breaks any stale ownership, #125)
+#                                breaks any stale ownership)
 #   UserPromptSubmit          -> pane-state.sh busy
 #   PreToolUse (matcher ".*") -> pane-state.sh busy
 #   Stop                      -> pane-state.sh idle
 #
-# issue #125: the "idle" transition self-corrects to "failsafe" while the
+# The "idle" transition self-corrects to "failsafe" while the
 # quota-stop flag is up -- a session that stops while the room is
 # quota-gated is PARKED, not idle, and every consumer (broker delivery
 # hold, auto-resume ownership, liveness display) needs that distinction.
@@ -18,7 +18,7 @@
 # ownership checks compare identities, not screen fingerprints.
 #
 # A session with no $TMUX_PANE isn't running inside a tracked tmux pane
-# (e.g. a headless scribe one-shot, issue #89) -- nothing to track, so this
+# (e.g. a headless scribe one-shot) -- nothing to track, so this
 # is a silent no-op, not an error. Same for a session outside any
 # orchestrator.yaml-rooted project: best-effort feature, never blocks the
 # hook pipeline.

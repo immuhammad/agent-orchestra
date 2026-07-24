@@ -6,20 +6,20 @@
 #
 #   1. merge-watch: poll gh for newly-merged PRs and comment+close the
 #      linked issue directly (mechanical `gh issue comment`+`gh issue
-#      close`, no agent dispatch -- issue #85: dispatching the scribe for
+#      close`, no agent dispatch -- dispatching the scribe for
 #      this never actually got the issue closed since the scribe session
 #      doesn't act on dispatched housekeeping), then tear down that PR's
-#      worktree + merged branch via `orc-worktree.sh teardown` (issue #85,
-#      Task 5), then dispatch a durable "PICK next" nudge to Orchestra
+#      worktree + merged branch via `orc-worktree.sh teardown`, then
+#      dispatch a durable "PICK next" nudge to Orchestra
 #      (closes the loop-continuity gap where nothing
 #      told Orchestra to move on after a merge). Guard rules unchanged
 #      elsewhere: this script never merges.
-#   2. broker (issue #125, lib/broker.sh): the delivery layer -- verifies
+#   2. broker (lib/broker.sh): the delivery layer -- verifies
 #      every dispatch by its .ack, wakes idle receivers (ground-truth
 #      hook state, never a screen guess), holds delivery for parked
 #      (failsafe) panes, escalates unresponsive ones, archives acked
 #      messages and prunes/rotates history. Replaces the old
-#      deferred-nudge retry queue (the #118 failure class).
+#      deferred-nudge retry queue.
 #   3. pane-liveness: detect an agent pane that has dropped back to a bare
 #      shell (its CLI process crashed/exited without anyone noticing)
 #      and FLAG orchestra via the inbox.
@@ -35,7 +35,7 @@ source "$DIR/dispatch.sh"
 source "$DIR/tui-lib.sh"
 
 WATCH_INTERVAL="${WATCH_INTERVAL:-60}"
-# issue #99: state files are per-repo, not per-checkout -- CANON_DIR (set by
+# state files are per-repo, not per-checkout -- CANON_DIR (set by
 # dispatch.sh's own harness-root.sh sourcing above) is the MAIN checkout's
 # .harness, so these land in the same canonical place regardless of
 # whether watch.sh happens to be running from inside a worktree.
@@ -52,15 +52,15 @@ EVENTS_LOG="${WATCH_EVENTS_LOG:-$CANON_DIR/events.log}"
 # on-demand headless spawn (dispatch.sh assign/handoff), not a standing
 # pane, so there's no persistent scribe pane left to flag as dead.
 LIVENESS_AGENTS="${WATCH_LIVENESS_AGENTS:-orchestra builder agy}"
-# issue #134: stuck/long-running detection for the same agent panes
+# stuck/long-running detection for the same agent panes
 # liveness already watches. Ground truth is each pane's OWN pane-state
 # file (busy-age = now minus that file's last recorded transition, see
 # lib/pane-state-lib.sh's pane_state_age) -- no separate polling loop,
 # just read at broker cadence alongside pane_liveness_check.
 STUCK_STATE_FILE="${WATCH_STUCK_STATE_FILE:-$CANON_DIR/stuck-check-state.json}"
-# 45 minutes, matching the ticket's own default (#134). Only ever change
-# together with a real consumer -- no decorative config knobs (#86
-# precedent) -- so this is env-overridable for tests, not a new
+# 45 minutes, matching the ticket's own default. Only ever change
+# together with a real consumer -- no decorative config knobs, per prior
+# precedent -- so this is env-overridable for tests, not a new
 # orchestrator.yaml key.
 STUCK_THRESHOLD_S="${WATCH_STUCK_THRESHOLD_S:-2700}"
 
@@ -71,7 +71,7 @@ we_log_event() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$EVENTS_LOG"
 }
 
-# issue #125: delivery layer. Sourced AFTER dispatch.sh (CANON_DIR,
+# Delivery layer. Sourced AFTER dispatch.sh (CANON_DIR,
 # pane_for_agent, pane_state_read, send_submit) and we_log_event above.
 # shellcheck source=./broker.sh
 source "$DIR/broker.sh"
@@ -82,9 +82,9 @@ source "$DIR/broker.sh"
 # <body-single-line><TAB><head-branch>" for recently-merged PRs, one per
 # line. Split out from merge_watch_check so tests can override this
 # function with canned output instead of hitting the real GitHub API.
-# limit defaults to 20 (merge_watch_check's own polling need); issue #18
-# item 5's seed helper passes a much larger limit to capture this
-# project's FULL merged-PR history on a fresh room, not just the last 20.
+# limit defaults to 20 (merge_watch_check's own polling need); the seed
+# helper passes a much larger limit to capture this project's FULL
+# merged-PR history on a fresh room, not just the last 20.
 mw_fetch_merged_prs() {
   local limit="${1:-20}"
   gh pr list --state merged --limit "$limit" --json number,title,body,headRefName \
@@ -92,9 +92,9 @@ mw_fetch_merged_prs() {
 }
 
 # mw_extract_issue <title+body text> -- prints the issue number from the
-# first "Closes/Fixes/Resolves #N" match, or nothing if none found. PRs
-# #49/#53 were silently skipped by merge-watch because
-# their bodies referenced the issue only in the TITLE ("Issue #34" / no
+# first "Closes/Fixes/Resolves #N" match, or nothing if none found. Some
+# PRs were silently skipped by merge-watch because
+# their bodies referenced the issue only in the TITLE ("Issue #N" / no
 # Closes verb at all) -- broadened to search title+body combined here
 # rather than body alone. Retained for anything that only wants the first
 # match; merge_watch_check itself uses mw_extract_all_issues below.
@@ -104,9 +104,9 @@ mw_extract_issue() {
 
 # mw_extract_all_issues <title+body text> -- prints EVERY distinct issue
 # number referenced by a "Closes/Fixes/Resolves #N", one per line, in the
-# order first seen. PR #66 had both "Closes #55"
-# and "Closes #56" -- merge-watch only ever closed the first match (#55),
-# leaving #56 for Ahmad to close by hand. No match at all still falls
+# order first seen. A PR that had two Closes references in its body
+# only got the first one closed by merge-watch, leaving the second for
+# Ahmad to close by hand. No match at all still falls
 # through to the branch-name fallback in merge_watch_check, same as before.
 mw_extract_all_issues() {
   echo "$1" | grep -Eio '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' | grep -Eo '[0-9]+' | awk '!seen[$0]++'
@@ -140,14 +140,14 @@ mw_close_issue() {
     && gh issue close "$issue" >/dev/null 2>&1
 }
 
-# mw_dev_target_root -- (#47) optional override for orc-worktree.sh's
+# mw_dev_target_root -- optional override for orc-worktree.sh's
 # REPO_ROOT resolution. watch.sh runs from wherever its OWN pane's cwd is
 # (the harness root, per orc.sh's pane launch -- no `cd` of its own), and
 # orc-worktree.sh defaults to inferring REPO_ROOT from ITS caller's $PWD.
 # For a normal (non-nested) consumer those are the same repo and nothing
 # needs to change; a self-dogfood room like this one nests the actual dev
 # target in a SEPARATE clone (e.g. project/agent-orchestra/), and inferring
-# from $PWD silently resolved to the wrong repo -- the root cause of #47's
+# from $PWD silently resolved to the wrong repo -- the root cause of the
 # false "removed worktree + merged branch" receipts. ORC_WORKTREE_REPO_ROOT
 # in the environment wins outright (matches orc-worktree.sh's own existing
 # override); otherwise reads an OPTIONAL orchestrator.yaml `dev_target_root`
@@ -158,7 +158,7 @@ mw_dev_target_root() {
   # explicitly-exported EMPTY ORC_WORKTREE_REPO_ROOT is a deliberate "don't
   # override" signal from whoever set it, distinct from never having set it
   # at all -- checked precisely so it still short-circuits the config-key
-  # fallback below, per agy's dedicated security pass on PR #65.
+  # fallback below, per agy's dedicated security pass.
   if [ -n "${ORC_WORKTREE_REPO_ROOT+x}" ]; then
     echo "$ORC_WORKTREE_REPO_ROOT"
     return 0
@@ -186,12 +186,12 @@ mw_teardown_branch() {
 # mw_notify_pick <pr> -- after merge-watch finishes
 # processing a merged PR (close + teardown), NOTHING previously told
 # Orchestra to PICK the next ticket -- the loop stalled until a human
-# prodded pane 0 (observed live after both #102 and #103's merges). A
+# prodded pane 0 (observed live, more than once). A
 # durable dispatch (write + nudge-if-idle, same `assign` verb gatekeeper's
 # alerts use) closes that gap mechanically. Split out so tests can override
 # it directly instead of driving a real dispatch_main call.
 #
-# #49 (bonus, picked up alongside #47): the old message pointed at a named
+# The old message pointed at a named
 # plan document that never existed in this project -- career-ops-harness
 # vocabulary carried over by copy-paste, and tests/watch.test.sh used to
 # actively PIN that ghost wording. Points at the two durable sources that
@@ -202,7 +202,7 @@ mw_notify_pick() {
 }
 
 # merge_watch_check -- one pass over currently-merged PRs, closing the
-# linked issue mechanically for any not already processed (issue #85: this
+# linked issue mechanically for any not already processed (this
 # used to dispatch the scribe to do it, but the scribe session doesn't act
 # on dispatched housekeeping, so the close never actually happened -- doing
 # it inline here is mechanical and needs no agent in the loop). Marks every
@@ -210,7 +210,7 @@ mw_notify_pick() {
 # close) so we never retry it again -- a PR without a recognizable
 # "Closes #N" is a skip, not a pending retry, and a failed gh call is
 # logged and moved past rather than retried forever. Also tears down the
-# worktree/branch for the PR's own head branch (issue #85, Task 5) once the
+# worktree/branch for the PR's own head branch once the
 # close is done -- gated on the head branch actually matching the
 # feature/issue-<N> convention (a PR with no such branch has no worktree to
 # tear down in the first place).
@@ -255,13 +255,13 @@ merge_watch_check() {
 }
 
 # -- review-watch ----------------------------------------------------------
-# issue #96: a reviewer's PR comment must not be the ONLY delivery path for
-# its verdict. Live-confirmed: agy posted a proper APPROVE on PR #95 (full
+# A reviewer's PR comment must not be the ONLY delivery path for
+# its verdict. Live-confirmed: agy posted a proper APPROVE on a PR (full
 # security pass, probe list, the works) but never ran the push-back
 # dispatch the review template tells it to -- Builder never learned the
 # verdict, never ran `gh pr ready`, and the PR sat draft for two hours
-# until Ahmad noticed by hand. Same #85 lesson: don't depend on an agent
-# to relay a mechanical step; have the harness observe and act.
+# until Ahmad noticed by hand. Same lesson as before: don't depend on an
+# agent to relay a mechanical step; have the harness observe and act.
 REVIEW_WATCH_STATE="${REVIEW_WATCH_STATE:-$CANON_DIR/review-watch-state}"
 
 # rw_fetch_open_draft_prs -- prints "<number>\t<title>\t<body>\t<headRefName>"
@@ -271,7 +271,7 @@ REVIEW_WATCH_STATE="${REVIEW_WATCH_STATE:-$CANON_DIR/review-watch-state}"
 # behind it. Split out so tests can mock `gh` instead of hitting the real
 # API -- same pattern as mw_fetch_merged_prs. Scoping the fetch to OPEN+
 # DRAFT is also the race-safety mechanism for "already ready" / "already
-# merged" (issue #96's own no-op requirement): a PR Orchestra has already
+# merged" (a no-op requirement): a PR Orchestra has already
 # flipped ready (Gate-2-waived sessions do this directly) or merged simply
 # stops appearing here on the next tick -- no separate state check needed,
 # the same structural guarantee merge_watch_check relies on for "already
@@ -301,7 +301,7 @@ rw_fetch_open_draft_prs() {
 # later line's own "APPROVE:"/"REQUEST-CHANGES:" prefix could otherwise
 # be mistaken to start.
 #
-# review round 2 (agy, PR #111 finding 1): built via jq's own `([1] |
+# review round 2 (agy finding 1): built via jq's own `([1] |
 # implode)` (an array containing the integer codepoint 1, turned into a
 # 1-character string at RUNTIME) rather than a jq string-escape spelling
 # of that same codepoint, or a raw control byte typed directly into this
@@ -452,7 +452,7 @@ pane_liveness_check() {
     tmux has-session -t "${target%%:*}" 2>/dev/null || continue
 
     if pw_pane_is_dead "$target"; then
-      # issue #125: a dead pane's last hook-written state is a lie -- clear
+      # A dead pane's last hook-written state is a lie -- clear
       # it (every pass, not just the first flag) so terminal states can
       # persist without an age-out; the broker/nudge gating must never
       # trust a crashed pane's stale 'busy'/'idle'.
@@ -482,7 +482,7 @@ pane_liveness_check() {
   done
 }
 
-# -- stuck / long-running pane detection (issue #134) --------------------
+# -- stuck / long-running pane detection ---------------------------------
 
 # wsc_hash_pane <target> -- a cheap, deterministic digest of what's
 # currently on screen, used only to detect "has this pane's terminal
@@ -516,7 +516,7 @@ wsc_write() { # jq args, filter transforms current state -> new state
 # pane_stuck_check -- complementary to pane_liveness_check: that catches a
 # pane DYING (dropped to a plain shell); this catches one that's alive but
 # hung, retry-looping, or just burning quota unattended for a very long
-# stretch (Ahmad's overnight ask, #134). NEVER auto-kills or auto-
+# stretch (Ahmad's overnight ask). NEVER auto-kills or auto-
 # interrupts -- this only ever flags Orchestra, who decides.
 #
 # Per busy pane over STUCK_THRESHOLD_S: needs TWO consecutive over-
@@ -540,7 +540,7 @@ pane_stuck_check() {
 
     if [ "$state" != "busy" ]; then
       # Episode over (or never started) -- drop any tracking so the next
-      # busy stretch starts clean. agy PR #136 round 1: only write if this
+      # busy stretch starts clean. Only write if this
       # agent is ACTUALLY tracked -- jq's `del` on a missing key is a
       # harmless no-op, but wsc_write still does a full mktemp+jq+mv every
       # call, and this branch runs for every idle agent on every watch
@@ -617,7 +617,7 @@ watch_pane_lines() {
 
 # watch_render -- clears the pane and redraws a compact 1-line header
 # (interval + nudge count + liveness summary) followed by an ADAPTIVE
-# EVENTS tail that fills whatever rows are left (issue #120: the old
+# EVENTS tail that fills whatever rows are left (the old
 # 4-section fixed frame was ~26 lines tall -- taller than any realistic
 # monitor strip, so the header/PRs/liveness sections scrolled off and only
 # EVENTS ever showed). PR lines are already appended to EVENTS_LOG by
@@ -637,7 +637,7 @@ watch_render() {
   else
     dead_str="${dead_count} dead"
   fi
-  # Header carries the ground-truth agent states (issue #125: liveness AND
+  # Header carries the ground-truth agent states (liveness AND
   # state, so a parked pane reads 'failsafe', never confused with dead).
   echo "Watch $(date '+%H:%M:%S')  ${WATCH_INTERVAL}s | $(broker_states_summary) | pending ${pending_count} | ${dead_str}"
   echo ""
@@ -656,7 +656,7 @@ watch_render() {
   events_shown_cap="${WATCH_EVENTS_SHOWN:-$(orc_get_nested watch events_shown)}"
   events_shown_cap="${events_shown_cap:-5}"
   pane_lines="$(watch_pane_lines)"
-  # issue #124: -3, not -2 -- header + blank separator + the cursor row the
+  # -3, not -2 -- header + blank separator + the cursor row the
   # final newline scrolls onto. The old budget was off by one the moment
   # the frame exactly filled the pane, which pushed the header off-screen
   # precisely when PENDING/DEAD lines were present.

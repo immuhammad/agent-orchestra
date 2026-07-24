@@ -1,8 +1,7 @@
 #!/bin/bash
-# tests/orc-init-force.test.sh -- issue #116: `orc init --force`, the
-# re-init/resync story. Plan of record: Orchestra's Gate-1 comment on
-# https://github.com/immuhammad/agent-orchestra/issues/116 (semantics of
-# --force, drift reconciliation via a sha256 manifest, idempotence).
+# tests/orc-init-force.test.sh -- `orc init --force`, the
+# re-init/resync story. Plan of record: semantics of
+# --force, drift reconciliation via a sha256 manifest, idempotence.
 # Every scratch target is a mktemp dir; nothing here touches this
 # checkout's own .claude/ (guard-protected) or orchestrator.yaml.
 # Run: bash tests/orc-init-force.test.sh
@@ -254,7 +253,7 @@ else
   fail "--force --answers should rewrite orchestrator.yaml, got: $(cat "$ROOM5/orchestrator.yaml")"
 fi
 
-echo "== missing manifest (pre-#116 project): every tracked file is conservatively treated as drifted =="
+echo "== missing manifest (a project predating manifest tracking): every tracked file is conservatively treated as drifted =="
 ROOM6="$TMP/room6"
 bash "$ORC" init --answers "$ANSWERS1" "$ROOM6" >/dev/null 2>&1
 BEFORE_AGENTS="$(cat "$ROOM6/AGENTS.md")"
@@ -300,7 +299,7 @@ else
   bash "$ORC_BIN_DIR/orc-protect" off "$ROOM7" >/dev/null 2>&1 || true
 fi
 
-echo "== agy PR #162 finding 1: a mid-sync failure still restores orc-protect (no fail-open) =="
+echo "== agy's review finding: a mid-sync failure still restores orc-protect (no fail-open) =="
 if [ "$CAN_FLAG" -eq 0 ]; then
   echo "SKIP: no immutability privilege here (unprivileged Linux?) -- orc-protect round-trip cases skipped"
 else
@@ -310,7 +309,7 @@ else
   # force a failure partway through the resync (after protection is
   # lifted, before it would normally be restored): souls/ made unwritable
   # so the FIRST soul's mktemp write inside orc_init_force aborts the
-  # whole script under set -e, exactly the class of abort finding 1 flags.
+  # whole script under set -e, exactly the class of abort that finding flags.
   chmod 555 "$ROOM8/souls"
   OUT="$(bash "$ORC" init --force "$ROOM8" 2>&1)"
   STATUS=$?

@@ -1,5 +1,5 @@
 #!/bin/bash
-# hooks/check-inbox-stop.sh — Stop hook (issue #125): deterministic inbox
+# hooks/check-inbox-stop.sh — Stop hook: deterministic inbox
 # pickup at turn boundaries. If this agent's LIVE inbox holds unacked .msg
 # files when it tries to go idle, block the stop with a reason listing
 # them -- the session reads and acks its inbox before idling, so delivery
@@ -27,7 +27,7 @@ fi
 # One-shot/headless sessions (scribe) ack their own single task by
 # construction and per AGENTS.md never poll an inbox -- see
 # check-handoff.sh's ORC_ONESHOT comment for why this exemption is safe
-# (issue #31 protects the hook wiring itself).
+# (the hook wiring itself is protected).
 [ "${ORC_ONESHOT:-0}" = "1" ] && exit 0
 
 ROLE="${ORC_ROLE:-}"

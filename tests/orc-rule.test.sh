@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/orc-rule.test.sh — TDD tests for bin/orc-rule + the session-start
-# rules surfacing (issue #144, #141 layer 4). Run: bash tests/orc-rule.test.sh
+# rules surfacing (guard-layer redesign layer 4). Run: bash tests/orc-rule.test.sh
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"

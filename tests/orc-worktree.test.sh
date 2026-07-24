@@ -14,7 +14,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_ROOT="$(cd "$DIR/.." >/dev/null 2>&1 && pwd)"
 ORC="$DIR/../lib/orc-worktree.sh"
-# issue #116: "uat" was career-ops-harness's own integration branch name --
+# "uat" was career-ops-harness's own integration branch name --
 # this repo's is "main" (read the same way orc-worktree.sh itself does).
 INTEGRATION_BRANCH="$(cd "$REPO_ROOT" && source "$DIR/../lib/orc-config.sh" && orc_get_scalar integration_branch)"
 INTEGRATION_BRANCH="${INTEGRATION_BRANCH:-uat}"
@@ -171,9 +171,9 @@ for _ in 1 2 3; do
   sleep 2
 done
 if [ "$BODY_OK" -eq 1 ]; then
-  pass "T30 (#56): PR body includes the standardized 'Closes #N.' line"
+  pass "T30: PR body includes the standardized 'Closes #N.' line"
 else
-  fail "T30 (#56): PR body should include 'Closes #$ISSUE.' (PR_NUMBER=$PR_NUMBER)"
+  fail "T30: PR body should include 'Closes #$ISSUE.' (PR_NUMBER=$PR_NUMBER)"
 fi
 
 echo "== build_pr_body: extra issue numbers each get their own Closes line (T30, bundled tickets) =="
@@ -199,7 +199,7 @@ else
   fail "finish should refuse cleanly when nothing is checked out (status=$STATUS): $OUT"
 fi
 
-# -- teardown (issue #85, Task 4) --------------------------------------------
+# -- teardown (Task 4) --------------------------------------------
 # A fresh, second scratch issue -- freshly `start`ed with no commits beyond
 # origin/uat's tip is trivially "merged" (its tip IS an ancestor of the
 # current HEAD), so the success path needs no real merge to set up, just a
@@ -236,8 +236,8 @@ else
   fail "teardown should have deleted the merged branch: $OUT"
 fi
 
-echo "== #47: teardown on an ALREADY-gone worktree/branch now fails LOUDLY, not a silent no-op =="
-# #47: this used to be documented/tested as an idempotent no-op -- that was
+echo "== teardown on an ALREADY-gone worktree/branch now fails LOUDLY, not a silent no-op =="
+# This used to be documented/tested as an idempotent no-op -- that was
 # exactly the bug. A merged PR always has a worktree+branch pair to clean
 # (start/resume always create them together); "found nothing" is either a
 # legitimate double-run (harmless in practice, since watch.sh's own
@@ -313,7 +313,7 @@ else
   fail "teardown must never -D an unmerged branch"
 fi
 
-# -- #47: the two-repo mismatch that cost this room 3 merges' worth of -----
+# -- the two-repo mismatch that cost this room 3 merges' worth of -----
 # debris tonight, PLUS the never-implemented remote branch delete ----------
 #
 # Fully local/offline (a bare repo stands in for "origin") -- this
@@ -321,7 +321,7 @@ fi
 # different repo than the dev target whose worktree/branch it's tearing
 # down) without touching the real network or the real project repo, unlike
 # the live-network sections above.
-echo "== #47: teardown run from a DIFFERENT repo than the one holding the worktree/branch must fail loudly, not silently 'succeed' =="
+echo "== teardown run from a DIFFERENT repo than the one holding the worktree/branch must fail loudly, not silently 'succeed' =="
 
 ORIGIN_BARE="$(mktemp -d)"
 git init -q --bare "$ORIGIN_BARE"
@@ -369,9 +369,9 @@ echo "-- reproduces tonight's exact conditions: caller's \$PWD is the WRONG repo
 OUT="$(cd "$CALLERROOT" && bash "$ORC" teardown "$MM_ISSUE" 2>&1)"
 STATUS=$?
 if [ "$STATUS" -ne 0 ]; then
-  pass "#47 -- teardown invoked from the wrong repo (no explicit root) fails loudly instead of reporting success"
+  pass "teardown invoked from the wrong repo (no explicit root) fails loudly instead of reporting success"
 else
-  fail "#47 REGRESSION -- teardown invoked from the wrong repo silently reported success: $OUT"
+  fail "REGRESSION -- teardown invoked from the wrong repo silently reported success: $OUT"
 fi
 if [ -d "$MM_WT" ] && git -C "$DEVROOT" show-ref --verify --quiet "refs/heads/$MM_BRANCH"; then
   pass "worktree and branch are untouched in the real dev repo after the wrong-repo attempt (nothing was silently 'cleaned up' in the wrong place either)"
@@ -383,9 +383,9 @@ echo "-- with ORC_WORKTREE_REPO_ROOT explicitly pointed at the real dev repo: su
 OUT="$(cd "$CALLERROOT" && ORC_WORKTREE_REPO_ROOT="$DEVROOT" bash "$ORC" teardown "$MM_ISSUE" 2>&1)"
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
-  pass "#47 -- teardown succeeds once the real repo root is given explicitly, from a caller sitting in a totally different repo"
+  pass "teardown succeeds once the real repo root is given explicitly, from a caller sitting in a totally different repo"
 else
-  fail "#47 -- teardown should succeed with the correct ORC_WORKTREE_REPO_ROOT (status=$STATUS): $OUT"
+  fail "teardown should succeed with the correct ORC_WORKTREE_REPO_ROOT (status=$STATUS): $OUT"
 fi
 if [ ! -d "$MM_WT" ]; then
   pass "worktree was actually removed"
@@ -398,14 +398,14 @@ else
   fail "local branch should have been deleted"
 fi
 if ! git -C "$DEVROOT" ls-remote --exit-code --heads origin "$MM_BRANCH" >/dev/null 2>&1; then
-  pass "#47 finding 3 -- remote branch was actually deleted (this never existed in the code before #47)"
+  pass "finding 3 -- remote branch was actually deleted (this never existed in the code before)"
 else
-  fail "#47 REGRESSION -- remote branch should have been deleted, was left behind"
+  fail "REGRESSION -- remote branch should have been deleted, was left behind"
 fi
 
 mismatch_cleanup
 
-echo "== #47: remote-only absence (never pushed) is still a harmless no-op -- only LOCAL worktree/branch absence is treated as suspicious =="
+echo "== remote-only absence (never pushed) is still a harmless no-op -- only LOCAL worktree/branch absence is treated as suspicious =="
 # A branch that was `start`ed but never `finish`ed (never pushed) has no
 # remote counterpart at all -- that's a legitimate state (not every scratch
 # branch reaches a real PR), so its absence on origin must not be treated
@@ -421,20 +421,20 @@ bash "$ORC" start "$TD_ISSUE" >/dev/null 2>&1
 OUT="$(bash "$ORC" teardown "$TD_ISSUE" 2>&1)"
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
-  pass "#47 -- a clean worktree + locally-merged branch with NO remote counterpart still tears down successfully (remote absence alone isn't suspicious)"
+  pass "a clean worktree + locally-merged branch with NO remote counterpart still tears down successfully (remote absence alone isn't suspicious)"
 else
-  fail "#47 -- teardown of a never-pushed branch should still succeed (status=$STATUS): $OUT"
+  fail "teardown of a never-pushed branch should still succeed (status=$STATUS): $OUT"
 fi
 teardown_cleanup
 
-echo "== #47 round 2 (agy's dedicated security pass on PR #65): a network/auth error checking the remote must NOT be mistaken for 'branch already gone' =="
+echo "== round 2 (agy's dedicated security pass): a network/auth error checking the remote must NOT be mistaken for 'branch already gone' =="
 # git ls-remote --exit-code returns exit 2 when origin explicitly confirms
 # no matching ref exists, but a DIFFERENT non-zero (128, unreachable
 # remote/auth failure/etc) on any other failure. The original
 # branch_exists_remote collapsed both into the same "false" -- a network
 # blip during teardown's remote-delete step would silently skip it while
-# cmd_teardown still logged overall success, exactly the false-success
-# class #47 is about, just relocated to the new code. Reproduced fully
+# cmd_teardown still logged overall success, exactly the same false-success
+# class as before, just relocated to the new code. Reproduced fully
 # offline: origin points at a path that isn't a git repo at all, so
 # ls-remote fails with a real fatal error (exit 128), not exit 2.
 NET_ORIGIN_BARE="$(mktemp -d)"
@@ -463,9 +463,9 @@ git -C "$NET_DEVROOT" remote set-url origin "$NET_DEVROOT/definitely-not-a-git-r
 OUT="$(ORC_WORKTREE_REPO_ROOT="$NET_DEVROOT" bash "$ORC" teardown "$NET_ISSUE" 2>&1)"
 STATUS=$?
 if [ "$STATUS" -ne 0 ]; then
-  pass "#47 round 2 -- teardown fails loudly when the remote can't be reached, instead of silently skipping the delete and reporting success"
+  pass "round 2 -- teardown fails loudly when the remote can't be reached, instead of silently skipping the delete and reporting success"
 else
-  fail "#47 round 2 REGRESSION -- a network/auth error checking the remote branch was mistaken for 'already gone', teardown reported success: $OUT"
+  fail "round 2 REGRESSION -- a network/auth error checking the remote branch was mistaken for 'already gone', teardown reported success: $OUT"
 fi
 
 git -C "$NET_DEVROOT" worktree remove --force "$NET_WT" >/dev/null 2>&1

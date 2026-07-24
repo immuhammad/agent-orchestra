@@ -1,10 +1,10 @@
 #!/bin/bash
-# tests/hook-config-templates.test.sh — issue #10 / #31: templates/settings.json
+# tests/hook-config-templates.test.sh — templates/settings.json
 # and templates/agents-hooks.json are the tracked, canonical source of truth
 # for .claude/settings.json and .agents/hooks.json (both gitignored per-room
-# artifacts). This is what would have caught #10's live incident: the
-# quota-stop-gate hook shipped in PR #17 but was never wired into this
-# room's .claude/settings.json, because #18 removed the trampoline that had
+# artifacts). This is what would have caught the live incident: the
+# quota-stop-gate hook shipped but was never wired into this
+# room's .claude/settings.json, because a later change removed the trampoline that had
 # wired it and the direct rewire dropped it -- nothing tracked caught the
 # omission.
 # Run: bash tests/hook-config-templates.test.sh
@@ -32,7 +32,7 @@ else
   fail "templates/settings.json is missing or not valid JSON"
 fi
 
-echo "== issue #10: quota-stop-gate.sh is wired as the FIRST PreToolUse hook (matcher .*) =="
+echo "== quota-stop-gate.sh is wired as the FIRST PreToolUse hook (matcher .*) =="
 if [ -f "$SETTINGS_TEMPLATE" ]; then
   FIRST_PRETOOLUSE_MATCHER="$(jq -r '.hooks.PreToolUse[0].matcher // empty' "$SETTINGS_TEMPLATE")"
   FIRST_PRETOOLUSE_CMD="$(jq -r '.hooks.PreToolUse[0].hooks[0].command // empty' "$SETTINGS_TEMPLATE")"
@@ -63,7 +63,7 @@ if [ -f "$SETTINGS_TEMPLATE" ]; then
   done
 fi
 
-echo "== issue #31: templates/agents-hooks.json exists, guard-quota-stop-agy.sh wired FIRST =="
+echo "== templates/agents-hooks.json exists, guard-quota-stop-agy.sh wired FIRST =="
 if [ -f "$AGENTS_HOOKS_TEMPLATE" ] && jq empty "$AGENTS_HOOKS_TEMPLATE" >/dev/null 2>&1; then
   pass "templates/agents-hooks.json exists and is valid JSON"
 else
@@ -84,13 +84,13 @@ if [ -f "$AGENTS_HOOKS_TEMPLATE" ]; then
   fi
   THIRD_AGY_CMD="$(jq -r '."agy-guard".PreToolUse[0].hooks[2].command // empty' "$AGENTS_HOOKS_TEMPLATE")"
   if echo "$THIRD_AGY_CMD" | grep -q "guard-room-branch-agy.sh"; then
-    pass "issue #60: guard-room-branch-agy.sh wired third under agy-guard's PreToolUse"
+    pass "guard-room-branch-agy.sh wired third under agy-guard's PreToolUse"
   else
     fail "expected guard-room-branch-agy.sh to be wired third, got: $THIRD_AGY_CMD"
   fi
 fi
 
-echo "== issue #150: agents-hooks.json parse and path resolution test =="
+echo "== agents-hooks.json parse and path resolution test =="
 if [ -f "$AGENTS_HOOKS_TEMPLATE" ]; then
   # Find all unique command strings
   COMMANDS=$(jq -r '.. | objects | select(.type == "command") | .command' "$AGENTS_HOOKS_TEMPLATE" | sort -u)

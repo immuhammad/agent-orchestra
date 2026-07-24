@@ -1,5 +1,5 @@
 #!/bin/bash
-# lib/room-branch-lib.sh — shared room-branch-state helper (issue #60 task B).
+# lib/room-branch-lib.sh — shared room-branch-state helper.
 #
 # room_branch_state <root> tells callers whether the git checkout at <root>
 # currently sits on the project's integration branch (same resolution
@@ -84,8 +84,8 @@ room_branch_override_active() {
   [ -f "$canon_dir/state/room-branch-override" ]
 }
 
-# room_branch_restore_command_allowed <command> <root> -- issue #60 task E:
-# the ONE Bash escape hatch the room-branch gate allows beyond the shared
+# room_branch_restore_command_allowed <command> <root> -- the ONE Bash
+# escape hatch the room-branch gate allows beyond the shared
 # qsg park-honestly set (lib/quota-stop-lib.sh) -- a gated session must be
 # able to restore itself onto the integration branch, or the gate has no
 # way out short of an operator override. Deliberately as strict as

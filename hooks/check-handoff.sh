@@ -5,7 +5,7 @@ INPUT=$(cat)
 if [ "$(echo "$INPUT" | jq -r '.stop_hook_active // "false"')" = "true" ]; then
   exit 0
 fi
-# issue #23: a one-shot/headless session (e.g. the spawned scribe) sets its
+# A one-shot/headless session (e.g. the spawned scribe) sets its
 # OWN .session-start marker on boot, which is by construction always newer
 # than any handoff.md written before it spawned -- the exact stale state
 # this hook exists to catch for a stage-owning PANE agent. A one-shot
@@ -13,11 +13,11 @@ fi
 # write handoff.md anyway, so the hook must not order it to. The handoff
 # rule is for stage-owning pane agents only.
 #
-# SECURITY (agy's probe-3 on PR #30): ORC_ONESHOT is an env var, in
+# SECURITY (agy's probe-3): ORC_ONESHOT is an env var, in
 # principle spoofable by any pane agent that can edit the command THIS hook
 # is invoked with in .claude/settings.json (e.g. rewriting the Stop hook
 # entry to `ORC_ONESHOT=1 bash hooks/check-handoff.sh`). This exemption is
-# safe ONLY because issue #31 now protects .claude/ (and .agents/) as a
+# safe ONLY because .claude/ (and .agents/) are now protected as a
 # write-protected-by-default path in guard.sh/guard-write.sh, independent
 # of orchestrator.yaml -- no agent, including this one, can edit that
 # wiring to inject the flag. Do not reintroduce this exemption without that
@@ -32,7 +32,7 @@ MARKER=".harness/.session-start"
 # If no session marker exists, don't block (first run / manual session)
 [ -f "$MARKER" ] || exit 0
 
-# issue #50: handoff.md is Orchestra's file -- the room-level state of
+# handoff.md is Orchestra's file -- the room-level state of
 # record, and only Orchestra has the room-level view to write it honestly.
 # This nag used to fire for EVERY agent's Stop, and Builder clobbered the
 # file 3x with stale, ticket-scoped state as a result (worst case: a PR

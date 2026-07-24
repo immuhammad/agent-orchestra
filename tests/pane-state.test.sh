@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/pane-state.test.sh — issue #33: lib/pane-state-lib.sh (write/read
+# tests/pane-state.test.sh — lib/pane-state-lib.sh (write/read
 # primitives) and hooks/pane-state.sh (the hook script wired to
 # UserPromptSubmit/PreToolUse/Stop). dispatch.sh's pane_is_idle consumer
 # behavior is covered separately in tests/dispatch.test.sh.
@@ -45,7 +45,7 @@ else
   fail "expected '12', got '$(pane_state_sanitize "%12")'"
 fi
 
-echo "== SECURITY (agy PR #45 REQUEST-CHANGES): pane_state_sanitize rejects a path-traversal pane_id, not just strips '%' =="
+echo "== SECURITY (agy REQUEST-CHANGES): pane_state_sanitize rejects a path-traversal pane_id, not just strips '%' =="
 # hooks/pane-state.sh trusts \$TMUX_PANE verbatim -- any agent invoking a
 # tool can `export TMUX_PANE=...` before it, since it's an ordinary
 # inherited env var, not something tmux re-verifies per hook call. A
@@ -82,13 +82,13 @@ else
   pass "pane_state_read fails cleanly for an unknown pane_id"
 fi
 
-echo "== issue #125: entries PERSIST by default (states are transitions, no age-out); explicit max_age still enforces freshness =="
+echo "== entries PERSIST by default (states are transitions, no age-out); explicit max_age still enforces freshness =="
 mkdir -p "$PANE_STATE_DIR"
 echo "busy 1000000000" > "$PANE_STATE_DIR/99"
 if [ "$(pane_state_read "%99" 2>/dev/null)" = "busy" ]; then
-  pass "issue #125: an ancient entry is still returned by default -- crash coverage is pane_state_clear (watch liveness), not an expiry"
+  pass "an ancient entry is still returned by default -- crash coverage is pane_state_clear (watch liveness), not an expiry"
 else
-  fail "issue #125: default read should trust the last-written state regardless of age"
+  fail "default read should trust the last-written state regardless of age"
 fi
 if pane_state_read "%99" 30 >/dev/null 2>&1; then
   fail "an explicit max_age=30 should reject an epoch-1000000000 entry"
@@ -96,7 +96,7 @@ else
   pass "explicit max_age still rejects a stale entry for callers that want freshness"
 fi
 
-echo "== issue #125: failsafe state + session_id round-trip =="
+echo "== failsafe state + session_id round-trip =="
 pane_state_write "%97" failsafe "sess-abc123"
 if [ "$(pane_state_read "%97" 2>/dev/null)" = "failsafe" ]; then
   pass "failsafe is a first-class state"
@@ -109,7 +109,7 @@ else
   fail "expected pane_state_session to return 'sess-abc123'"
 fi
 
-echo "== issue #125: unknown state string is rejected, not passed through =="
+echo "== unknown state string is rejected, not passed through =="
 echo "weird 1234567890" > "$PANE_STATE_DIR/96"
 if pane_state_read "%96" >/dev/null 2>&1; then
   fail "an unknown state string should be rejected"
@@ -117,7 +117,7 @@ else
   pass "unknown state string correctly rejected"
 fi
 
-echo "== issue #125: entry with no session_id -- pane_state_session fails cleanly =="
+echo "== entry with no session_id -- pane_state_session fails cleanly =="
 pane_state_write "%95" idle
 if pane_state_session "%95" >/dev/null 2>&1; then
   fail "pane_state_session should fail when no session_id was recorded"
@@ -125,7 +125,7 @@ else
   pass "pane_state_session fails cleanly with no recorded session_id"
 fi
 
-echo "== issue #125 follow-up: failsafe is EFFECTIVE only while the quota flag exists =="
+echo "== follow-up: failsafe is EFFECTIVE only while the quota flag exists =="
 pane_state_write "%94" failsafe "sid-eff"
 EFF_FLAG="$(mktemp)"
 if [ "$(PANE_STATE_QUOTA_FLAG="$EFF_FLAG" pane_state_effective "%94" 2>/dev/null)" = "failsafe" ]; then
@@ -146,7 +146,7 @@ else
 fi
 pane_state_clear "%94"
 
-echo "== issue #134: pane_state_age -- seconds since the pane's last recorded state transition =="
+echo "== pane_state_age -- seconds since the pane's last recorded state transition =="
 OLD_EPOCH=$(( $(date '+%s') - 500 ))
 printf 'busy %s sess-age -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/70"
 AGE="$(pane_state_age "%70" 2>/dev/null)"
@@ -167,7 +167,7 @@ else
   pass "pane_state_age rejects a malformed entry rather than misreading it"
 fi
 
-echo "== issue #125: pane_state_clear removes the entry =="
+echo "== pane_state_clear removes the entry =="
 pane_state_clear "%97"
 if pane_state_read "%97" >/dev/null 2>&1; then
   fail "expected no state after pane_state_clear"
@@ -183,7 +183,7 @@ else
   pass "malformed entry correctly rejected"
 fi
 
-echo "== issue #6: classification is a 4th, optional field =="
+echo "== classification is a 4th, optional field =="
 pane_state_write "%80" idle "sess-a" "fresh"
 if [ "$(pane_state_classification "%80" 2>/dev/null)" = "fresh" ]; then
   pass "classification round-trips through write/read"
@@ -201,7 +201,7 @@ else
   fail "pane_state_session regressed when a classification field is present"
 fi
 
-echo "== issue #6: an omitted classification CARRIES FORWARD the previous one (busy/idle writes must not erase it) =="
+echo "== an omitted classification CARRIES FORWARD the previous one (busy/idle writes must not erase it) =="
 pane_state_write "%80" busy "sess-a"
 if [ "$(pane_state_classification "%80" 2>/dev/null)" = "fresh" ]; then
   pass "a later write with no 4th arg preserves the earlier classification"
@@ -214,7 +214,7 @@ else
   fail "expected state to update to busy"
 fi
 
-echo "== issue #6: an explicit new classification overwrites the carried-forward one =="
+echo "== an explicit new classification overwrites the carried-forward one =="
 pane_state_write "%80" idle "sess-b" "rebuilt"
 if [ "$(pane_state_classification "%80" 2>/dev/null)" = "rebuilt" ]; then
   pass "an explicit classification argument overwrites the prior value"
@@ -222,7 +222,7 @@ else
   fail "expected classification 'rebuilt' after an explicit overwrite"
 fi
 
-echo "== issue #6: pane_state_classification on a pane with no classification ever recorded -> fails cleanly =="
+echo "== pane_state_classification on a pane with no classification ever recorded -> fails cleanly =="
 pane_state_write "%81" idle "sess-c"
 if pane_state_classification "%81" >/dev/null 2>&1; then
   fail "expected pane_state_classification to fail with no classification recorded"
@@ -230,7 +230,7 @@ else
   pass "pane_state_classification fails cleanly with no recorded classification"
 fi
 
-echo "== agy PR #135 round 1: empty session_id must NOT shift classification into the session_id column (awk collapses consecutive spaces) =="
+echo "== agy round 1: empty session_id must NOT shift classification into the session_id column (awk collapses consecutive spaces) =="
 pane_state_write "%82" idle "" "rebuilt"
 if pane_state_session "%82" >/dev/null 2>&1; then
   fail "SECURITY/CORRECTNESS: an empty session_id should read as 'no session', not the classification value"
@@ -248,7 +248,7 @@ else
   fail "expected state 'idle'"
 fi
 
-echo "== issue #6: pane_state_classification on an entirely unknown pane -> fails cleanly =="
+echo "== pane_state_classification on an entirely unknown pane -> fails cleanly =="
 if pane_state_classification "%no-such-pane" >/dev/null 2>&1; then
   fail "expected pane_state_classification to fail for an unknown pane_id"
 else
@@ -268,7 +268,7 @@ OUT="$(env -u TMUX_PANE PANE_STATE_CANON_DIR="$SCRATCH/canon" bash "$HOOK" busy 
 STATUS=$?
 AFTER_COUNT="$(find "$PANE_STATE_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$STATUS" -eq 0 ] && [ "$BEFORE_COUNT" -eq "$AFTER_COUNT" ]; then
-  pass "no \$TMUX_PANE: hook exits 0 and writes nothing (headless one-shot, issue #89)"
+  pass "no \$TMUX_PANE: hook exits 0 and writes nothing (headless one-shot)"
 else
   fail "hook should no-op cleanly with no \$TMUX_PANE (status=$STATUS out=$OUT)"
 fi

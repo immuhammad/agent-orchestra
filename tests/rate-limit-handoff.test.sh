@@ -15,7 +15,7 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# issue #116: the hook now sources ../lib/handoff-lib.sh relative to its
+# the hook now sources ../lib/handoff-lib.sh relative to its
 # OWN (fixed) location in this repo's hooks/, and its handoff.md target is
 # cwd-relative (.harness/handoff.md), not hook-dir-relative -- matching how
 # Claude Code actually invokes it (cwd = the consumer project). So this
@@ -44,7 +44,7 @@ else
   fail "prior content should survive"
 fi
 
-echo "== T31 (issue #68 item A): a SECOND firing REPLACES the section, doesn't append another =="
+echo "== T31: a SECOND firing REPLACES the section, doesn't append another =="
 echo '{"session_id":"s2"}' | (cd "$SANDBOX" && bash "$HOOK")
 COUNT="$(grep -c '^## RATE-LIMITED' "$SANDBOX_HANDOFF")"
 if [ "$COUNT" -eq 1 ]; then

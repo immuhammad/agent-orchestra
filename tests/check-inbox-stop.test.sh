@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/check-inbox-stop.test.sh — issue #125: the Stop-hook inbox pickup
+# tests/check-inbox-stop.test.sh — the Stop-hook inbox pickup
 # that makes delivery to a BUSY agent deterministic at turn end (blocks
 # going idle while unacked .msg files exist). Run: bash tests/check-inbox-stop.test.sh
 set -uo pipefail
@@ -39,14 +39,14 @@ else
   fail "expected exit 0 silent for an empty inbox, got status=$STATUS: $OUT"
 fi
 
-echo "== unacked .msg: stop BLOCKED with a reason naming the file and the #121 rule =="
+echo "== unacked .msg: stop BLOCKED with a reason naming the file and the assign-is-authorization rule =="
 echo "do the thing" > "$CANON/inbox/builder/20260101000000-7.msg"
 OUT="$(run_hook builder)"
 STATUS=$?
 if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q "20260101000000-7.msg" && echo "$OUT" | grep -q "assign IS the authorization"; then
   pass "unacked msg -> exit 2, reason lists the file and restates assign-is-authorization"
 else
-  fail "expected exit 2 naming the msg + the #121 rule, got status=$STATUS: $OUT"
+  fail "expected exit 2 naming the msg + the assign-is-authorization rule, got status=$STATUS: $OUT"
 fi
 
 echo "== acked .msg: stop allowed again =="
@@ -82,7 +82,7 @@ echo "== no ORC_ROLE: unknown sessions are never blocked =="
 OUT="$(run_hook "")"
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
-  pass "no ORC_ROLE -> exit 0 (fail toward silence, like check-handoff's #50 rule)"
+  pass "no ORC_ROLE -> exit 0 (fail toward silence, like check-handoff's role-gating rule)"
 else
   fail "expected exit 0 with no ORC_ROLE, got status=$STATUS: $OUT"
 fi

@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/orc-init.test.sh -- issue #5: orc init (the onboarding wizard).
+# tests/orc-init.test.sh -- orc init (the onboarding wizard).
 # Tests drive the non-interactive core (orc_init_core/orc_init_validate)
 # directly, per the issue's own design constraint -- the interactive
 # wrapper (orc_init_interactive) gets one light smoke test via piped
@@ -71,12 +71,12 @@ else
   fail "one or more expected files were missing after init"
 fi
 if [ ! -e "$TARGET1/SOUL.md" ]; then
-  pass "issue #12: the stale SOUL.md placeholder is no longer written"
+  pass "the stale SOUL.md placeholder is no longer written"
 else
   fail "SOUL.md placeholder should not be written anymore -- superseded by souls/<role>.md"
 fi
 
-echo "== issue #12: each soul card's model lane reflects the answers, per-role, not a shared/hardcoded value =="
+echo "== each soul card's model lane reflects the answers, per-role, not a shared/hardcoded value =="
 if grep -q 'Model lane: opus (effort: high)' "$TARGET1/souls/orchestra.md" \
   && grep -q 'pane 0.0' "$TARGET1/souls/orchestra.md"; then
   pass "orchestra's soul reflects ROLE_ORCHESTRA_MODEL/EFFORT and its pane index"
@@ -107,7 +107,7 @@ else
   fail "a soul card still has an unsubstituted placeholder: $(grep -l '<MODEL>\|<EFFORT>\|<PANE>' "$TARGET1"/souls/*.md)"
 fi
 
-echo "== issue #12: reviewer's soul is ALSO appended to GEMINI.md -- agy's only confirmed native context channel =="
+echo "== reviewer's soul is ALSO appended to GEMINI.md -- agy's only confirmed native context channel =="
 # .agents/rules/ was checked live and is NOT a confirmed agy mechanism
 # (see decisions.log) -- GEMINI.md is, so reviewer's card rides there too,
 # not just souls/reviewer.md.
@@ -200,7 +200,7 @@ TARGET_MIN="$TMP/room-min"
 bash "$ORC" init --answers "$ANSWERS_MIN" "$TARGET_MIN" >/dev/null 2>&1
 MIN_PATHS="$(cd "$TARGET_MIN" && source "$DIR/../lib/orc-config.sh" && orc_protected_paths)"
 if [ -z "$MIN_PATHS" ]; then
-  pass "protected_paths is empty by default (issue #18 B-i: project-agnostic, no hardcoded set)"
+  pass "protected_paths is empty by default (project-agnostic, no hardcoded set)"
 else
   fail "protected_paths should default to empty, got: $MIN_PATHS"
 fi
@@ -211,7 +211,7 @@ else
   fail "expected integration_branch default 'main', got '$MIN_BRANCH'"
 fi
 
-echo "== agy PR #117 finding 1: target '-' does not silently redirect writes to \$OLDPWD =="
+echo "== agy code review finding 1: target '-' does not silently redirect writes to \$OLDPWD =="
 # Verified live: bash's cd builtin special-cases a bare "-" as "go to
 # \$OLDPWD" even with a preceding "--" (agy's first suggested fix alone
 # does not actually work on this bash) -- only forcing a RELATIVE target
@@ -236,7 +236,7 @@ else
   fail "target '-' produced neither the expected '-' dir nor anything in \$OLDPWD: $DASH_OUT"
 fi
 
-echo "== agy PR #117 finding 2: a broken orchestrator.yaml symlink at the target is refused, never followed =="
+echo "== agy code review finding 2: a broken orchestrator.yaml symlink at the target is refused, never followed =="
 TARGET_SYMLINK="$TMP/room-symlink"
 mkdir -p "$TARGET_SYMLINK"
 BROKEN_LINK_DEST="$TMP/nonexistent-symlink-target"
@@ -254,13 +254,13 @@ else
   fail "SECURITY REGRESSION (agy finding 2): init wrote through the broken symlink to $BROKEN_LINK_DEST"
 fi
 
-echo "== agy PR #117 finding 3: orchestrator.yaml is written with noclobber (TOCTOU hardening) =="
+echo "== agy code review finding 3: orchestrator.yaml is written with noclobber (TOCTOU hardening) =="
 # The refusal check above (finding 2) already covers the realistic
 # pre-existing-file/symlink cases; a genuine concurrent-process race is
 # impractical to reproduce deterministically in a single-threaded test
 # suite. This confirms the noclobber guard is actually present around
 # the orchestrator.yaml write, which is the mechanism the fix relies on.
-# issue #116: the yaml-building heredoc moved into a shared function
+# the yaml-building heredoc moved into a shared function
 # (orc_init_render_orchestrator_yaml, reused by --force's full re-init
 # path) -- the call site checked here is now that function call, not the
 # literal heredoc redirect; the function's own `} > "$dest" 2>/dev/null`
@@ -277,7 +277,7 @@ else
   fail "expected the orchestrator.yaml write to be wrapped in noclobber on/off"
 fi
 
-echo "== agy PR #117 finding 4: an answers file literally named -v is read correctly (not parsed as an awk flag) =="
+echo "== agy code review finding 4: an answers file literally named -v is read correctly (not parsed as an awk flag) =="
 ANSWERS_DASHV="$TMP/-v"
 full_answers "$ANSWERS_DASHV"
 TARGET_DASHV="$TMP/room-dashv"
@@ -290,9 +290,9 @@ else
 fi
 
 echo "== FLAG ruling: TICKET_TRACKER shapes the PICK line's prose, GATE_APPROVER is not baked into AGENTS.md =="
-# issue #5 FLAG ruling: tickets-location/human-gates answers shape
+# FLAG ruling: tickets-location/human-gates answers shape
 # GENERATED AGENTS.md prose only, never new orchestrator.yaml keys
-# (schema is added together with its first consumer, per issue #86
+# (schema is added together with its first consumer, per prior
 # precedent). Reviewer's name deliberately stays out of AGENTS.md's
 # generic "you approve"/"you merge" language -- it goes in the init
 # completion summary instead (checked below).

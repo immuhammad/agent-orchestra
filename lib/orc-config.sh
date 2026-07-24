@@ -6,7 +6,7 @@
 # general YAML parser. It supports scalars (`key: value`) and `protected_paths`
 # as either an inline list (`[a, b]`) or a block list (`- a` / `- b`).
 #
-# issue #18 (B-i): protected_paths comes ONLY from orchestrator.yaml --
+# protected_paths comes ONLY from orchestrator.yaml --
 # there is no hardcoded project-specific default (the old "career-ops/"
 # default was a leftover from this harness's original single-consumer
 # extraction; project-agnostic by design now that every project is its own
@@ -15,7 +15,7 @@
 # script-exec/git-ops are separately covered by guard.sh's own G-series
 # rules, and hook CONFIG (.claude/, .agents/) is separately covered by
 # orc_is_harness_config_path below -- neither depends on this
-# project-configurable list (issue #31: a missing/empty protected_paths
+# project-configurable list (a missing/empty protected_paths
 # must never leave .claude/settings.json or .agents/hooks.json editable,
 # since those wire the guards themselves).
 #
@@ -28,7 +28,7 @@ ORC_DEFAULT_PROTECTED_PATHS=""
 # orc_harness_config_dirs -- one hardcoded default-protected dir per line:
 # .claude/ and .agents/, which wire the harness's OWN enforcement (guard.sh,
 # guard-write.sh, quota-stop-gate.sh, the Stop hook, agy's guard hooks).
-# Issue #31 (agy's probe-3 on PR #30): these must be protected BY DEFAULT,
+# These must be protected BY DEFAULT,
 # independent of orchestrator.yaml's protected_paths -- otherwise a missing
 # config entry (or an adversarial/malfunctioning agent editing
 # orchestrator.yaml first) leaves the config that wires a guard editable by
@@ -77,8 +77,8 @@ orc_get_scalar() {
 
 # orc_protected_paths -- prints one protected path per line, or nothing at
 # all if the config is missing, has no protected_paths key, or the key
-# parses to an empty list (ORC_DEFAULT_PROTECTED_PATHS is empty, issue #18
-# B-i -- see the header comment above).
+# parses to an empty list (ORC_DEFAULT_PROTECTED_PATHS is empty --
+# see the header comment above).
 orc_protected_paths() {
   local yaml
   yaml="$(orc_config_file)"
@@ -157,7 +157,7 @@ orc_get_role_model() {
 }
 
 # orc_get_role_effort <role> -- prints roles.<role>.effort. Same nested-
-# lookup shape as orc_get_role_model above (issue #116: orc_init_force's
+# lookup shape as orc_get_role_model above (orc_init_force's
 # bare --force needs to recover BOTH model and effort from an existing
 # orchestrator.yaml to resync via the same answers-file pipeline fresh
 # init uses).
@@ -193,7 +193,7 @@ orc_get_role_effort() {
 # orc_get_budget_pct <pool> -- prints budgets.<pool>.failsafe_pct. Supports
 # the block mapping style: `budgets:\n  <pool>:\n    failsafe_pct: X` -- same
 # nested-lookup shape as orc_get_role_model (roles.<role>.model) above.
-# issue #86: orc_get_scalar only reads TOP-LEVEL `key: value` lines, so it
+# orc_get_scalar only reads TOP-LEVEL `key: value` lines, so it
 # can't address a nested key like this directly; reuses that function's
 # proven indent-tracking awk technique rather than hand-rolling a second
 # yaml parser. Prints nothing if the file, the budgets: block, the pool, or
@@ -229,10 +229,10 @@ orc_get_budget_pct() {
 
 # orc_get_nested <section> <key> -- prints <section>.<key> from a two-level
 # block mapping (`section:\n  key: value`). Same indent-tracking awk shape
-# as orc_get_role_model/orc_get_budget_pct above, generalized for issue
-# #125's `dispatch:`/`watch:` config blocks. Prints nothing if the file,
+# as orc_get_role_model/orc_get_budget_pct above, generalized for the
+# `dispatch:`/`watch:` config blocks. Prints nothing if the file,
 # the section, or the key is missing -- callers must supply their own
-# fallback (per #86, every key read here ships with a live consumer).
+# fallback (every key read here ships with a live consumer).
 orc_get_nested() {
   local section="$1" key="$2"
   local yaml
@@ -262,11 +262,11 @@ orc_get_nested() {
 # project's control room runs under, from orchestrator.yaml's `project`
 # scalar (falling back to the given default, or "harness", if unset).
 #
-# issue #18 item 7 + issue #19: `orc up` and dispatch.sh/watch.sh's pane
+# `orc up` and dispatch.sh/watch.sh's pane
 # targeting both used to default to a hardcoded "harness" session name --
 # harmless with one project running, but with two clone-per-project
 # control rooms live at once, a hardcoded default nudges the WRONG
-# project's session (live-repro'd in issue #19: dispatch nudged a stale
+# project's session (live-repro'd: dispatch nudged a stale
 # `harness:0.1` pane instead of the actual project's session). Deriving
 # from THIS project's own orchestrator.yaml (the same file bin/orc and
 # dispatch.sh already resolve against) means every clone's session name is
@@ -276,7 +276,7 @@ orc_get_nested() {
 # in its own session:window.pane target syntax (a literal '.' or ':' in a
 # session name would make `$session:0.0`-style targets ambiguous).
 #
-# agy PR #133 round 1: sanitization widened from just '.'/':' to EVERY
+# Sanitization widened from just '.'/':' to EVERY
 # character outside [A-Za-z0-9_-]. The session name is interpolated into
 # dozens of tmux target strings and -- since the attach-snap hook -- into
 # a command string `/bin/sh` executes at hook-fire time: a space in the
