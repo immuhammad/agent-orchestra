@@ -1,6 +1,16 @@
 {
   "agy-guard": {
-    "PreInvocation": [
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "bash ../hooks/session-start.sh < /dev/null"
+      },
+      {
+        "type": "command",
+        "command": "bash ../hooks/pane-state.sh idle < /dev/null"
+      }
+    ],
+    "turn-start": [
       {
         "type": "command",
         "command": "bash ../hooks/pane-state.sh busy < /dev/null"
@@ -8,7 +18,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "*",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",

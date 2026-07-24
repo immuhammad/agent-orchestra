@@ -872,6 +872,25 @@ fi
 rm -rf "$PROJECT_A" "$PROJECT_B"
 
 
+echo "== issue #150: agy native hooks -- pane_is_idle trusts a fresh agy hook state over screen-scrape =="
+# Even if the screen renders "⣟ Working...", if agy fired a PostInvocation hook and wrote 'idle', it is idle.
+AGY_HOOK_TARGET="$TEST_SESSION:0.2"
+AGY_HOOK_PANE_ID="$(tmux display-message -p -t "$AGY_HOOK_TARGET" '#{pane_id}')"
+tmux send-keys -t "$AGY_HOOK_TARGET" "printf '⣟ Working...\n> \n'; sleep 30" Enter 2>&1
+sleep 2
+
+mkdir -p "$PANE_STATE_DIR"
+echo "idle $(date '+%s') sid-agy150" > "$PANE_STATE_DIR/$(pane_state_sanitize "$AGY_HOOK_PANE_ID")"
+
+if pane_is_idle "$AGY_HOOK_TARGET" "agy"; then
+  pass "issue #150: agy hook-based 'idle' overrides screen-scrape 'Working...'"
+else
+  fail "expected agy hook-based 'idle' to override 'Working...' screen-scrape"
+fi
+
+# Clean up
+rm -f "$PANE_STATE_DIR/$(pane_state_sanitize "$AGY_HOOK_PANE_ID")"
+tmux send-keys -t "$AGY_HOOK_TARGET" C-c 2>&1
 
 echo ""
 echo "$PASS passed, $FAIL failed"

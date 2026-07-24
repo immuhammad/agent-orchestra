@@ -100,13 +100,12 @@ if [ -f "$AGENTS_HOOKS_TEMPLATE" ]; then
     # E.g. "bash ../hooks/session-start.sh < /dev/null" -> "../hooks/session-start.sh"
     SCRIPT_PATH=$(echo "$cmd_str" | awk '{print $2}')
     if [[ "$SCRIPT_PATH" == "../"* ]]; then
-      # Strip the leading ../ and resolve it relative to REPO_ROOT
-      STRIPPED_PATH="${SCRIPT_PATH#../}"
-      RESOLVED_PATH="$REPO_ROOT/$STRIPPED_PATH"
+      # Resolve it relative to .agents (where agy executes from)
+      RESOLVED_PATH="$REPO_ROOT/.agents/$SCRIPT_PATH"
       if [ -f "$RESOLVED_PATH" ]; then
-        pass "path resolves correctly: $SCRIPT_PATH -> $STRIPPED_PATH"
+        pass "path resolves correctly relative to .agents: $SCRIPT_PATH"
       else
-        fail "path does NOT resolve: $SCRIPT_PATH (expected $RESOLVED_PATH)"
+        fail "path does NOT resolve relative to .agents: $SCRIPT_PATH (expected $RESOLVED_PATH)"
       fi
     else
       fail "expected script path to start with ../ (since agy runs from .agents), got: $cmd_str"
