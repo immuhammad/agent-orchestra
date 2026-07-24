@@ -26,9 +26,6 @@ nothing ran, not merging anything a human never gated. `orc` builds a tmux
 control room where every agent has a role, every claim needs evidence, and
 every action leaves a receipt on disk.
 
-Extracted from [career-ops-harness](https://github.com/immuhammad/career-ops-harness),
-where it started as the `.harness/` folder running the project it lived in.
-
 ## The room
 
 | Pane | Runs | Job |
@@ -63,6 +60,20 @@ where it started as the `.harness/` folder running the project it lived in.
 | **Context hygiene** | Ticket N+1 pays for (and is misled by) ticket N's residue | `dispatch.sh --fresh`: verify idle → `/clear` → confirm fresh session → only then deliver |
 | **Guards with teeth** | An agent editing its own rules | PreToolUse guards block banned commands; `orc-protect` makes kernel files OS-immutable (`chflags`/`chattr`); branch protection backstops the merge path |
 | **Laptop-aware watchdog** | False alarms after every suspend | Gap-aware staleness: a wall-clock jump in the watchdog's own tick grants grace instead of firing |
+
+## The hard parts
+
+The machinery that keeps a multi-agent room alive on a real laptop with real
+API quotas — the stuff that only exists because something actually broke:
+
+| Mechanism | What actually happens |
+|---|---|
+| **Quota failsafe** | The gatekeeper polls both model pools against per-lane budget thresholds. Crossing one raises a failsafe flag — and from that moment a PreToolUse gate refuses every tool call except a small allow-list that lets the session park honestly and report back. The gate **fails closed**: if it can't resolve the room to check state, it blocks rather than assumes. The watchdog itself is alert-only — it never kills an agent. |
+| **Auto-resume** | When the rate-limit window resets, parked work resumes itself — under policy: short-window crossings only (weekly-limit crossings always stop for the human), a hard cap per day, remaining quota re-verified before waking anything, and *only unblock what you parked* — a pane resumes only if it's still in exactly the hook-written state the watchdog left it in; if a human touched it or it moved on, auto-resume backs off. The state machine survives watchdog restarts. |
+| **Rate-limit forensics** | A session killed mid-task by a rate limit still leaves a trail: a StopFailure hook writes the resume note into the room state and marks the pane parked — so recovery starts from recorded truth even when the session never got to say goodbye. |
+| **Compaction checkpoints** | Long agent sessions eventually compact their context, which is lossy. A PreCompact hook pins the moment on disk — session, branch, dirty-tree state — so the session that continues afterwards reasons from a written checkpoint, not from nothing. |
+| **Session boot briefing** | Every pane session boots with the harness briefing injected: read the room state, the quota rule, the role's auto-use skills. One-shot headless spawns are deliberately exempted — a single-task agent gets minimal context, because a briefing about room state once talked one into aborting its own job. |
+| **Crash accountability** | The watchdog logs *why* it exited via an exit trap; its supervisor logs the exit status from outside (a SIGKILL can't be caught from within); and the liveness check watches the watchdog itself — gap-aware, so a suspend or rebuild doesn't trigger a false alarm. |
 
 ## The skill pack
 
