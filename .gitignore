@@ -19,7 +19,7 @@ watch-flagged-dead
 .agents/*
 .harness/*
 
-# per-project root files (issue #18 item 4) -- each project that adopts
+# per-project root files -- each project that adopts
 # this harness copies these from templates/ and customizes its own copy;
 # never tracked here (or in a consumer project). templates/*.md are the
 # tracked reference/seed.
