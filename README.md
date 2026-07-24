@@ -61,6 +61,26 @@ every action leaves a receipt on disk.
 | **Guards with teeth** | An agent editing its own rules | PreToolUse guards block banned commands; `orc-protect` makes kernel files OS-immutable (`chflags`/`chattr`); branch protection backstops the merge path |
 | **Laptop-aware watchdog** | False alarms after every suspend | Gap-aware staleness: a wall-clock jump in the watchdog's own tick grants grace instead of firing |
 
+## How agents remember
+
+Agents forget — sessions clear, contexts compact, quota kills processes
+mid-thought. The room is designed so that's fine: **any agent can lose its
+entire context at any moment and the room loses nothing**, because re-entry
+context is a written artifact, not chat history.
+
+| Layer | Lifetime | Job |
+|---|---|---|
+| `handoff.md` | Ephemeral — replaced each session, hard ≤80 lines | The room's current state: task, done, next, gotchas. Read first on every boot; a Stop hook refuses to let a session end without updating it |
+| `decisions.log` | Durable — append-only | Cross-session rulings that must survive any reset; history stays greppable forever |
+| The dispatch `.msg` | Per-task | Everything a fresh agent needs to start a ticket — the assignment *is* the context, which is why clearing a pane between tickets costs nothing |
+| `AGENTS.md` + `souls/` | Per-room, generated from templates | The constitution: roles, protocols, hard rules — one source of truth for every agent family — plus a per-role identity card |
+| `rules.md` | Per-room, append-only | Soft policy — norms appended as one-liners as the room learns, surfaced at session start |
+| Boot briefing + compaction checkpoints | Every session | Hooks re-inject the read-order on every start (including right after a context clear) and pin state to disk before lossy compaction |
+
+The result: context management stops being a prompt-engineering problem and
+becomes a filesystem convention — complex machinery, unfolded into files you
+can `cat`.
+
 ## The hard parts
 
 The machinery that keeps a multi-agent room alive on a real laptop with real
