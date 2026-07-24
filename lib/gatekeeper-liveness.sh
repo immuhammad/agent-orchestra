@@ -44,6 +44,33 @@ CHECK_INTERVAL="${GATEKEEPER_LIVENESS_INTERVAL:-60}"
 # 2x that plus slack tolerates one slow iteration (e.g. a slow curl to the
 # usage endpoint) without a false-positive warning.
 STALE_AFTER="${GATEKEEPER_LIVENESS_STALE_AFTER:-660}"
+# issue #155: a wall-clock GAP between this watchdog's own ticks (system
+# suspend, or the room/process itself just (re)started after downtime)
+# makes a HEALTHY gatekeeper.sh look dead -- this watchdog's own `sleep
+# $CHECK_INTERVAL` pauses across the exact same gap (confirmed live twice:
+# a suspend-during-sleep, and a fresh process's first tick reading a
+# pre-shutdown heartbeat), so the tick immediately following a detected gap
+# can't trust its own staleness reading. GAP_THRESHOLD is how large a jump
+# between ticks counts as "a gap happened" (2x CHECK_INTERVAL comfortably
+# clears ordinary scheduling jitter while catching a real multi-minute
+# freeze); GAP_GRACE is how long to withhold judgment afterward -- sized to
+# gatekeeper.sh's OWN loop period ($GATEKEEPER_INTERVAL, same env var it
+# reads, default 300s) because that's how long its own paused sleep may
+# still need to resume and write a fresh heartbeat post-gap (observed: an
+# 11-minute suspend needed ~5 more minutes post-wake before gatekeeper.sh's
+# heartbeat caught up). A tick with NO detected gap still alerts on the
+# very first stale reading, unchanged from before -- this only defers
+# judgment on the specific tick(s) a gap actually explains, so a genuinely
+# dead gatekeeper.sh (no suspend, no restart involved) is still caught
+# promptly.
+GAP_THRESHOLD="${GATEKEEPER_LIVENESS_GAP_THRESHOLD:-$((CHECK_INTERVAL * 2))}"
+GAP_GRACE="${GATEKEEPER_LIVENESS_GAP_GRACE:-${GATEKEEPER_INTERVAL:-300}}"
+# PREV_TICK_EPOCH empty -> "no prior tick in this process" -> the very
+# first tick always counts as a gap (issue #155 incident 1: a fresh
+# process/room-rebuild can't tell how long it was actually down before this
+# tick, so its first reading alone is never trusted).
+PREV_TICK_EPOCH=""
+GAP_GRACE_UNTIL=""
 # issue #19 follow-up: used to hardcode "harness:0.0" -- reuse
 # $DISPATCH_SESSION (already derived above via dispatch.sh's own
 # orc_session_name-based resolution, issue #18 item 7/#19) instead of
@@ -233,10 +260,32 @@ gkl_check_rate_limit_stuck() {
   done
 }
 
-liveness_main() {
-echo "Gatekeeper liveness watchdog active (stale after ${STALE_AFTER}s, target $TARGET)"
-while true; do
-  now=$(date +%s)
+# gkl_check_heartbeat_tick <now> -- one tick of the heartbeat-staleness
+# check, factored out of liveness_main's loop (issue #155) so it's callable
+# standalone (tests pass an explicit epoch instead of needing real sleeps).
+# Mutates the global PREV_TICK_EPOCH/GAP_GRACE_UNTIL/ALERTED state.
+gkl_check_heartbeat_tick() {
+  local now="$1" last_raw="" age is_gap=false
+
+  # issue #155: detect a wall-clock GAP since this watchdog's own previous
+  # tick -- either this is the process's first tick ever (PREV_TICK_EPOCH
+  # unset: a fresh start can't know how long it was actually down before
+  # now, incident 1), or the elapsed time since the last tick vastly
+  # exceeds CHECK_INTERVAL (this process itself was frozen -- e.g. system
+  # suspend paused its own `sleep`, incident 2). Either way, THIS tick's
+  # staleness reading can't be trusted alone.
+  if [ -z "$PREV_TICK_EPOCH" ]; then
+    is_gap=true
+  elif [ "$((now - PREV_TICK_EPOCH))" -ge "$GAP_THRESHOLD" ]; then
+    is_gap=true
+  fi
+  PREV_TICK_EPOCH="$now"
+
+  if [ "$is_gap" = true ]; then
+    GAP_GRACE_UNTIL=$((now + GAP_GRACE))
+    echo "$(date) - DEBUG: tick gap detected (>= ${GAP_THRESHOLD}s since the previous tick, or the watchdog's first tick) -- granting ${GAP_GRACE}s staleness grace before trusting this reading" >> "$LOG"
+  fi
+
   # Ahmad fold-in (caught LIVE: a false "no heartbeat for 1783784949s"
   # death alert fired while gatekeeper was alive and well). gatekeeper.sh
   # now writes the heartbeat atomically (temp+mv), but this reader must
@@ -249,34 +298,51 @@ while true; do
   # any real STALE_AFTER. Validate the read is actually numeric; if not,
   # skip this tick's staleness check entirely (no age computed, no
   # alert, no state change) rather than guessing.
-  last_raw=""
   [ -f "$HEARTBEAT" ] && last_raw="$(cat "$HEARTBEAT" 2>/dev/null)"
   case "$last_raw" in
     ''|*[!0-9]*)
       echo "$(date) - DEBUG: heartbeat file empty/non-numeric this tick ('${last_raw}') -- skipping staleness check rather than treating it as epoch 0" >> "$LOG"
-      ;;
-    *)
-      age=$((now - last_raw))
-      if [ "$age" -ge "$STALE_AFTER" ]; then
-        if [ "$ALERTED" = false ]; then
-          echo "$(date) - ALERT: gatekeeper heartbeat stale (${age}s, expected every ~${STALE_AFTER}s)" >> "$LOG"
-          # issue #24: this used to be a raw one-shot `send-keys` with text
-          # and C-m in the SAME burst -- exactly the pattern send-lib.sh's
-          # send_submit() exists to prevent (Claude Code's TUI drops an
-          # Enter that arrives in the same burst as pasted text), and it
-          # was also keystroke-only with no durable copy, so a busy or dead
-          # pane lost the alert entirely (the #105 lesson, missed on this
-          # one path). dispatch_main assign orchestra (already used above
-          # in gkl_check_rate_limit_stuck) gives both for free: a durable
-          # .msg is the guarantee, the nudge is only the doorbell.
-          dispatch_main assign orchestra "gatekeeper-stale-heartbeat" "gatekeeper watchdog: no heartbeat for ${age}s -- gatekeeper.sh may have died. Check pane 4." >/dev/null 2>&1
-          ALERTED=true
-        fi
-      else
-        ALERTED=false
-      fi
+      return
       ;;
   esac
+
+  age=$((now - last_raw))
+  if [ "$age" -lt "$STALE_AFTER" ]; then
+    ALERTED=false
+    GAP_GRACE_UNTIL=""
+    return
+  fi
+
+  # issue #155: stale, but if a gap was recently detected, withhold
+  # judgment until GAP_GRACE has actually elapsed -- gatekeeper.sh's own
+  # paused sleep needs roughly its own loop period to catch back up (both
+  # confirmed incidents self-healed inside this window).
+  if [ -n "$GAP_GRACE_UNTIL" ] && [ "$now" -lt "$GAP_GRACE_UNTIL" ]; then
+    echo "$(date) - DEBUG: heartbeat stale (${age}s) but still within post-gap grace -- deferring alert" >> "$LOG"
+    return
+  fi
+
+  if [ "$ALERTED" = false ]; then
+    echo "$(date) - ALERT: gatekeeper heartbeat stale (${age}s, expected every ~${STALE_AFTER}s)" >> "$LOG"
+    # issue #24: this used to be a raw one-shot `send-keys` with text
+    # and C-m in the SAME burst -- exactly the pattern send-lib.sh's
+    # send_submit() exists to prevent (Claude Code's TUI drops an
+    # Enter that arrives in the same burst as pasted text), and it
+    # was also keystroke-only with no durable copy, so a busy or dead
+    # pane lost the alert entirely (the #105 lesson, missed on this
+    # one path). dispatch_main assign orchestra (already used above
+    # in gkl_check_rate_limit_stuck) gives both for free: a durable
+    # .msg is the guarantee, the nudge is only the doorbell.
+    dispatch_main assign orchestra "gatekeeper-stale-heartbeat" "gatekeeper watchdog: no heartbeat for ${age}s -- gatekeeper.sh may have died. Check pane 4." >/dev/null 2>&1
+    ALERTED=true
+  fi
+}
+
+liveness_main() {
+echo "Gatekeeper liveness watchdog active (stale after ${STALE_AFTER}s, target $TARGET)"
+while true; do
+  now=$(date +%s)
+  gkl_check_heartbeat_tick "$now"
   if [ "$((now - RATELIMIT_LAST_CHECK_EPOCH))" -ge "$RATELIMIT_CHECK_INTERVAL" ]; then
     gkl_check_rate_limit_stuck
     RATELIMIT_LAST_CHECK_EPOCH="$now"
