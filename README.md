@@ -16,7 +16,13 @@ Just bash, tmux, git, and the agent CLIs you already have — organized like a r
 
 </div>
 
-<!-- demo GIF lands here: docs/demo.gif -->
+<div align="center">
+
+![The live room: builder working a ticket with parallel agents, reviewer posting an APPROVE, gatekeeper quota dashboard, merge-watch log](docs/demo.gif)
+
+*36 seconds of the real room, mid-work — recorded live, nothing staged.*
+
+</div>
 
 ---
 
