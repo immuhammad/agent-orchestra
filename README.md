@@ -16,7 +16,7 @@ Just bash, tmux, git, and the agent CLIs you already have — organized like a r
 
 </div>
 
-<!-- demo: docs/demo.gif — see docs/recording.md -->
+<!-- demo GIF lands here: docs/demo.gif -->
 
 ---
 
@@ -113,12 +113,12 @@ cross-family reviewer lane).
 This repo is developed inside the room it describes — one recent day's run,
 hands-off between human gates:
 
-| Issue | PR | What landed |
-|---|---|---|
-| #158 | #160 | Hardened hook-probe merge gate (boots a real reviewer session to verify hook wiring) |
-| #155 | #161 | Suspend-aware watchdog — gap-aware staleness, both real incidents reproduced red-first |
-| #116 | #162 | `orc init --force` — safe re-init with manifest-based drift backups |
-| #159 | #164 | Mechanical context hygiene — `dispatch.sh --fresh` with a race-proof ordering guarantee |
+| | What landed |
+|---|---|
+| [PR&nbsp;#160](https://github.com/immuhammad/agent-orchestra/pull/160) | Hardened hook-probe merge gate (boots a real reviewer session to verify hook wiring) |
+| [PR&nbsp;#161](https://github.com/immuhammad/agent-orchestra/pull/161) | Suspend-aware watchdog — gap-aware staleness, both real incidents reproduced red-first |
+| [PR&nbsp;#162](https://github.com/immuhammad/agent-orchestra/pull/162) | `orc init --force` — safe re-init with manifest-based drift backups |
+| [PR&nbsp;#164](https://github.com/immuhammad/agent-orchestra/pull/164) | Mechanical context hygiene — `dispatch.sh --fresh` with a race-proof ordering guarantee |
 
 Four tickets, plan → build → cross-family review → CI → gated merge —
 including one genuine security finding caught in review along the way.

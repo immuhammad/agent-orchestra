@@ -29,7 +29,7 @@ script (`orc-exec.sh`) to route commands through. This clone's own
    ```
    bin/orc init .
    ```
-   The interactive wizard (issue #5) asks for the project name,
+   The interactive wizard asks for the project name,
    integration branch, role→model assignments, budget failsafe
    percentages, gate approver, and protected paths, then writes
    everything: `orchestrator.yaml`, `AGENTS.md`, `CLAUDE.md`,
@@ -54,7 +54,7 @@ script (`orc-exec.sh`) to route commands through. This clone's own
    generated root files are **per-room** — customize your clone's copies
    freely; only `templates/` is tracked upstream.
 
-   Re-running later is safe (issue #116): plain `orc init` refuses
+   Re-running later is safe: plain `orc init` refuses
    loudly on an already-initialized room; `bin/orc init --force .`
    resyncs the templates-derived files against the current templates —
    hand-edited files are detected via the manifest and backed up loudly
