@@ -156,6 +156,40 @@ orc_get_role_model() {
   ' "$yaml"
 }
 
+# orc_get_role_effort <role> -- prints roles.<role>.effort. Same nested-
+# lookup shape as orc_get_role_model above (issue #116: orc_init_force's
+# bare --force needs to recover BOTH model and effort from an existing
+# orchestrator.yaml to resync via the same answers-file pipeline fresh
+# init uses).
+orc_get_role_effort() {
+  local role="$1"
+  local yaml
+  yaml="$(orc_config_file)"
+  [ -f "$yaml" ] || return 0
+
+  awk -v role_key="${role}:" '
+    /^roles:[[:space:]]*$/ { in_roles = 1; next }
+    in_roles && /^[^[:space:]]/ { in_roles = 0 }
+    in_roles {
+      trimmed = $0
+      gsub(/^[[:space:]]+/, "", trimmed)
+      if (trimmed == role_key) { in_role = 1; role_indent = length($0) - length(trimmed); next }
+      if (in_role) {
+        indent = length($0) - length(trimmed)
+        if (trimmed ~ /^[^[:space:]]/ && indent <= role_indent) { in_role = 0 }
+      }
+      if (in_role && trimmed ~ /^effort:/) {
+        line = trimmed
+        sub(/^effort:[[:space:]]*/, "", line)
+        gsub(/^"|"$/, "", line)
+        gsub(/^'"'"'|'"'"'$/, "", line)
+        print line
+        exit
+      }
+    }
+  ' "$yaml"
+}
+
 # orc_get_budget_pct <pool> -- prints budgets.<pool>.failsafe_pct. Supports
 # the block mapping style: `budgets:\n  <pool>:\n    failsafe_pct: X` -- same
 # nested-lookup shape as orc_get_role_model (roles.<role>.model) above.
