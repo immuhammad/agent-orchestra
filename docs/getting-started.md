@@ -25,46 +25,45 @@ script (`orc-exec.sh`) to route commands through. This clone's own
    (Bootstrapping a brand-new codebase instead of wrapping an existing
    one? `git init project/my-project` works the same way.)
 
-3. Copy the templates into THIS clone's own root:
+3. Onboard the room — one command:
    ```
-   cp templates/orchestrator.yaml .
-   cp templates/AGENTS.md .
-   cp templates/CLAUDE.md .
-   cp templates/GEMINI.md .
-   cp templates/handoff.md .harness/handoff.md
-   cp templates/review-protocol.md .
+   bin/orc init .
    ```
-   Edit `orchestrator.yaml` and `AGENTS.md` for this project (roles,
-   models, protected paths, integration branch); fill in `CLAUDE.md` and
-   `GEMINI.md`'s tool-specific notes. `AGENTS.md` stays the single source
-   of truth — the other two only add tool-specific lanes, never
-   contradict it. `orchestrator.yaml` at this clone's root is the marker
+   The interactive wizard asks for the project name,
+   integration branch, role→model assignments, budget failsafe
+   percentages, gate approver, and protected paths, then writes
+   everything: `orchestrator.yaml`, `AGENTS.md`, `CLAUDE.md`,
+   `GEMINI.md`, per-role `souls/` identity cards,
+   `.claude/settings.json` + `.agents/hooks.json` (hook wiring for both
+   agent families, pointing directly at this clone's own `hooks/`/`lib/`
+   — no wrapper layer), installs the skill pack into `.claude/skills/` +
+   `.agents/skills/`, records a sha256 manifest of every generated file
+   (`.harness/state/init-manifest`), and finishes by running the two
+   static verifiers (`lib/check-hook-wiring.sh`,
+   `bin/orc-install-skills --check`). Nothing is written unless
+   validation passes in full. Non-interactive:
+   `bin/orc init --answers answers.env .` — a flat KEY=value file (see
+   `orc_init_validate` in `bin/orc` for the accepted keys).
+
+   `AGENTS.md` stays the single source of truth — `CLAUDE.md` and
+   `GEMINI.md` only add tool-specific lanes, never contradict it.
+   `orchestrator.yaml` at this clone's root is also the marker
    `lib/harness-root.sh` walks up from cwd to find — every
    `orc`/`dispatch`/`gatekeeper` invocation needs it somewhere above
-   wherever it's run from (or set `ORC_PROJECT_ROOT` explicitly).
+   wherever it's run from (or set `ORC_PROJECT_ROOT` explicitly). The
+   generated root files are **per-room** — customize your clone's copies
+   freely; only `templates/` is tracked upstream.
 
-   `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and `review-protocol.md` are
-   **per-project root files** — each clone customizes its own copy, so
-   add all four to this clone's own `.gitignore` (they're not tracked in
-   agent-orchestra's own upstream repo either — only `templates/` is).
-   Automated generation of this whole layout (`orc init`) is tracked
-   separately (issue #5); for now, set it up by hand as above.
+   Re-running later is safe: plain `orc init` refuses
+   loudly on an already-initialized room; `bin/orc init --force .`
+   resyncs the templates-derived files against the current templates —
+   hand-edited files are detected via the manifest and backed up loudly
+   under `.harness/state/init-backups/` before being overwritten, and
+   live room state (`.harness/` inbox, decisions.log, handoff.md) is
+   never touched. `--force --answers FILE` does a full re-init including
+   `orchestrator.yaml`.
 
-4. Install the skill pack:
-   ```
-   bin/orc-install-skills .
-   ```
-   Installs into both `.claude/skills/` and `.agents/skills/`.
-
-5. Wire up hooks (Claude Code `settings.json`) pointing **directly** at
-   this clone's own `hooks/*.sh` / `lib/*.sh` — e.g.
-   `bash "$CLAUDE_PROJECT_DIR"/lib/guard.sh` (see this repo's own
-   `.claude/settings.json` for the exact shape to copy). No separate path
-   to another install and no wrapper script — `$CLAUDE_PROJECT_DIR` is
-   this clone's own root. See `templates/AGENTS.md`'s Handoff Protocol
-   section for what each hook does.
-
-6. `bin/orc up` builds the tmux control room from `orchestrator.yaml`,
+4. `bin/orc up` builds the tmux control room from `orchestrator.yaml`,
    targeting `project/<name>/` as the working tree. On a fresh room (no
    `.harness/merge-watch-state` yet) this also seeds that file with every
    currently-merged PR number (`lib/orc-seed-merge-watch.sh`), so
@@ -76,13 +75,16 @@ script (`orc-exec.sh`) to route commands through. This clone's own
 
 ## Layout
 
-- `bin/orc` — `orc up`, builds the tmux control room.
-- `bin/orc-install-skills [target_dir]` — dual-installs the skill pack.
+- `bin/orc` — `orc init` (onboarding wizard; `--force` re-init/resync)
+  and `orc up` (builds the tmux control room).
+- `bin/orc-install-skills [target_dir]` — dual-installs the skill pack
+  (also run for you by `orc init`; `--check` verifies an install).
 - `lib/` — everything else: dispatch, watch, gatekeeper, guards,
   worktree lifecycle, root-resolution, merge-watch seeding.
 - `hooks/` — Claude Code hook scripts (session-start, check-handoff,
   pre-compact-checkpoint, rate-limit-handoff).
-- `templates/` — copy these into this clone's own root (step 3 above).
+- `templates/` — the source `orc init` renders the room's root files
+  from (step 3 above).
 - `skills/` — source tree for the capped skill pack; `bin/orc-install-skills`
   installs from here.
 - `tests/` — `*.test.sh`, one per `lib`/`hooks` script. `bash tests/foo.test.sh`
