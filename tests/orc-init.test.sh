@@ -520,6 +520,80 @@ else
   fail "expected an empty github_repo line and a clean exit, got status=$STATUS_NOREPO: $(cat "$TARGET_NOREPO/orchestrator.yaml" 2>/dev/null)"
 fi
 
+echo "== issue #187 item 1: an unrecognized --* flag is rejected outright, not silently treated as the target dir =="
+ADOP_TYPO_PARENT="$TMP/adop-typo-parent"
+mkdir -p "$ADOP_TYPO_PARENT"
+OUT_ADOP_TYPO="$(cd "$ADOP_TYPO_PARENT" && bash "$ORC" init --adop 2>&1)"
+STATUS_ADOP_TYPO=$?
+if [ "$STATUS_ADOP_TYPO" -ne 0 ]; then
+  pass "'orc init --adop' (typo'd --adopt) exits non-zero"
+else
+  fail "'orc init --adop' should exit non-zero, got status=0: $OUT_ADOP_TYPO"
+fi
+if echo "$OUT_ADOP_TYPO" | grep -qi "unknown option: --adop"; then
+  pass "'orc init --adop' names the bad flag"
+else
+  fail "expected an 'unknown option: --adop' message, got: $OUT_ADOP_TYPO"
+fi
+if echo "$OUT_ADOP_TYPO" | grep -q "^usage:"; then
+  pass "'orc init --adop' prints a usage line"
+else
+  fail "expected a usage line on stderr, got: $OUT_ADOP_TYPO"
+fi
+if [ ! -e "$ADOP_TYPO_PARENT/--adop" ]; then
+  pass "no junk './--adop' directory was created (the live incident this fix closes)"
+else
+  fail "REGRESSION: a junk './--adop' directory was created: $(ls -la "$ADOP_TYPO_PARENT")"
+fi
+
+OUT_BOGUS="$(cd "$ADOP_TYPO_PARENT" && bash "$ORC" init --bogus 2>&1)"
+STATUS_BOGUS=$?
+if [ "$STATUS_BOGUS" -ne 0 ] && echo "$OUT_BOGUS" | grep -qi "unknown option: --bogus" && [ ! -e "$ADOP_TYPO_PARENT/--bogus" ]; then
+  pass "a generic unknown flag (--bogus) is also rejected, no junk dir"
+else
+  fail "expected --bogus rejected with no junk dir, got status=$STATUS_BOGUS: $OUT_BOGUS"
+fi
+
+echo "== issue #187 item 1: a leading-dash non-flag target is refused too (defense in depth), but a bare '-' target still works =="
+OUT_DASHX="$(cd "$ADOP_TYPO_PARENT" && bash "$ORC" init -x 2>&1)"
+if [ $? -ne 0 ] && [ ! -e "$ADOP_TYPO_PARENT/-x" ]; then
+  pass "a leading-dash target ('-x') is refused, no junk dir"
+else
+  fail "expected '-x' target refused with no junk dir: $OUT_DASHX"
+fi
+full_answers "$TMP/answers-dash-recheck.txt"
+OUT_DASH_STILL_OK="$(cd "$ADOP_TYPO_PARENT" && bash "$ORC" init --answers "$TMP/answers-dash-recheck.txt" - 2>&1)"
+if [ -f "$ADOP_TYPO_PARENT/-/orchestrator.yaml" ]; then
+  pass "a bare '-' target still works after the leading-dash rejection (not swallowed by the new guard)"
+else
+  fail "expected a literal '-' target dir to still work: $OUT_DASH_STILL_OK"
+fi
+
+echo "== issue #187 item 3: orc_init_default_github_repo accepts arbitrary SSH host aliases, keeps the owner/repo regex as the only gate =="
+HOST_ALIAS_DIR="$TMP/host-alias-fixture"
+mkdir -p "$HOST_ALIAS_DIR"
+git -C "$HOST_ALIAS_DIR" init -q
+
+check_derive() { # $1 = origin url, $2 = expected output (empty string means expect nothing)
+  git -C "$HOST_ALIAS_DIR" remote remove origin >/dev/null 2>&1 || true
+  git -C "$HOST_ALIAS_DIR" remote add origin "$1"
+  local got
+  got="$(bash -c "source '$DIR/../bin/orc'; orc_init_default_github_repo '$HOST_ALIAS_DIR'")"
+  if [ "$got" = "$2" ]; then
+    pass "derive('$1') = '$2'"
+  else
+    fail "derive('$1'): expected '$2', got '$got'"
+  fi
+}
+
+check_derive "git@work-alias:immuhammad/agent-orchestra.git" "immuhammad/agent-orchestra"
+check_derive "git@internal.git.example.com:some-owner/some-repo" "some-owner/some-repo"
+check_derive "ssh://git@work-alias/immuhammad/agent-orchestra.git" "immuhammad/agent-orchestra"
+check_derive "ssh://git@gitlab.example.org/some-owner/some-repo" "some-owner/some-repo"
+check_derive "https://github.com/https-owner/https-repo.git" "https-owner/https-repo"
+check_derive "not-a-real-url-at-all" ""
+check_derive "git@work-alias:owner/repo/extra-path-segment" ""
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

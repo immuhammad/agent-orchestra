@@ -939,6 +939,16 @@ orc_init_default_github_repo() {
     ssh://git@github.com/*) owner_repo="${url#ssh://git@github.com/}" ;;
     https://github.com/*) owner_repo="${url#https://github.com/}" ;;
     http://github.com/*) owner_repo="${url#http://github.com/}" ;;
+    # issue #187 item 3: an SSH host-alias origin (e.g. `~/.ssh/config`'s
+    # `Host work-github` pointing at github.com) never matches the
+    # github.com-only arms above -- it silently fell through to `return 0`
+    # (empty derivation) even though it's a perfectly good owner/repo URL.
+    # These two generic arms accept ANY host in the same two shapes
+    # (scp-like git@<host>:owner/repo and explicit ssh://git@<host>/owner/
+    # repo); the owner/repo regex below stays the ONLY validation gate --
+    # a hostile/malformed alias just produces empty output, same as today.
+    git@*:*) owner_repo="${url#git@*:}" ;;
+    ssh://git@*/*) owner_repo="${url#ssh://git@*/}" ;;
     *) return 0 ;;
   esac
   owner_repo="${owner_repo%.git}"
@@ -1596,6 +1606,29 @@ orc_init_adopt() {
       echo "BUDGET_AGY_PCT=80"
     } > "$derived"
   fi
+
+  # issue #187 item 2: a raw clone of agent-orchestra itself (cloned as
+  # someone else's starting point, not yet adopted) still carries the
+  # dogfood room's OWN project=agent-orchestra (and/or github_repo=
+  # immuhammad/agent-orchestra) identity in its existing orchestrator.yaml
+  # -- orc_init_answers_from_yaml above just read it back verbatim, and
+  # the "never rename an already-named room" rule further up (correct for
+  # a genuinely re-adopted room) must NOT extend to this un-adopted
+  # dogfood shape, or bare --adopt can never converge: the identity never
+  # actually changes, so the own-checkout guard keeps refusing forever
+  # after. Only the genuine dogfood room itself -- target's own basename
+  # literally "agent-orchestra" -- is exempt, the same self-consistency
+  # check the guard itself uses. Explicit --answers (merged in below)
+  # still wins over this, unchanged.
+  if [ "$(basename "$target")" != "agent-orchestra" ]; then
+    local derived_project derived_repo
+    derived_project="$(orc_init_read_answer "$derived" PROJECT)"
+    derived_repo="$(orc_init_read_answer "$derived" GITHUB_REPO)"
+    if [ "$derived_project" = "agent-orchestra" ] || [ "$derived_repo" = "immuhammad/agent-orchestra" ]; then
+      echo "PROJECT=$(basename "$target")" >> "$derived"
+    fi
+  fi
+
   # GITHUB_REPO always freshly derived (appended LAST -- later duplicate
   # key wins), overriding whatever orc_init_answers_from_yaml may have
   # reconstructed from a possibly-stale existing orchestrator.yaml.
@@ -1648,8 +1681,13 @@ orc_init_adopt() {
   # raw, un-re-pointed clone of the harness's OWN repo is exactly
   # scenario (b) this function exists for -- print the recommendation,
   # never touch git config ourselves.
-  if [ "$repo" = "immuhammad/agent-orchestra" ]; then
-    echo "orc init --adopt: origin still points at immuhammad/agent-orchestra -- re-point it to your own repo (git remote set-url origin <your-url>) or clear it (git remote remove origin) once you've adopted this checkout." >&2
+  # issue #187 item 3: tail-only comparison so this still fires for a
+  # fork under a DIFFERENT owner (someone-else/agent-orchestra) and for
+  # every alias-host URL shape the case statement above now accepts --
+  # not just an exact immuhammad/agent-orchestra match.
+  local repo_tail="${repo##*/}"
+  if [ "$repo_tail" = "agent-orchestra" ]; then
+    echo "orc init --adopt: origin still points at $repo -- re-point it to your own repo (git remote set-url origin <your-url>) or clear it (git remote remove origin) once you've adopted this checkout." >&2
   fi
 
   echo "orc init --adopt: adopted $target as project '$project'"
@@ -1721,7 +1759,28 @@ orc_init_interactive() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   case "${1:-}" in
     up) orc_up ;;
-    rehydrate) orc_rehydrate "${2:-$PWD}" ;;
+    rehydrate)
+      rehydrate_target="${2:-$PWD}"
+      # issue #187 item 1: same leading-dash-becomes-target defect class
+      # as init's positional target below -- a typo'd/unknown option here
+      # (e.g. `orc rehydrate --typo`) has no flag loop to catch it and
+      # would otherwise be handed straight to orc_rehydrate as a literal
+      # target directory.
+      # A bare single "-" is a legitimate (if unusual) literal target
+      # directory name -- orc_init_core's own "./" normalization already
+      # defeats bash cd's special-case "-" == $OLDPWD meaning (agy
+      # finding 1, tests/orc-init.test.sh), so only reject dash-prefixed
+      # strings with at least one MORE character ("-x", "--foo", ...),
+      # not "-" alone.
+      case "$rehydrate_target" in
+        -?*)
+          echo "orc: unknown option/target for rehydrate: $rehydrate_target" >&2
+          echo "usage: orc.sh rehydrate [target_dir]" >&2
+          exit 1
+          ;;
+      esac
+      orc_rehydrate "$rehydrate_target"
+      ;;
     init)
       shift
       force=0
@@ -1735,7 +1794,29 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
           --adopt) adopt=1; shift ;;
           --answers) answers="$2"; shift 2 ;;
           --consumer-dir) consumer_dir="$2"; shift 2 ;;
-          *) target="$1"; shift ;;
+          *)
+            # issue #187 item 1: an unrecognized `--*` flag (e.g. the
+            # `--adop` typo that built a junk `./--adop/` room live) fell
+            # through to here and was silently taken as the target dir.
+            # Reject any leading-dash token outright instead -- covers
+            # both an unknown long flag and a non-flag argument that
+            # merely starts with `-` (defense in depth for future parser
+            # edits, per the Gate-1 plan). EXCEPT a bare single "-":
+            # that's a legitimate literal target dir name, deliberately
+            # supported (agy finding 1, tests/orc-init.test.sh's "target
+            # '-' does not silently redirect writes to $OLDPWD" case) --
+            # only reject dash-prefixed strings with at least one MORE
+            # character ("-x", "--foo", ...), not "-" by itself.
+            case "$1" in
+              -?*)
+                echo "orc init: unknown option: $1" >&2
+                echo "usage: orc.sh init [--force|--adopt] [--answers <file>] [--consumer-dir <path>] [target_dir]" >&2
+                exit 1
+                ;;
+            esac
+            target="$1"
+            shift
+            ;;
         esac
       done
       target="${target:-$PWD}"
