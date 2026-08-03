@@ -453,7 +453,7 @@ orc_init_render_agents_md() {
   local answers_file="$1" src="$2" dest="$3"
   local orchestra_model orchestra_fb implementer_model implementer_fb
   local tester_model tester_fb reviewer_tool reviewer_fb scribe_model scribe_fb
-  local tracker in_blockquote=0 line
+  local tracker in_blockquote=0 in_roles=0 line
 
   # Tickets-location/human-gates answers shape
   # GENERATED AGENTS.md PROSE only, never new orchestrator.yaml keys --
@@ -490,6 +490,17 @@ orc_init_render_agents_md() {
     if [ "$in_blockquote" -eq 1 ]; then
       continue
     fi
+    # Section-state gate: the five role-row rewrites below must only
+    # fire inside the Roles & Model Lanes table -- the Skills table
+    # further down has its own `| Reviewer  | ...` / `| Orchestra | ...`
+    # rows that share the same leading-name prefix and were getting
+    # clobbered by a bare prefix match anywhere in the file (#171/#175).
+    # Anchored on the full heading text, reset on the NEXT `## ` heading
+    # (whatever it is), so any future section is protected the same way.
+    case "$line" in
+      '## Roles & Model Lanes') in_roles=1 ;;
+      '## '*) in_roles=0 ;;
+    esac
     case "$line" in
       '1. PICK: Orchestra picks the next issue from the current milestone.')
         if [ "$tracker" = "gh-issues" ] || [ -z "$tracker" ]; then
@@ -498,11 +509,21 @@ orc_init_render_agents_md() {
           printf '1. PICK: Orchestra picks the next ticket from the current milestone (tracked in %s, not GitHub issues).\n' "$tracker" >> "$dest"
         fi
         ;;
-      '| Orchestra '*)   printf '| Orchestra   | %s | High    | %s |\n' "$orchestra_model" "$orchestra_fb" >> "$dest" ;;
-      '| Implementer '*) printf '| Implementer | %s | Default | %s |\n' "$implementer_model" "$implementer_fb" >> "$dest" ;;
-      '| Tester '*)      printf '| Tester      | %s | Default | %s |\n' "$tester_model" "$tester_fb" >> "$dest" ;;
-      '| Reviewer '*)    printf '| Reviewer    | %s | High    | %s |\n' "$reviewer_tool" "$reviewer_fb" >> "$dest" ;;
-      '| Scribe '*)      printf '| Scribe      | %s | Low     | %s |\n' "$scribe_model" "$scribe_fb" >> "$dest" ;;
+      '| Orchestra '*)
+        if [ "$in_roles" -eq 1 ]; then printf '| Orchestra   | %s | High    | %s |\n' "$orchestra_model" "$orchestra_fb" >> "$dest"; else echo "$line" >> "$dest"; fi
+        ;;
+      '| Implementer '*)
+        if [ "$in_roles" -eq 1 ]; then printf '| Implementer | %s | Default | %s |\n' "$implementer_model" "$implementer_fb" >> "$dest"; else echo "$line" >> "$dest"; fi
+        ;;
+      '| Tester '*)
+        if [ "$in_roles" -eq 1 ]; then printf '| Tester      | %s | Default | %s |\n' "$tester_model" "$tester_fb" >> "$dest"; else echo "$line" >> "$dest"; fi
+        ;;
+      '| Reviewer '*)
+        if [ "$in_roles" -eq 1 ]; then printf '| Reviewer    | %s | High    | %s |\n' "$reviewer_tool" "$reviewer_fb" >> "$dest"; else echo "$line" >> "$dest"; fi
+        ;;
+      '| Scribe '*)
+        if [ "$in_roles" -eq 1 ]; then printf '| Scribe      | %s | Low     | %s |\n' "$scribe_model" "$scribe_fb" >> "$dest"; else echo "$line" >> "$dest"; fi
+        ;;
       *) echo "$line" >> "$dest" ;;
     esac
   done < "$src"

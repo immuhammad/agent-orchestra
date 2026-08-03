@@ -160,6 +160,55 @@ else
   pass "AGENTS.md's install blockquote was stripped"
 fi
 
+check_agents_md_section_gate() { # $1 = path to a rendered AGENTS.md
+  local f="$1" ok=1
+  # #171/#175 regression: the Roles-row rewrite used to match its five
+  # '| <Role> '* prefixes ANYWHERE in the file, clobbering the Skills
+  # table's own Reviewer/Orchestra rows (which share the same leading
+  # name). Assert the Skills rows survive byte-identical...
+  if ! grep -qF '| Reviewer  | REVIEW                                | code-review (applies `review-protocol.md`) |' "$f"; then
+    fail "Skills table's Reviewer row was clobbered in $f: $(grep -E '^\| Reviewer' "$f")"
+    ok=0
+  fi
+  if ! grep -qF '| Orchestra | PICK/PLAN                             | brainstorming, writing-plans |' "$f"; then
+    fail "Skills table's Orchestra row was clobbered in $f: $(grep -E '^\| Orchestra' "$f")"
+    ok=0
+  fi
+  # ...while the Roles table rows ARE substituted, no placeholder left...
+  if grep -q '<model>\|<cross-family tool>\|<fallback>' "$f"; then
+    fail "an unsubstituted Roles-table placeholder remains in $f"
+    ok=0
+  fi
+  # ...and no Roles-shaped row leaked OUTSIDE the Roles table (the
+  # regression's exact shape: a second '| Reviewer    | ...' / '| Orchestra   | ...' row appearing where the Skills table's rows should be).
+  if [ "$(grep -cF '| Reviewer    | ' "$f")" -ne 1 ] || [ "$(grep -cF '| Orchestra   | ' "$f")" -ne 1 ]; then
+    fail "expected exactly one Roles-shaped Reviewer/Orchestra row each in $f, got reviewer=$(grep -cF '| Reviewer    | ' "$f") orchestra=$(grep -cF '| Orchestra   | ' "$f")"
+    ok=0
+  fi
+  [ "$ok" -eq 1 ]
+}
+
+echo "== #175 regression: Skills table rows survive the Roles-row rewrite untouched, section-gated =="
+if check_agents_md_section_gate "$TARGET1/AGENTS.md"; then
+  pass "Skills table rows byte-identical, Roles table fully substituted, no cross-section leakage (fresh init)"
+else
+  fail "AGENTS.md section-gating regression on fresh init (see FAIL detail above)"
+fi
+
+echo "== #175 regression, same assertions through 'orc init --force' resync =="
+FORCE_OUT="$(bash "$ORC" init --force "$TARGET1" 2>&1)"
+FORCE_STATUS=$?
+if [ "$FORCE_STATUS" -eq 0 ]; then
+  pass "orc init --force resync exits 0 on the already-initialized room"
+else
+  fail "orc init --force should exit 0, got status=$FORCE_STATUS: $FORCE_OUT"
+fi
+if check_agents_md_section_gate "$TARGET1/AGENTS.md"; then
+  pass "Skills table rows byte-identical, Roles table fully substituted, no cross-section leakage (--force resync)"
+else
+  fail "AGENTS.md section-gating regression survives an --force resync (see FAIL detail above)"
+fi
+
 echo "== CLAUDE.md / GEMINI.md substitute <PROJECT> and strip the blockquote =="
 if grep -q 'smoke-test-project' "$TARGET1/CLAUDE.md" && ! grep -q '<PROJECT>' "$TARGET1/CLAUDE.md" \
   && ! head -3 "$TARGET1/CLAUDE.md" | grep -q '^>'; then
