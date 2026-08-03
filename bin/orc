@@ -594,6 +594,13 @@ _orc_rehydrate_file() {
   local relpath="$1" target="$2" rev="${3:-}"
   local abspath="$target/$relpath"
 
+  # Fast-path/early message only -- NOT the enforcement point (agy review
+  # round 1, PR #186: a bare `[ -e ]` check here, followed later by a
+  # plain `git show ... > "$abspath"` redirect, is a TOCTOU -- bash's `>`
+  # redirection doesn't respect O_EXCL, so a file created at $abspath in
+  # the gap between this check and that write would be silently
+  # clobbered, violating the whole refuse-if-exists security property).
+  # The real enforcement is the atomic `ln` below.
   if [ -e "$abspath" ]; then
     echo "orc rehydrate: $relpath already present -- left untouched" >&2
     return 1
@@ -607,13 +614,41 @@ _orc_rehydrate_file() {
   fi
 
   mkdir -p "$(dirname "$abspath")"
-  if ! git -C "$target" show "$rev:$relpath" > "$abspath" 2>/dev/null; then
-    rm -f "$abspath"
+  local tmpfile
+  tmpfile="$(mktemp "$(dirname "$abspath")/.rehydrate.XXXXXX" 2>/dev/null)" || {
+    echo "orc rehydrate: failed to create a scratch file to restore $relpath into" >&2
+    return 2
+  }
+  if ! git -C "$target" show "$rev:$relpath" > "$tmpfile" 2>/dev/null; then
+    rm -f "$tmpfile"
     echo "orc rehydrate: failed to read $relpath from $rev" >&2
     return 2
   fi
-  echo "orc rehydrate: restored $relpath from $rev (last tracked revision)" >&2
-  return 0
+
+  # Atomic create-if-absent: `ln` (hard link, same directory as $abspath
+  # so always same filesystem) fails with EEXIST -- and does NOT touch
+  # $abspath's existing content at all -- if anything landed there since
+  # the check above. Deliberately not `mv -n`: this exact codebase has a
+  # confirmed live incident (issue #90) where `mv -n` exits 0 on macOS
+  # even when it silently refused to overwrite -- not trustworthy as the
+  # actual enforcement point for a security property. On failure, re-
+  # check reality rather than assuming WHY it failed: an unrelated
+  # failure (no hardlink support, permissions, disk full) must not be
+  # misreported as "already present".
+  local ln_err ln_status
+  ln_err="$(ln "$tmpfile" "$abspath" 2>&1)"
+  ln_status=$?
+  rm -f "$tmpfile"
+  if [ "$ln_status" -eq 0 ]; then
+    echo "orc rehydrate: restored $relpath from $rev (last tracked revision)" >&2
+    return 0
+  fi
+  if [ -e "$abspath" ]; then
+    echo "orc rehydrate: $relpath already present -- left untouched" >&2
+    return 1
+  fi
+  echo "orc rehydrate: failed to write $relpath: $ln_err" >&2
+  return 2
 }
 
 # orc_rehydrate [target_dir] -- see the block comment above. Exit status

@@ -111,6 +111,34 @@ else
 fi
 echo "$OUT" | grep -q 'already present' && pass "prints an explicit 'already present' notice rather than silently no-op'ing" || fail "expected an 'already present' message, got: $OUT"
 
+echo "== TOCTOU regression (agy review round 1, PR #186): concurrent rehydrate attempts on the SAME target never produce a corrupted/partial file =="
+# Real OS-level concurrency, not a sequential simulation -- the original
+# bug was `git show ... > "$abspath"` (a bash redirect, no O_EXCL) after
+# a separate `[ -e ]` check; under genuine concurrent writers to the same
+# destination that pattern can truncate/interleave. The fix moved
+# enforcement to an atomic `ln` (hard link, fails whole with EEXIST,
+# never partially visible). This asserts the INVARIANT the fix
+# guarantees -- final content is always complete and byte-identical,
+# never truncated/corrupted -- not which attempt happens to "win".
+RACE="$(mk_pre_migration_repo)"
+cp "$RACE/orchestrator.yaml" "$TMP/race-orig-orchestrator.yaml"
+rm -f "$RACE/orchestrator.yaml"
+for i in 1 2 3 4 5 6 7 8; do
+  bash "$ORC" rehydrate "$RACE" > "$TMP/race-$i.out" 2>&1 &
+done
+wait
+if [ -f "$RACE/orchestrator.yaml" ] && diff -q "$TMP/race-orig-orchestrator.yaml" "$RACE/orchestrator.yaml" >/dev/null 2>&1; then
+  pass "8 concurrent rehydrate attempts on the same target converge on byte-identical content, never a truncated/corrupted file"
+else
+  fail "SECURITY REGRESSION: concurrent rehydrate attempts produced a missing or corrupted orchestrator.yaml"
+fi
+RESTORED_COUNT="$(grep -l 'restored orchestrator.yaml' "$TMP"/race-*.out 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$RESTORED_COUNT" -ge 1 ]; then
+  pass "at least one concurrent attempt reports the actual restore (sanity: something really wrote it)"
+else
+  fail "expected at least one concurrent attempt to report a restore, got none across: $(cat "$TMP"/race-*.out)"
+fi
+
 echo "== idempotent: a second rehydrate run after a real restore is a clean no-op =="
 IDEMP="$(mk_pre_migration_repo)"
 rm -f "$IDEMP/orchestrator.yaml"
