@@ -30,7 +30,7 @@ INPUT=$(cat)
 # (Claude Code always sets it for the session). The message is specific
 # enough to diagnose (not a silent brick) if it does fire.
 CANON_DIR="$(qsg_resolve_canon_dir)" || {
-  echo "quota-stop-gate.sh: gate cannot verify quota state -- project root unresolvable via \$CLAUDE_PROJECT_DIR or \$PWD ancestor walk-up (no orchestrator.yaml found). Failing CLOSED per AGENTS.md Quota Failsafe: an enforcement gate that can't check state must not silently allow. Set CLAUDE_PROJECT_DIR or run from inside a project with orchestrator.yaml." >&2
+  echo "quota-stop-gate.sh: gate cannot verify quota state -- project root unresolvable via \$CLAUDE_PROJECT_DIR or \$PWD ancestor walk-up (no orchestrator.yaml found). Failing CLOSED per AGENTS.md Quota Failsafe: an enforcement gate that can't check state must not silently allow. Set CLAUDE_PROJECT_DIR or run from inside a project with orchestrator.yaml.$(qsg_deleted_marker_hint)" >&2
   exit 2
 }
 FLAG_PATH="$CANON_DIR/state/quota-stop"

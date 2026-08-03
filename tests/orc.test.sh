@@ -967,6 +967,66 @@ fi
 tmux kill-session -t "orctest-rbclean-$$" 2>/dev/null || true
 rm -rf "$RB_CLEAN_TMP"
 
+echo "== orc_build_session: auto-rehydrates a missing orchestrator.yaml from git history BEFORE the own-checkout guard (issue #185) =="
+# A real git repo whose HEAD tree still has orchestrator.yaml (tracked,
+# never committed as removed) but whose WORKING TREE copy is gone -- the
+# same missing-on-disk-but-history-has-it shape a puller of the #171
+# untracking migration hits (tests/orc-rehydrate.test.sh covers the full
+# git-pull mechanics in depth; this is the orc_build_session WIRING
+# check: does startup actually call rehydrate, and early enough that the
+# own-checkout guard below it can still read the config).
+REHYD_TMP="$(mktemp -d)"
+git init -q "$REHYD_TMP"
+git -C "$REHYD_TMP" config user.email t@t.local
+git -C "$REHYD_TMP" config user.name t
+cat > "$REHYD_TMP/orchestrator.yaml" <<'EOF'
+project: rehydrate-test
+integration_branch: uat
+EOF
+git -C "$REHYD_TMP" checkout -q -b uat
+git -C "$REHYD_TMP" add orchestrator.yaml
+git -C "$REHYD_TMP" commit -q -m init
+rm -f "$REHYD_TMP/orchestrator.yaml"
+
+REHYD_SESSION="orctest-rehyd-$$"
+(
+  cd "$REHYD_TMP"
+  ORC_SESSION="$REHYD_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$REHYD_TMP/build.err"
+)
+if [ -f "$REHYD_TMP/orchestrator.yaml" ]; then
+  pass "orc_build_session auto-rehydrated the missing orchestrator.yaml from git history"
+else
+  fail "orc_build_session should have restored orchestrator.yaml before continuing, still missing"
+fi
+grep -qi 'auto-rehydrating' "$REHYD_TMP/build.err" && pass "auto-rehydrate prints a one-line notice before startup continues" || fail "expected an auto-rehydrate notice in build.err, got: $(cat "$REHYD_TMP/build.err")"
+grep -q 'project=rehydrate-test' "$REHYD_TMP/build.err" && pass "session build continues normally after rehydrate (reads the restored project name)" || fail "session build should read the restored project name after rehydrate, got: $(cat "$REHYD_TMP/build.err")"
+tmux kill-session -t "$REHYD_SESSION" 2>/dev/null || true
+rm -rf "$REHYD_TMP"
+
+echo "== orc_build_session: a genuinely fresh room (orchestrator.yaml never tracked) gets NO rehydrate notice -- different, non-error case =="
+FRESH_TMP="$(mktemp -d)"
+git init -q "$FRESH_TMP"
+git -C "$FRESH_TMP" config user.email t@t.local
+git -C "$FRESH_TMP" config user.name t
+touch "$FRESH_TMP/.gitkeep"
+git -C "$FRESH_TMP" add .gitkeep
+git -C "$FRESH_TMP" checkout -q -b uat
+git -C "$FRESH_TMP" commit -q -m init
+FRESH_SESSION="orctest-fresh-$$"
+(
+  cd "$FRESH_TMP"
+  ORC_SESSION="$FRESH_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 ORC_SKIP_HOOK_WIRING_CHECK=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$FRESH_TMP/build.err"
+)
+if grep -qi 'auto-rehydrating' "$FRESH_TMP/build.err"; then
+  fail "a never-tracked orchestrator.yaml should not trigger the rehydrate notice: $(cat "$FRESH_TMP/build.err")"
+else
+  pass "a genuinely fresh room (no tracked history) gets no rehydrate notice"
+fi
+tmux kill-session -t "$FRESH_SESSION" 2>/dev/null || true
+rm -rf "$FRESH_TMP"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -19,7 +19,7 @@ source "$DIR/room-branch-lib.sh"
 INPUT=$(cat)
 
 CANON_DIR="$(qsg_resolve_canon_dir)" || {
-  MSG="room-branch-gate: gate cannot verify room-branch state -- project root unresolvable. Failing CLOSED."
+  MSG="room-branch-gate: gate cannot verify room-branch state -- project root unresolvable. Failing CLOSED.$(qsg_deleted_marker_hint)"
   echo "{\"decision\":\"deny\", \"reason\":$(jq -Rn --arg m "$MSG" '$m')}"
   exit 0
 }
