@@ -246,6 +246,99 @@ qsg_command_allowed() {
   return 0
 }
 
+# qsg_write_intent_allowed <input_json> <canon_dir> -- write-intent gate
+# entry point (issue #172). Handles BOTH shapes a write-intent tool call
+# carries a target path in: the single top-level tool_input.file_path
+# (every built-in Write/Edit/NotebookEdit call, and any single-path MCP
+# write tool), and woz Edit's BATCHED tool_input.edits[] array (each entry
+# its own file_path, no top-level file_path at all). Deadlock this closes:
+# the allow-list already let a gated agent Write handoff.md via the host
+# Edit tool, but woz's Edit tool never populates tool_input.file_path --
+# every one of its calls fell through to the catch-all deny regardless of
+# target, the exact same class of deadlock the 2026-07-12 Read fix closed
+# for a different tool shape.
+#
+# When edits[] is present (length > 0), EVERY entry's file_path must
+# individually pass qsg_path_allowed -- one disallowed path anywhere in
+# the batch denies the WHOLE call (no ride-along: a batch mixing an
+# allowed handoff.md edit with a disallowed src/app.py edit must not let
+# the disallowed one slip through under cover of the allowed one). An
+# empty edits[] (or one whose entries carry no resolvable file_path) also
+# denies -- same posture as today's empty top-level FILE_PATH -- rather
+# than silently falling through to a stale top_path check.
+qsg_write_intent_allowed() {
+  local input="$1" canon_dir="$2" edits_len path top_path
+  # `type == "array"` gate BEFORE `length` (agy REQUEST-CHANGES, PR #181):
+  # jq's `length` is polymorphic -- `"bypass" | length` is 6, not an error,
+  # so a tool_input.edits that's a STRING (not an array) used to satisfy
+  # `-gt 0` and enter the batch branch below. The subsequent `jq -r
+  # '.tool_input.edits[]...'` then fails outright on a non-iterable
+  # ("Cannot iterate over string"), producing NO output at all -- the
+  # `while read` loop runs zero iterations (not even one denying blank
+  # line) and falls straight through to `return 0`, WITHOUT ever
+  # consulting top_path. A single crafted call
+  # ({"tool_input":{"file_path":"src/app.py","edits":"bypass"}}) bypassed
+  # the gate entirely. Forcing non-arrays to 0 here routes that shape to
+  # the top_path fallback below instead, where it's judged like any
+  # ordinary single-path write.
+  edits_len="$(echo "$input" | jq '(.tool_input.edits // []) | if type == "array" then length else 0 end' 2>/dev/null)"
+  case "$edits_len" in ''|*[!0-9]*) edits_len=0 ;; esac
+  if [ "$edits_len" -gt 0 ]; then
+    # NOT `.file_path // empty` -- jq's `empty` filter for a missing/null
+    # entry produces NO output line at all (not even a blank one), so an
+    # edits[] entry with no file_path would silently vanish from this
+    # loop instead of tripping the `[ -z ]` check below -- found live via
+    # this function's own denied-batch test. `if type=="string" then . else
+    # "" end` guarantees exactly one line per array entry, blank for a
+    # missing/null one, so the entry count and the line count never drift.
+    while IFS= read -r path; do
+      [ -z "$path" ] && return 1
+      qsg_path_allowed "$path" "$canon_dir" || return 1
+    done < <(echo "$input" | jq -r '.tool_input.edits[].file_path | if type == "string" then . else "" end')
+    return 0
+  fi
+  top_path="$(echo "$input" | jq -r '.tool_input.file_path // empty')"
+  [ -n "$top_path" ] && qsg_path_allowed "$top_path" "$canon_dir"
+}
+
+# qsg_read_intent_allowed <input_json> <canon_dir> -- read-intent
+# counterpart to qsg_write_intent_allowed above, for the same reason: woz
+# Search never populates tool_input.file_path either, carrying its
+# targets in tool_input.file_glob_patterns[] instead. Each entry is
+# stripped of any trailing "#line-range" suffix (Search's own
+# path#16-27-style slicing syntax -- not part of the actual file path)
+# before the qsg_read_allowed check; a glob/wildcard pattern that can't
+# resolve to one of the fixed allow-listed literal paths (handoff.md,
+# decisions.log, an inbox .msg/.ack, the flag itself) is denied exactly
+# like any other non-allow-listed Read target -- this function never
+# expands a glob against the filesystem, it only pattern-matches the
+# literal string, so a wildcard pattern is safe-by-default (denied) unless
+# it happens to BE one of the exact allowed paths.
+qsg_read_intent_allowed() {
+  local input="$1" canon_dir="$2" patterns_len pattern stripped top_path
+  # Same type-confusion bypass as qsg_write_intent_allowed's edits[] check
+  # above (agy REQUEST-CHANGES, PR #181) applies identically to
+  # file_glob_patterns -- a non-array value satisfies `length -gt 0` but
+  # then fails jq iteration silently, skipping the whole while loop and
+  # falling through to `return 0` unchecked. Same fix: force non-arrays
+  # to 0 so they route to the top_path fallback instead.
+  patterns_len="$(echo "$input" | jq '(.tool_input.file_glob_patterns // []) | if type == "array" then length else 0 end' 2>/dev/null)"
+  case "$patterns_len" in ''|*[!0-9]*) patterns_len=0 ;; esac
+  if [ "$patterns_len" -gt 0 ]; then
+    # Same one-line-per-entry guarantee as qsg_write_intent_allowed above,
+    # and for the same reason -- see its comment.
+    while IFS= read -r pattern; do
+      [ -z "$pattern" ] && return 1
+      stripped="${pattern%%#*}"
+      [ -z "$stripped" ] && return 1
+      qsg_read_allowed "$stripped" "$canon_dir" || return 1
+    done < <(echo "$input" | jq -r '.tool_input.file_glob_patterns[] | if type == "string" then . else "" end')
+    return 0
+  fi
+  top_path="$(echo "$input" | jq -r '.tool_input.file_path // empty')"
+  [ -n "$top_path" ] && qsg_read_allowed "$top_path" "$canon_dir"
+}
+
 # qsg_failsafe_message <flag_path> -- echoes AGENTS.md's Quota Failsafe
 # question, verbatim, filled from the flag written by
 # ar_write_quota_stop_flag (lib/auto-resume.sh). Keep the (a)/(b)/(c)

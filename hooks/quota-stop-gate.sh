@@ -38,26 +38,57 @@ FLAG_PATH="$CANON_DIR/state/quota-stop"
 [ -f "$FLAG_PATH" ] || exit 0
 
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
+# Intent normalization BEFORE dispatch (issue #172): an MCP tool that
+# performs the same write/read operation as a built-in (woz's Edit/Search,
+# or any other tool whose name ends in __Edit/__Write/__Read/__Search/
+# __Grep/__Glob) is judged on WHAT IT DOES, not on matching a literal
+# built-in name. The original allow-list only recognized the four
+# built-in names (Write/Edit/Read/Bash) -- an MCP write/read tool fell
+# through to the same catch-all deny as a genuinely random tool, even when
+# its target path was itself allow-listed (this deadlocked the exact same
+# "gated agent must be able to write handoff.md" case the 2026-07-12 Read
+# fix already closed, just via woz's MCP Edit instead of the host Edit).
+# FAIL CLOSED is preserved at two layers: (1) only a name matching one of
+# these specific exact/suffix patterns gets an intent at all -- anything
+# else (a hostile name like mcp__evil__NotAnEdit_Write does NOT match
+# *__Write as a whole-name suffix -- it ends "_Write", one underscore, not
+# the required "__Write", two) still falls through every case below to
+# the deny at the bottom; (2) even a name that DID over-match still only
+# reaches qsg_write_intent_allowed/qsg_read_intent_allowed, which deny
+# unless the call's actual target path(s) are themselves on the fixed
+# path allow-list -- misclassified intent can broaden WHICH CHECK runs,
+# never WHICH PATHS pass it.
+INTENT=""
 case "$TOOL_NAME" in
-  Write|Edit)
-    if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
+  Write|Edit|NotebookEdit|*__Edit|*__Write) INTENT="write" ;;
+  Read|*__Read|*__Search|*__Grep|*__Glob) INTENT="read" ;;
+  Bash) INTENT="bash" ;;
+esac
+
+case "$INTENT" in
+  write)
+    # Covers both a single top-level tool_input.file_path (every built-in
+    # call) and woz Edit's batched tool_input.edits[] (see
+    # qsg_write_intent_allowed's header) -- the path checks themselves
+    # (qsg_path_allowed) are untouched.
+    if qsg_write_intent_allowed "$INPUT" "$CANON_DIR"; then
       exit 0
     fi
     ;;
-  Read)
+  read)
     # A gated agent must be able to READ the state it's ordered to
     # act on (handoff.md, decisions.log, the inbox, the flag itself) --
     # without this, "update handoff.md" is an order the agent has no way
     # to obey (see qsg_read_allowed's header for the live deadlock this
-    # closes).
-    if [ -n "$FILE_PATH" ] && qsg_read_allowed "$FILE_PATH" "$CANON_DIR"; then
+    # closes). Also covers woz Search's batched
+    # tool_input.file_glob_patterns[] (see qsg_read_intent_allowed).
+    if qsg_read_intent_allowed "$INPUT" "$CANON_DIR"; then
       exit 0
     fi
     ;;
-  Bash)
+  bash)
     if [ -n "$COMMAND" ] && qsg_command_allowed "$COMMAND" "$CANON_DIR"; then
       exit 0
     fi
