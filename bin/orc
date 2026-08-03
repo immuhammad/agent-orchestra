@@ -55,19 +55,28 @@ orc_build_session() {
   # GH_REPO pins every scripted `gh` call (watch.sh, orc-worktree.sh,
   # orc-seed-merge-watch.sh) to ONE repo -- exported into BOTH this
   # process's own environment (so the merge-watch seed call a few lines
-  # down, itself a `bash` subprocess, inherits it) and the tmux SESSION
-  # environment via set-environment (so every pane's shell picks it up --
-  # tmux only applies its session environment table to a process at the
-  # moment that process is spawned, so this must run before ANY pane
-  # exists, including pane 0 -- new-session itself creates the shell for
-  # pane 0, which is why this sits before every branch below that calls
-  # `tmux new-session`). Missing/invalid: warn loudly, room still starts
-  # (degraded -- watchers/orc-worktree.sh fail closed on their own end),
-  # never export a garbage value.
+  # down, itself a `bash` subprocess, inherits it) and the tmux session's
+  # environment, so every pane's shell picks it up.
+  #
+  # agy REQUEST-CHANGES (#174 round 1): a separate `tmux
+  # set-environment` call issued AFTER `tmux new-session` does NOT reach
+  # pane 0 -- `new-session` creates the session and spawns pane 0's shell
+  # in the same step, so pane 0's process env is already fixed before a
+  # later set-environment call updates the session's table; only panes
+  # spawned by a SUBSEQUENT split-window pick it up. Confirmed empirically
+  # (a bare tmux session created with `-e KEY=val` DOES have KEY in pane
+  # 0's spawned shell, verified via `printenv` inside the pane; the same
+  # session updated afterward via a separate `set-environment` call does
+  # NOT). Passing `-e GH_REPO=...` directly on `new-session` itself -- not
+  # a follow-up call -- is therefore the only ordering that actually
+  # covers pane 0 too; every pane created afterward (split-window) still
+  # inherits the session's environment table either way.
   local github_repo
   github_repo="$(orc_github_repo)"
+  local -a session_env_args=()
   if [ -n "$github_repo" ]; then
     export GH_REPO="$github_repo"
+    session_env_args=(-e "GH_REPO=$github_repo")
   else
     echo "orc: WARNING -- github_repo unset (or malformed) in orchestrator.yaml -- watchers will not poll GitHub until it's configured (expected an 'owner/repo' value)." >&2
   fi
@@ -225,8 +234,7 @@ orc_build_session() {
   agent_rows=$(( term_lines - monitor_rows - 1 ))  # -1: the divider row between the agent row and the monitor row
 
   if [ "$term_cols" -gt 0 ] && [ "$term_lines" -gt 0 ] && [ "$agent_rows" -ge "$min_agent_rows" ]; then
-    tmux new-session -d -s "$session" -n main -x "$term_cols" -y "$term_lines"
-    [ -n "$github_repo" ] && tmux set-environment -t "$session" GH_REPO "$github_repo"
+    tmux new-session -d -s "$session" -n main -x "$term_cols" -y "$term_lines" ${session_env_args[@]+"${session_env_args[@]}"}
     tmux rename-window -t "$session:main" "control-room"
     tmux set -t "$session:0" pane-border-status top
 
@@ -249,8 +257,7 @@ orc_build_session() {
       size_desc="unknown (no tty, no ORC_TERM_COLS/LINES override)"
     fi
     echo "orc: WARNING -- terminal size ${size_desc} -- too small (or undetectable) for the weighted agent-panes layout (need >= ${min_agent_rows} rows for the agent panes after reserving ${monitor_rows} for the monitor row) -- falling back to percent-proportioned sizing (same 3-top/2-bottom shape, guessed sizes). Agent panes will be short; resize your terminal and restart the room ('orc up' again after killing the session) for more headroom." >&2
-    tmux new-session -d -s "$session" -n main
-    [ -n "$github_repo" ] && tmux set-environment -t "$session" GH_REPO "$github_repo"
+    tmux new-session -d -s "$session" -n main ${session_env_args[@]+"${session_env_args[@]}"}
     tmux rename-window -t "$session:main" "control-room"
     tmux set -t "$session:0" pane-border-status top
 

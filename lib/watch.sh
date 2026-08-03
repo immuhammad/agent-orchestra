@@ -224,7 +224,7 @@ _MW_GH_REPO_WARNED=""
 merge_watch_check() {
   if [ -z "${GH_REPO:-}" ]; then
     if [ -z "$_MW_GH_REPO_WARNED" ]; then
-      we_log_event "merge-watch: GH_REPO unset -- skipping GitHub polling until orchestrator.yaml's github_repo is configured"
+      we_log_event "merge-watch: GH_REPO unset -- skipping GitHub polling. This watcher only reads GH_REPO from its own process env at session start; editing orchestrator.yaml's github_repo alone will NOT be picked up live -- restart the room ('orc up' again after killing the session) once it's configured."
       _MW_GH_REPO_WARNED=1
     fi
     return 0
@@ -398,7 +398,7 @@ _RW_GH_REPO_WARNED=""
 review_watch_check() {
   if [ -z "${GH_REPO:-}" ]; then
     if [ -z "$_RW_GH_REPO_WARNED" ]; then
-      we_log_event "review-watch: GH_REPO unset -- skipping GitHub polling until orchestrator.yaml's github_repo is configured"
+      we_log_event "review-watch: GH_REPO unset -- skipping GitHub polling. This watcher only reads GH_REPO from its own process env at session start; editing orchestrator.yaml's github_repo alone will NOT be picked up live -- restart the room ('orc up' again after killing the session) once it's configured."
       _RW_GH_REPO_WARNED=1
     fi
     return 0

@@ -790,6 +790,20 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.3
 done
 assert_eq "a fresh pane in the built session sees GH_REPO from orchestrator.yaml's github_repo" "[acme/widgets]" "$(cat "$GHREPO_OUT" 2>/dev/null)"
+
+# agy REQUEST-CHANGES (#174 round 1): the check above only ever
+# exercised pane 0.4 (created by a LATER split-window call), which passes
+# even when the env propagation is wired wrong -- pane 0 itself (spawned
+# by `new-session` in the very same step the session is created) is the
+# one a plain `set-environment` call issued afterward actually misses.
+GHREPO_OUT0="$GHREPO_TMP/gh_repo_seen_pane0.txt"
+tmux send-keys -t "$GHREPO_SESSION:0.0" "echo \"[\$GH_REPO]\" > $GHREPO_OUT0" C-m
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$GHREPO_OUT0" ] && break
+  sleep 0.3
+done
+assert_eq "pane 0 itself (the pane new-session spawns directly) also sees GH_REPO, not just later split panes" "[acme/widgets]" "$(cat "$GHREPO_OUT0" 2>/dev/null)"
+
 tmux kill-session -t "$GHREPO_SESSION" 2>/dev/null || true
 rm -rf "$GHREPO_TMP"
 

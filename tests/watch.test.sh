@@ -1140,6 +1140,16 @@ if [ "$WARN_LINES" = "1" ]; then
 else
   fail "expected exactly 1 GH_REPO-unset warning line across 3 ticks, got $WARN_LINES: $(cat "$WATCH_EVENTS_LOG")"
 fi
+# agy REQUEST-CHANGES (#174 round 1): the ORIGINAL wording ("...until
+# orchestrator.yaml's github_repo is configured") misled the reader into
+# thinking a live yaml edit alone would be picked up -- this watcher only
+# reads GH_REPO from its own process env at session start, never re-parses
+# the yaml. The message must say so explicitly.
+if grep -q 'merge-watch.*restart the room' "$WATCH_EVENTS_LOG"; then
+  pass "merge-watch's GH_REPO-unset message explicitly says a room restart is required, not just a yaml edit"
+else
+  fail "merge-watch's GH_REPO-unset message should tell the reader to restart the room, got: $(cat "$WATCH_EVENTS_LOG")"
+fi
 
 : > "$WATCH_EVENTS_LOG"
 : > "$GH_ARGV_LOG"
@@ -1160,6 +1170,11 @@ if [ "$RWARN_LINES" = "1" ]; then
   pass "review_watch_check logs the GH_REPO-unset warning exactly ONCE across 2 ticks"
 else
   fail "expected exactly 1 GH_REPO-unset warning line across 2 ticks, got $RWARN_LINES: $(cat "$WATCH_EVENTS_LOG")"
+fi
+if grep -q 'review-watch.*restart the room' "$WATCH_EVENTS_LOG"; then
+  pass "review-watch's GH_REPO-unset message explicitly says a room restart is required, not just a yaml edit"
+else
+  fail "review-watch's GH_REPO-unset message should tell the reader to restart the room, got: $(cat "$WATCH_EVENTS_LOG")"
 fi
 : > "$WATCH_EVENTS_LOG"
 
