@@ -754,6 +754,43 @@ orc_init_default_github_repo() {
   fi
 }
 
+# orc_init_write_consumer_gitignore <target> <answers_file> -- issue #171
+# item 5a: an optional CONSUMER_DIR answer names a directory (target-
+# relative) that this harness's consumer project wants wholesale-ignored
+# -- most projects don't set this, so no answer means no write at all,
+# never inventing a .gitignore nobody asked for. Writes "<dir>/" (trailing
+# slash, ignoring the WHOLE directory) rather than "<dir>/*" (which would
+# still track the directory entry itself and only ignore its contents --
+# that distinction is the actual point of this item). Idempotent: a line
+# already present is never duplicated. An existing hand-authored
+# .gitignore is appended to, never clobbered.
+orc_init_write_consumer_gitignore() {
+  local target="$1" answers_file="$2" consumer_dir line gi
+  consumer_dir="$(orc_init_read_answer "$answers_file" CONSUMER_DIR)"
+  [ -z "$consumer_dir" ] && return 0
+
+  # Normalize away a leading "./" and any trailing slash(es) so the
+  # written line is always exactly one trailing slash, regardless of how
+  # the answer was given.
+  consumer_dir="${consumer_dir#./}"
+  consumer_dir="${consumer_dir%/}"
+  [ -z "$consumer_dir" ] && return 0
+  line="${consumer_dir}/"
+
+  gi="$target/.gitignore"
+  if [ -f "$gi" ]; then
+    grep -qxF "$line" "$gi" && return 0
+    # A hand-authored file with no trailing newline would otherwise get
+    # the new line glued onto its last existing line.
+    if [ -s "$gi" ] && [ -z "$(tail -c1 "$gi")" ]; then
+      : # already ends in a newline
+    elif [ -s "$gi" ]; then
+      echo "" >> "$gi"
+    fi
+  fi
+  echo "$line" >> "$gi"
+}
+
 orc_init_render_orchestrator_yaml() {
   local answers_file="$1" dest="$2"
   local project branch paths tracker repo role rk model eff path_arr p
@@ -919,6 +956,8 @@ orc_init_core() {
   orc_init_write_manifest "$target"
 
   orc_seed_watch_identity "$target"
+
+  orc_init_write_consumer_gitignore "$target" "$answers_file"
 
   echo "orc init: wrote a new control room for '$project' at $target"
   echo "orc init: Gate 1/Gate 2 approver: $gate"
@@ -1408,6 +1447,8 @@ orc_init_adopt() {
 
   orc_seed_watch_identity "$target"
 
+  orc_init_write_consumer_gitignore "$target" "$answers_file"
+
   rm -f "$answers_file"
 
   # Loud (never silent, never auto-acted-on) origin recommendation: a
@@ -1492,16 +1533,32 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       force=0
       adopt=0
       answers=""
+      consumer_dir=""
       target=""
       while [ $# -gt 0 ]; do
         case "$1" in
           --force) force=1; shift ;;
           --adopt) adopt=1; shift ;;
           --answers) answers="$2"; shift 2 ;;
+          --consumer-dir) consumer_dir="$2"; shift 2 ;;
           *) target="$1"; shift ;;
         esac
       done
       target="${target:-$PWD}"
+      # --consumer-dir (issue #171 item 5a): a CLI-derivable equivalent of
+      # the CONSUMER_DIR answers-file key, for --adopt (which doesn't
+      # require an answers file at all) or a plain --answers run. Folded
+      # into the answers pipeline as one more KEY=value line (last line
+      # wins, same as every other answer) rather than threading a new
+      # parameter through orc_init_core/orc_init_adopt's signatures --
+      # only meaningful paired with --adopt or an existing --answers file;
+      # bare interactive `orc init` (neither) is left untouched.
+      if [ -n "$consumer_dir" ] && { [ "$adopt" -eq 1 ] || [ -n "$answers" ]; }; then
+        merged_answers="$(mktemp)"
+        [ -n "$answers" ] && [ -f "$answers" ] && cat "$answers" > "$merged_answers"
+        echo "CONSUMER_DIR=$consumer_dir" >> "$merged_answers"
+        answers="$merged_answers"
+      fi
       if [ "$adopt" -eq 1 ]; then
         orc_init_adopt "$target" "$answers"
       elif [ "$force" -eq 1 ]; then
@@ -1513,7 +1570,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       fi
       ;;
     *)
-      echo "usage: orc.sh up|init [--force|--adopt] [--answers <file>] [target_dir]" >&2
+      echo "usage: orc.sh up|init [--force|--adopt] [--answers <file>] [--consumer-dir <path>] [target_dir]" >&2
       exit 1
       ;;
   esac
