@@ -96,7 +96,17 @@ evaluated on adoption, not bulk-imported.
   verified by the `.ack` appearing within `dispatch.ack_deadline_s`,
   retried once, then escalated as a durable FLAG — nothing waits
   forever, and nothing but dispatch/broker ever types into another
-  agent's pane. Acked messages are archived to `inbox/<agent>/archive/`
+  agent's pane. **Verdict relay rule.** No lane may relay a verdict
+  (`APPROVE`/`REQUEST-CHANGES`/any outcome word) it cannot itself see
+  posted on the PR at the moment of relay — a claim of completion made
+  before the artifact actually exists is not "eventually true", it's a
+  hazard window (live-observed: a verdict quoted verbatim ~86 minutes
+  before it was actually posted, while the PR still showed 0 comments —
+  the follow-through eventually landed, so a naive retry/poll would have
+  papered over it; ORDERING is the actual invariant). A relay message
+  (`assign <requester> <issue> "APPROVE: ..."` etc.) MUST cite the
+  verdict comment's own PR timestamp, not just repeat its text. Acked
+  messages are archived to `inbox/<agent>/archive/`
   (pruned after `dispatch.archive_retention_days`); "check inbox" means
   the LIVE dir only — never re-read the archive. Screen heuristics
   survive ONLY as a generic last-resort fallback for TUIs lacking native
@@ -157,9 +167,14 @@ evaluated on adoption, not bulk-imported.
   Orchestra-level call), or (c) a genuine decision point / out-of-ticket
   defect (escalate below). **The 2-round review loop is Builder's;
   ready/merge authority did NOT move with it** — on APPROVE, Orchestra
-  (not Builder) does `gh pr ready` + comments the issue, on to Gate 2.
-  Builder never flips a PR to ready. You (Gate 2) only ever see ready,
-  CI-green, reviewer-passed PRs.
+  (not Builder), **Gate-2 checklist**: (1) verify the verdict is present
+  ON the PR itself (`gh pr view --json comments,reviews`; 0
+  comments/reviews = no verdict, whatever any relay message claims —
+  never trust the relay alone, per the verdict relay rule above), then
+  (2) `gh pr ready` + comment the issue, on to Gate 2. Builder never
+  flips a PR to ready. You (Gate 2) only ever see ready, CI-green,
+  reviewer-passed PRs — and every one of them has a verdict actually
+  sitting on the PR, not just claimed by a relay.
 - Review-dispatch `.msg` template: every
   `dispatch.sh assign <reviewer> <issue> "..."` message MUST state the
   single-writer rule inline (below) — a reviewer's own hook config is a
@@ -244,7 +259,7 @@ evaluated on adoption, not bulk-imported.
   models (c) continue. Pick one."
 - Do NOT proceed until answered. Do NOT drift into conservation tips,
   recaps, or any other action — the question is the ONLY output.
-- Fill `[pool]` (5h / weekly), `X` (the reported %), and `[fallback]`
+- Fill `[pool]` (5h / weekly / agy), `X` (the reported %), and `[fallback]`
   (the agreed fallback tool/model). Keep the (a)/(b)/(c) structure
   exactly.
 - Never silently continue past a quota warning.

@@ -539,21 +539,90 @@ wsc_write() { # jq args, filter transforms current state -> new state
   jq "$@" "$STUCK_STATE_FILE" > "$tmp" && mv "$tmp" "$STUCK_STATE_FILE"
 }
 
+# wsc_tail_is_runaway <tail> -- degenerate-repetition shape: the pane's
+# screen is CHANGING (a frozen-hash check alone would miss it entirely --
+# #173's fourth-failure report: a genuine repetition loop printed hundreds
+# of near-identical lines/second, so an unchanged-hash detector would have
+# stayed silent through the whole incident and only fired AFTER a human
+# interrupted it and the screen finally went quiet -- exactly inverted
+# from useful). Two independent degenerate shapes, either one qualifies:
+#   - line repetition: WSC_RUNAWAY_MIN_DUP_LINES+ of the tail's non-blank
+#     lines are byte-identical to each other
+#   - token repetition: strip all whitespace and what's left is one short
+#     chunk repeated end to end with no line breaks to key off at all
+#     (e.g. "producingproducingproducing..." wrapped across a narrow pane)
+# The second check is a portable prefix-walk, not a backreference regex --
+# this file already documents one platform regex gap (macOS awk's
+# Unicode-range handling, see pane_busy_markers in dispatch.sh); no reason
+# to risk a second one here.
+WSC_RUNAWAY_MIN_DUP_LINES="${WSC_RUNAWAY_MIN_DUP_LINES:-4}"
+WSC_RUNAWAY_MIN_SQUASHED_LEN="${WSC_RUNAWAY_MIN_SQUASHED_LEN:-30}"
+
+wsc_tail_is_runaway() {
+  local tail="$1" nonblank dup_count
+  nonblank="$(printf '%s\n' "$tail" | grep -v '^[[:space:]]*$')"
+  if [ -n "$nonblank" ]; then
+    dup_count="$(printf '%s\n' "$nonblank" | sort | uniq -c | awk '{print $1}' | sort -rn | head -1)"
+    if [ -n "$dup_count" ] && [ "$dup_count" -ge "$WSC_RUNAWAY_MIN_DUP_LINES" ]; then
+      return 0
+    fi
+  fi
+
+  local squashed len chunk_len chunk pos reps
+  squashed="$(printf '%s' "$tail" | tr -d '[:space:]')"
+  len=${#squashed}
+  [ "$len" -lt "$WSC_RUNAWAY_MIN_SQUASHED_LEN" ] && return 1
+  for chunk_len in 3 4 5 6 8 10 12 16 20 24; do
+    [ $((chunk_len * 3)) -gt "$len" ] && break
+    chunk="${squashed:0:$chunk_len}"
+    reps=0
+    pos=0
+    while [ "${squashed:$pos:$chunk_len}" = "$chunk" ]; do
+      reps=$((reps + 1))
+      pos=$((pos + chunk_len))
+    done
+    if [ "$reps" -ge 3 ] && [ $((reps * chunk_len)) -ge $((len * 70 / 100)) ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # pane_stuck_check -- complementary to pane_liveness_check: that catches a
 # pane DYING (dropped to a plain shell); this catches one that's alive but
 # hung, retry-looping, or just burning quota unattended for a very long
 # stretch (Ahmad's overnight ask). NEVER auto-kills or auto-
 # interrupts -- this only ever flags Orchestra, who decides.
 #
-# Per busy pane over STUCK_THRESHOLD_S: needs TWO consecutive over-
-# threshold observations before flagging at all -- the first merely
-# records a baseline screen hash (there's nothing to compare yet), the
-# second classifies by comparing hashes: unchanged -> "looping/stuck"
-# (upgrade), changed -> "long-running" (still just busy, screen is moving).
-# Exactly ONE flag fires per busy EPISODE (tracked in STUCK_STATE_FILE,
-# keyed by agent) -- a pane that flips away from busy (idle/failsafe, or
-# dies and pane_liveness_check clears its state) ends the episode and
-# clears tracking, so a later busy stretch can flag again.
+# Per busy pane over STUCK_THRESHOLD_S, classified by SHAPE, not just a
+# screen-hash diff (#173's fourth-failure report: hash-diff alone is
+# anti-correlated with the real failure -- a repetition loop's screen
+# changes constantly, so hash-diff stays silent through the actual
+# incident, then an unrelated post-interrupt idle screen freezes and gets
+# misread as "looping/stuck" after the fact). Three shapes, checked in
+# this order:
+#   1. idle-prompt shape (pane_tail_is_idle_shape, dispatch.sh's own
+#      hook-independent screen-scrape heuristic) -- the pane's OWN
+#      busy/idle hook state said busy, but the screen shows an empty
+#      input box: a probable STALE busy hook write (#105's residual
+#      false-BUSY class), not a hang. Never flagged as stuck; noted to
+#      orchestra once per episode instead.
+#   2. runaway-output shape (wsc_tail_is_runaway) -- degenerate repeating
+#      content. Flagged IMMEDIATELY, on the first over-threshold
+#      observation -- unlike the other two shapes this needs no baseline
+#      hash to compare against; waiting a full cycle for a hash that will
+#      never repeat (the screen never stops changing) would just delay
+#      the flag for no benefit.
+#   3. unchanged screen (the original behavior, now reached only for
+#      panes NOT at a prompt and NOT degenerate-repeating) -- needs TWO
+#      consecutive over-threshold observations: the first records a
+#      baseline hash, the second compares it -- unchanged ->
+#      "looping/stuck", changed -> "long-running" (still just busy,
+#      screen is moving).
+# Exactly ONE flag/note fires per busy EPISODE (tracked in
+# STUCK_STATE_FILE, keyed by agent) -- a pane that flips away from busy
+# (idle/failsafe, or dies and pane_liveness_check clears its state) ends
+# the episode and clears tracking, so a later busy stretch can flag again.
 pane_stuck_check() {
   local agent target pane_id state age
   for agent in $LIVENESS_AGENTS; do
@@ -584,36 +653,59 @@ pane_stuck_check() {
     esac
     [ "$age" -lt "$STUCK_THRESHOLD_S" ] && continue
 
-    local already_flagged prev_hash cur_hash
+    local already_flagged
     already_flagged="$(wsc_read --arg a "$agent" '.[$a].flagged // false')"
     if [ "$already_flagged" = "true" ]; then
       continue
     fi
 
-    prev_hash="$(wsc_read --arg a "$agent" '.[$a].hash // empty')"
+    local minutes cur_hash cur_tail
+    minutes=$(( age / 60 ))
     cur_hash="$(wsc_hash_pane "$target")"
+    cur_tail="$(send_meaningful_tail "$target" 10)"
 
-    if [ -z "$prev_hash" ]; then
-      # First over-threshold observation this episode: not enough data to
-      # classify yet -- record the baseline, wait for the next check.
-      wsc_write --arg a "$agent" --arg h "$cur_hash" '.[$a] = {flagged: false, hash: $h}'
+    if pane_tail_is_idle_shape "$cur_tail" "$agent"; then
+      # Shape 1: idle prompt despite a busy hook state -- probable stale
+      # BUSY (#105), not a hang. Note once, never flag as stuck.
+      local note
+      note="STUCK?-check: pane '${agent}' shows an idle prompt but its hook state has been busy ${minutes}m -- probable stale-BUSY (#105's residual false-BUSY class), not a hang. Not flagging as stuck."
+      dispatch_main message orchestra stuck "$note" >/dev/null
+      wsc_write --arg a "$agent" --arg h "$cur_hash" '.[$a] = {flagged: true, hash: $h}'
+      we_log_event "$agent idle-prompt shape while hook state says busy ${minutes}m -- probable stale-BUSY (#105), noted to orchestra, not flagged stuck"
       continue
     fi
 
-    local minutes kind changed_desc
-    minutes=$(( age / 60 ))
-    if [ "$cur_hash" = "$prev_hash" ]; then
-      kind="looping/stuck"
-      changed_desc="unchanged"
+    local kind changed_desc
+    if wsc_tail_is_runaway "$cur_tail"; then
+      # Shape 2: degenerate repetition -- flag immediately, no baseline
+      # needed (a hash comparison would never see "unchanged" here; the
+      # screen is by definition still changing).
+      kind="runaway-output"
+      changed_desc="degenerate/repeating"
     else
-      kind="long-running"
-      changed_desc="changed"
+      # Shape 3: fall back to the original hash-diff behavior, gated on a
+      # baseline from a PRIOR over-threshold observation.
+      local prev_hash
+      prev_hash="$(wsc_read --arg a "$agent" '.[$a].hash // empty')"
+      if [ -z "$prev_hash" ]; then
+        # First over-threshold observation this episode: not enough data
+        # to classify yet -- record the baseline, wait for the next check.
+        wsc_write --arg a "$agent" --arg h "$cur_hash" '.[$a] = {flagged: false, hash: $h}'
+        continue
+      fi
+      if [ "$cur_hash" = "$prev_hash" ]; then
+        kind="looping/stuck"
+        changed_desc="unchanged"
+      else
+        kind="long-running"
+        changed_desc="changed"
+      fi
     fi
 
-    local tail msg
-    tail="$(tmux capture-pane -p -t "$target" 2>/dev/null | tail -5)"
+    local tail_preview msg
+    tail_preview="$(printf '%s\n' "$cur_tail" | tail -5)"
     msg="FLAG: STUCK?: pane '${agent}' busy ${minutes}m, classified ${kind} (screen ${changed_desc} since the last check). Tail:
-${tail}"
+${tail_preview}"
     if [ "$agent" = "orchestra" ]; then
       dispatch_main message orchestra stuck "$msg" >/dev/null
     else

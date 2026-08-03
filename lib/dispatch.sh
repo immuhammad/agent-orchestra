@@ -191,6 +191,20 @@ pane_is_idle() {
   # unfiltered capture can grab pure padding instead of text
   # (found dogfooding Task 3's own test).
   tail="$(send_meaningful_tail "$target" 10)"
+  pane_tail_is_idle_shape "$tail" "$agent"
+}
+
+# pane_tail_is_idle_shape <tail> <agent> -- the screen-scrape shape check
+# pane_is_idle falls back to above, split out so a caller that cannot lean
+# on the pane's own hook-written ground truth -- because that ground truth
+# is itself what's suspected stale -- can run the SAME heuristic directly
+# against a tail it already captured, instead of duplicating these regexes
+# or re-deriving hook state that would just repeat the same stale read.
+# (#173's fourth-failure report: a pane genuinely idle-empty on screen
+# while its busy hook state never flipped -- lib/watch.sh's
+# pane_stuck_check calls this directly for exactly that reason, see #105.)
+pane_tail_is_idle_shape() {
+  local tail="$1" agent="${2:-}" markers
   markers="$(pane_busy_markers "$agent")"
   if echo "$tail" | grep -Eiq "$markers"; then
     return 1

@@ -936,6 +936,87 @@ else
 fi
 tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
 
+echo "== idle-prompt shape: busy hook state but screen shows an idle prompt -> noted as probable stale-BUSY, NOT flagged stuck (#173 fourth-failure, #105) =="
+rm -f "$STUCK_STATE_FILE"
+: > "$STUCK_CALLS"
+tmux new-session -d -s "$TEST_SESSION" -n main
+SC_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.0" "printf '\\n>\\n'" Enter
+sleep 0.5
+OLD_EPOCH=$(( $(date '+%s') - 90 ))
+printf 'busy %s sid-staleidle -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
+if [ "$CALL_COUNT" -eq 1 ]; then
+  pass "exactly one dispatch call for the idle-prompt note"
+else
+  fail "expected exactly 1 dispatch call, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+fi
+if grep -q "^message orchestra stuck" "$STUCK_CALLS"; then
+  pass "an idle-prompt-shaped pane with stale busy hook state is noted via 'message', not 'assign'"
+else
+  fail "expected a 'message orchestra stuck' note, got: $(cat "$STUCK_CALLS")"
+fi
+if grep -qi "stale-BUSY" "$STUCK_CALLS" && grep -q "#105" "$STUCK_CALLS"; then
+  pass "the note names it a probable stale-BUSY state and cites #105"
+else
+  fail "expected the note to cite stale-BUSY/#105, got: $(cat "$STUCK_CALLS")"
+fi
+if grep -q "FLAG: STUCK?" "$STUCK_CALLS"; then
+  fail "an idle-prompt-shaped pane must NOT be flagged as STUCK? (false-IDLE risk): $(cat "$STUCK_CALLS")"
+else
+  pass "an idle-prompt-shaped pane is never flagged as STUCK?"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
+echo "== runaway-output shape: degenerate repeating content flags IMMEDIATELY, no baseline wait needed (#173 fourth-failure: hash-diff alone would stay silent through this) =="
+rm -f "$STUCK_STATE_FILE"
+: > "$STUCK_CALLS"
+tmux new-session -d -s "$TEST_SESSION" -n main
+SC_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.0" "yes producing | head -8" Enter
+sleep 0.5
+OLD_EPOCH=$(( $(date '+%s') - 90 ))
+printf 'busy %s sid-runaway -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+CALL_COUNT="$(grep -cE '^(assign|message) orchestra stuck' "$STUCK_CALLS")"
+if [ "$CALL_COUNT" -eq 1 ]; then
+  pass "runaway-output is flagged on the FIRST over-threshold observation (no baseline wait)"
+else
+  fail "expected exactly 1 dispatch call on first observation, got $CALL_COUNT: $(cat "$STUCK_CALLS")"
+fi
+if grep -q "FLAG: STUCK?" "$STUCK_CALLS" && grep -qi "runaway-output" "$STUCK_CALLS"; then
+  pass "flag message classifies the pane as runaway-output"
+else
+  fail "expected a runaway-output classification, got: $(cat "$STUCK_CALLS")"
+fi
+if grep -q "^assign orchestra" "$STUCK_CALLS"; then
+  pass "a non-orchestra agent's runaway flag uses 'assign' (nudges orchestra)"
+else
+  fail "expected an 'assign orchestra' dispatch, got: $(cat "$STUCK_CALLS")"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
+echo "== legitimately repetitive-but-DISTINCT output (numbered test-log lines) is NOT misclassified as runaway (probe list: false-positive risk on test logs/progress bars) =="
+rm -f "$STUCK_STATE_FILE"
+: > "$STUCK_CALLS"
+tmux new-session -d -s "$TEST_SESSION" -n main
+SC_PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
+sleep 0.5
+tmux send-keys -t "$TEST_SESSION:0.0" 'for i in 1 2 3 4 5 6 7 8; do echo "ok $i - test passed"; done' Enter
+sleep 0.5
+OLD_EPOCH=$(( $(date '+%s') - 90 ))
+printf 'busy %s sid-legitrepeat -\n' "$OLD_EPOCH" > "$PANE_STATE_DIR/${SC_PANE_ID#%}"
+pane_stuck_check
+if [ ! -s "$STUCK_CALLS" ]; then
+  pass "distinct numbered log lines do not trigger an immediate runaway flag (still just baseline recording)"
+else
+  fail "legitimately distinct repetitive output should not flag on first observation: $(cat "$STUCK_CALLS")"
+fi
+tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+
 echo "== orchestra's own stuck episode uses 'message' (no nudge attempt) =="
 rm -f "$STUCK_STATE_FILE"
 : > "$STUCK_CALLS"

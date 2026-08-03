@@ -75,9 +75,22 @@ likely to skim past.
 
 ## Verdict
 
+**Publish before you report — never the reverse.** Posting the verdict to
+the PR is a PRECONDITION of reporting it anywhere else: the ack, a pushed
+dispatch, a pane summary. Do not write any of those until the PR comment
+call has returned successfully. A claim of completion made before the
+artifact exists is a real failure mode, not a technicality — live-
+observed: a verdict quoted verbatim to the requester ~86 minutes before it
+was actually posted, while the PR still showed 0 comments (see AGENTS.md's
+Dispatch Protocol verdict relay rule). Retrying/polling for the artifact
+would eventually have succeeded, which is exactly why ordering, not
+retrying, is the fix.
+
 Post the verdict as an ordinary PR comment (see `AGENTS.md`'s
 Reviewer-identity policy — a reviewer with no formal platform-native
 reviewer seat makes the comment itself the official record): `APPROVE`
 with the probe list, or `REQUEST-CHANGES` with the findings (each
-`file:line` + failure scenario). Ack the dispatch message with a one-line
-summary of the verdict once posted.
+`file:line` + failure scenario). Only once that call has returned, ack the
+dispatch message with a one-line summary of the verdict — and cite the
+PR comment's own timestamp so the receiving lane isn't just trusting your
+word (verdict relay rule).

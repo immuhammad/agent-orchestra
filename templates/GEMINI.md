@@ -23,6 +23,19 @@ See `AGENTS.md`'s Handoff Protocol for the full read-order and what's
 ephemeral (`handoff.md`) vs. durable (`decisions.log` + memory).
 
 ## Tool-specific notes
-- <Antigravity-CLI-only quirks go here — sandboxing, tool access,
+- <Antigravity-CLI-only quirks go here -- sandboxing, tool access,
   invocation differences from Claude Code. Delete this line once filled
   in.>
+- **Scratch directory.** Redirect any temporary review artifact (a
+  `gh pr diff`/`gh pr view` capture, a working copy of the diff, anything
+  you'd otherwise dump into the project root) to `.harness/scratch/agy/`
+  -- create it if it doesn't exist yet. Treat it as wiped per-dispatch: do
+  not rely on a file surviving into the next review, and never leave
+  anything behind in the project root itself (a real incident: `gh pr
+  diff`/`gh pr view` redirected straight to `pr17.diff`/`pr17_body.txt` in
+  the project root, left behind after a repetition-loop hang, cleaned up
+  by hand). Mirrors the discipline the Claude lanes already follow (see
+  `souls/scribe.md`: "I write nowhere but my own scratch dir and my ack
+  file") -- the single-writer rule still applies on top of this: the PR,
+  the inbox `.ack`, and `decisions.log` remain the only OUTPUT channels,
+  this directory is for your own working files only.
