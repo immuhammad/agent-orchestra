@@ -59,6 +59,13 @@ expect_deny "custom protected_paths blocks its own path" "$PCFG" "vendor/legacy/
 expect_allow "custom protected_paths does not widen to anything not listed" "$PCFG" "career-ops/x.txt"
 rm -rf "$PCFG"
 
+echo "== SECURITY (agy's dedicated review, round 2): a protected_paths entry inside a worktree's OWN copy stays editable =="
+PPWT_ROOT="$(mktemp -d)"
+printf 'protected_paths:\n  - vendor/legacy/\n' > "$PPWT_ROOT/orchestrator.yaml"
+expect_deny "root-level vendor/legacy/ (absolute path) still denies" "$PPWT_ROOT" "$PPWT_ROOT/vendor/legacy/x.txt"
+expect_allow "a worktree's own vendor/legacy/ copy (absolute path) stays editable" "$PPWT_ROOT" "$PPWT_ROOT/.worktrees/issue-1/vendor/legacy/x.txt"
+rm -rf "$PPWT_ROOT"
+
 echo "== .claude/ and .agents/ are protected BY DEFAULT, independent of orchestrator.yaml =="
 DCFG="$(mktemp -d)"
 expect_deny "write into .claude/settings.json is blocked with NO orchestrator.yaml at all" "$DCFG" ".claude/settings.json"

@@ -67,14 +67,14 @@ if [ -n "$ROOT" ] && orc_is_enforcement_layer_path "$FILE_PATH" "$ROOT"; then
   exit 2
 fi
 
-while IFS= read -r protected; do
-  [ -z "$protected" ] && continue
-  case "$FILE_PATH" in
-    "$protected"*|*"/$protected"*)
-      echo "guard-write.sh: blocked write into protected path '$protected' (see AGENTS.md / orchestrator.yaml): $FILE_PATH" >&2
-      exit 2
-      ;;
-  esac
-done <<< "$(orc_protected_paths)"
+# orc_is_protected_path -- root-anchored, .worktrees-exempt (see its own
+# header): replaces a raw substring match that used to block a worktree's
+# own copy of any protected_paths entry too (agy's dedicated security
+# review, round 2 -- the same false-positive class hooks/lib/bin above
+# was already fixed against).
+if [ -n "$ROOT" ] && orc_is_protected_path "$FILE_PATH" "$ROOT"; then
+  echo "guard-write.sh: blocked write into a protected path (see AGENTS.md / orchestrator.yaml): $FILE_PATH" >&2
+  exit 2
+fi
 
 exit 0

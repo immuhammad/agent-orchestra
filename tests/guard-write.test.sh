@@ -75,6 +75,25 @@ expect_blocked "custom protected_paths blocks its own path" \
 expect_allowed "custom protected_paths does not widen to anything not listed" \
   "career-ops/x.txt" "$CUSTOM_YAML"
 
+echo "== SECURITY (agy's dedicated review, round 2): a protected_paths entry inside a worktree's OWN copy stays editable (root-anchored, not a raw substring match) =="
+PPWT_ROOT="$(mktemp -d)"
+printf 'protected_paths:\n  - vendor/legacy/\n' > "$PPWT_ROOT/orchestrator.yaml"
+expect_blocked_at_root_pp() { # desc, absolute file_path
+  local desc="$1" fp="$2" payload out st
+  payload="$(jq -n --arg fp "$fp" '{tool_input: {file_path: $fp}}')"
+  out="$(cd "$PPWT_ROOT" && echo "$payload" | bash "$GUARD" 2>&1)"; st=$?
+  if [ "$st" -eq 2 ]; then echo "PASS: $desc"; PASS=$((PASS + 1)); else echo "FAIL: $desc (expected exit 2, got $st) -- output: $out"; FAIL=$((FAIL + 1)); fi
+}
+expect_allowed_at_root_pp() {
+  local desc="$1" fp="$2" payload out st
+  payload="$(jq -n --arg fp "$fp" '{tool_input: {file_path: $fp}}')"
+  out="$(cd "$PPWT_ROOT" && echo "$payload" | bash "$GUARD" 2>&1)"; st=$?
+  if [ "$st" -eq 0 ]; then echo "PASS: $desc"; PASS=$((PASS + 1)); else echo "FAIL: $desc (expected exit 0, got $st) -- output: $out"; FAIL=$((FAIL + 1)); fi
+}
+expect_blocked_at_root_pp "root-level vendor/legacy/ (absolute path) still blocks" "$PPWT_ROOT/vendor/legacy/x.txt"
+expect_allowed_at_root_pp "a worktree's own vendor/legacy/ copy (absolute path) stays editable" "$PPWT_ROOT/.worktrees/issue-1/vendor/legacy/x.txt"
+rm -rf "$PPWT_ROOT"
+
 echo "== .claude/ and .agents/ are protected BY DEFAULT, independent of orchestrator.yaml =="
 expect_blocked "write into .claude/settings.json is blocked with NO orchestrator.yaml at all" \
   ".claude/settings.json"

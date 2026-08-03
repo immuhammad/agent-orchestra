@@ -76,14 +76,13 @@ if [ -n "$ROOT" ] && orc_is_enforcement_layer_path "$FILE_PATH" "$ROOT"; then
   deny "guard-write: blocked write into '$FILE_PATH' -- hooks/, lib/, and bin/ are the harness's own live wired enforcement scripts, protected by default at the room root (a worktree's own copies under .worktrees/<issue>/ stay editable -- that's where a Builder legitimately edits them). Work in a worktree via lib/orc-worktree.sh and land the change through review, same as any other code change."
 fi
 
-while IFS= read -r protected; do
-  [ -z "$protected" ] && continue
-  case "$FILE_PATH" in
-    "$protected"*|*"/$protected"*)
-      deny "guard-write: blocked write into protected path '$protected' (see AGENTS.md / orchestrator.yaml): $FILE_PATH"
-      ;;
-  esac
-done <<< "$(orc_protected_paths)"
+# orc_is_protected_path -- root-anchored, .worktrees-exempt (see its own
+# header): replaces a raw substring match that used to block a worktree's
+# own copy of any protected_paths entry too (agy's dedicated security
+# review, round 2).
+if [ -n "$ROOT" ] && orc_is_protected_path "$FILE_PATH" "$ROOT"; then
+  deny "guard-write: blocked write into a protected path (see AGENTS.md / orchestrator.yaml): $FILE_PATH"
+fi
 
 echo '{"decision":"allow"}'
 exit 0
