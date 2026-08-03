@@ -236,6 +236,171 @@ else
   fail "expected github_repo derived from git origin (not overridden), got: $(cat "$ADOPT_OVERRIDE/orchestrator.yaml" 2>/dev/null)"
 fi
 
+echo "== issue #187 item 2: bare --adopt CONVERGES on a cloned-harness fixture -- dogfood identity in a non-dogfood dir is treated as un-adopted =="
+# Realistic scenario-(b) shape: the operator already re-pointed origin to
+# THEIR OWN repo via a company SSH alias (item 3's derivation target),
+# but orchestrator.yaml is still the untouched dogfood template (project=
+# agent-orchestra / github_repo=immuhammad/agent-orchestra) because adopt
+# hasn't run yet. Origin does NOT point at agent-orchestra here -- that
+# sub-case (origin still pointing home) is covered separately below by
+# the origin-recommendation tests, where the guard legitimately keeps
+# refusing until the operator re-points origin too.
+CLONED_HARNESS="$TMP/my-project"
+mkdir -p "$CLONED_HARNESS"
+git -C "$CLONED_HARNESS" init -q
+git -C "$CLONED_HARNESS" remote add origin git@work-alias:acmecorp/my-project.git
+cat > "$CLONED_HARNESS/orchestrator.yaml" <<'EOF'
+project: agent-orchestra
+integration_branch: main
+github_repo: immuhammad/agent-orchestra
+ticket_tracker: gh-issues
+
+protected_paths:
+
+roles:
+  orchestra:
+    model: opus
+    effort: high
+  implementer:
+    model: sonnet
+    effort: default
+  tester:
+    model: sonnet
+    effort: default
+  reviewer:
+    model: agy
+    effort: high
+  scribe:
+    model: haiku
+    effort: low
+
+budgets:
+  claude:
+    failsafe_pct: 80
+  agy:
+    failsafe_pct: 80
+EOF
+OUT_CLONED="$(bash "$ORC" init --adopt "$CLONED_HARNESS" 2>&1)"
+STATUS_CLONED=$?
+if [ "$STATUS_CLONED" -eq 0 ]; then
+  pass "bare --adopt on a cloned-harness fixture (dogfood yaml, non-dogfood dirname) exits 0"
+else
+  fail "bare --adopt on a cloned-harness fixture should exit 0, got status=$STATUS_CLONED: $OUT_CLONED"
+fi
+if grep -q '^project: my-project$' "$CLONED_HARNESS/orchestrator.yaml" 2>/dev/null; then
+  pass "PROJECT converges to the target's own basename (my-project), not left as agent-orchestra"
+else
+  fail "expected project: my-project (converged from the dogfood identity), got: $(cat "$CLONED_HARNESS/orchestrator.yaml" 2>/dev/null)"
+fi
+# GITHUB_REPO is freshly re-derived every adopt from the (now-supported,
+# item 3) alias-host origin -- proves item 3's derivation feeds directly
+# into item 2's convergence for the realistic combined flow.
+if grep -q '^github_repo: acmecorp/my-project$' "$CLONED_HARNESS/orchestrator.yaml" 2>/dev/null; then
+  pass "github_repo is freshly re-derived from the alias origin (item 3 derivation feeding item 2's convergence)"
+else
+  fail "expected github_repo derived as acmecorp/my-project from the alias origin, got: $(cat "$CLONED_HARNESS/orchestrator.yaml" 2>/dev/null)"
+fi
+
+CLONED_SESSION="orctest-adopt187-cloned-$$"
+(
+  cd "$CLONED_HARNESS"
+  ORC_SESSION="$CLONED_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> build.err
+  echo $? > exit.code
+)
+if [ "$(cat "$CLONED_HARNESS/exit.code" 2>/dev/null)" = "0" ]; then
+  pass "the own-checkout guard PASSES on the post-adopt result (bare --adopt actually converges)"
+else
+  fail "the own-checkout guard should pass after --adopt converged PROJECT to the dirname, got: $(cat "$CLONED_HARNESS/build.err" 2>/dev/null)"
+fi
+tmux kill-session -t "$CLONED_SESSION" 2>/dev/null || true
+
+echo "== issue #187 item 2: a re-adopt of the REAL dogfood room (dirname literally agent-orchestra) keeps the identity, guard exemption intact =="
+REAL_DOGFOOD="$TMP/agent-orchestra"
+mkdir -p "$REAL_DOGFOOD"
+git -C "$REAL_DOGFOOD" init -q
+git -C "$REAL_DOGFOOD" remote add origin git@github.com:immuhammad/agent-orchestra.git
+cat > "$REAL_DOGFOOD/orchestrator.yaml" <<'EOF'
+project: agent-orchestra
+integration_branch: main
+github_repo: immuhammad/agent-orchestra
+ticket_tracker: gh-issues
+
+protected_paths:
+
+roles:
+  orchestra:
+    model: opus
+    effort: high
+  implementer:
+    model: sonnet
+    effort: default
+  tester:
+    model: sonnet
+    effort: default
+  reviewer:
+    model: agy
+    effort: high
+  scribe:
+    model: haiku
+    effort: low
+
+budgets:
+  claude:
+    failsafe_pct: 80
+  agy:
+    failsafe_pct: 80
+EOF
+bash "$ORC" init --adopt "$REAL_DOGFOOD" >/dev/null 2>&1
+if grep -q '^project: agent-orchestra$' "$REAL_DOGFOOD/orchestrator.yaml" 2>/dev/null; then
+  pass "the real dogfood room's own shape (dirname == agent-orchestra) keeps project: agent-orchestra -- never renamed"
+else
+  fail "the real dogfood room should keep project: agent-orchestra, got: $(cat "$REAL_DOGFOOD/orchestrator.yaml" 2>/dev/null)"
+fi
+REAL_SESSION="orctest-adopt187-real-$$"
+(
+  cd "$REAL_DOGFOOD"
+  ORC_SESSION="$REAL_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> build.err
+  echo $? > exit.code
+)
+if [ "$(cat "$REAL_DOGFOOD/exit.code" 2>/dev/null)" = "0" ]; then
+  pass "the real dogfood room's guard exemption is still intact after --adopt"
+else
+  fail "the real dogfood room should still pass the own-checkout guard after --adopt, got: $(cat "$REAL_DOGFOOD/build.err" 2>/dev/null)"
+fi
+tmux kill-session -t "$REAL_SESSION" 2>/dev/null || true
+
+echo "== issue #187 item 2: dogfood-convergence override never fires for an already-named, unrelated room (no false positive) =="
+if grep -q '^project: already-named-project$' "$ADOPT_EXISTING/orchestrator.yaml" 2>/dev/null; then
+  pass "an already-adopted room with its own unrelated identity is untouched by the dogfood-convergence check (regression guard)"
+else
+  fail "the dogfood-convergence check should never touch an already-named unrelated room: $(cat "$ADOPT_EXISTING/orchestrator.yaml" 2>/dev/null)"
+fi
+
+echo "== issue #187 item 3: the origin-recommendation triggers on host-alias origins too (parsed tail = agent-orchestra, regardless of host) =="
+ADOPT_ALIAS_DOGFOOD="$TMP/cloned-harness-alias"
+mkdir -p "$ADOPT_ALIAS_DOGFOOD"
+git -C "$ADOPT_ALIAS_DOGFOOD" init -q
+git -C "$ADOPT_ALIAS_DOGFOOD" remote add origin git@work-alias:immuhammad/agent-orchestra.git
+OUT_ALIAS_DOGFOOD="$(bash "$ORC" init --adopt "$ADOPT_ALIAS_DOGFOOD" 2>&1)"
+if echo "$OUT_ALIAS_DOGFOOD" | grep -q "origin still points at immuhammad/agent-orchestra"; then
+  pass "the origin-recommendation message fires for a host-alias origin resolving to immuhammad/agent-orchestra"
+else
+  fail "expected the origin-recommendation message for the alias origin, got: $OUT_ALIAS_DOGFOOD"
+fi
+
+ADOPT_FORK="$TMP/someones-fork"
+mkdir -p "$ADOPT_FORK"
+git -C "$ADOPT_FORK" init -q
+git -C "$ADOPT_FORK" remote add origin git@github.com:someone-else/agent-orchestra.git
+OUT_FORK="$(bash "$ORC" init --adopt "$ADOPT_FORK" 2>&1)"
+if echo "$OUT_FORK" | grep -q "origin still points at someone-else/agent-orchestra"; then
+  pass "the origin-recommendation also fires (tail-only match) for a differently-owned fork named agent-orchestra"
+else
+  fail "expected the origin-recommendation for a same-name fork under a different owner, got: $OUT_FORK"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
