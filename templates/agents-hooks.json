@@ -24,6 +24,10 @@
           },
           {
             "type": "command",
+            "command": "bash ../lib/guard-write-agy.sh"
+          },
+          {
+            "type": "command",
             "command": "bash ../hooks/pane-state.sh busy"
           }
         ]

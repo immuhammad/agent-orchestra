@@ -59,6 +59,33 @@ room_branch_state() {
   fi
 }
 
+# room_branch_mismatch_message <root> -- ONE canonical wording for a
+# room-branch mismatch, shared by every emitter (hooks/room-branch-gate.sh's
+# deny line, its agy dialect lib/guard-room-branch-agy.sh, and
+# lib/gatekeeper.sh's orchestra alert) so the phrasing can never drift
+# between them again. Ambiguous wording here (naming only the CURRENT
+# branch, or only the mismatch state, with no exact remedy) caused two
+# destructive actions in the field (issue #189) -- always names BOTH the
+# current and the expected branch, plus the exact checkout command. The
+# "unknown" state (detached HEAD, missing root, not a git repo) has no
+# resolvable current-branch name to quote; reported distinctly rather
+# than forced into the same template with a blank filled in.
+room_branch_mismatch_message() {
+  local root="${1:?usage: room_branch_mismatch_message <root>}"
+  local state current integration
+  state="$(room_branch_state "$root")"
+  integration="$(room_branch_integration_branch "$root")"
+  case "$state" in
+    mismatch\ *)
+      current="${state#mismatch }"
+      echo "room branch is '$current' but the integration branch is '$integration' -- run: git checkout $integration"
+      ;;
+    *)
+      echo "room branch is unresolvable (detached HEAD, missing root, or not a git repo) -- the integration branch is '$integration' -- run: git checkout $integration"
+      ;;
+  esac
+}
+
 # room_branch_override_reason <root> -> prints the room-branch-override
 # file's content (the reason, whitespace-collapsed to one line) if
 # <root>'s canonical .harness/state/room-branch-override exists; prints

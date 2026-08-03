@@ -69,6 +69,10 @@ run_claude_gate "$MM_REPO" '{"tool_name":"Bash","tool_input":{"command":"ls -la"
 [ "$GATE_STATUS" -eq 2 ] && pass "mismatch: ordinary Bash command blocked (exit 2)" || fail "expected exit 2 on mismatch, got $GATE_STATUS: $GATE_OUT"
 echo "$GATE_OUT" | grep -qi "mismatch" && pass "blocked message names the mismatch" || fail "expected 'mismatch' in the blocked message: $GATE_OUT"
 
+echo "$GATE_OUT" | grep -q "room branch is 'feature/mismatch'" && pass "issue #189: blocked message names the CURRENT branch" || fail "expected \"room branch is 'feature/mismatch'\" in: $GATE_OUT"
+echo "$GATE_OUT" | grep -q "the integration branch is 'uat'" && pass "issue #189: blocked message names the EXPECTED (integration) branch" || fail "expected \"the integration branch is 'uat'\" in: $GATE_OUT"
+echo "$GATE_OUT" | grep -q "run: git checkout uat" && pass "issue #189: blocked message gives the exact remedy command" || fail "expected 'run: git checkout uat' in: $GATE_OUT"
+
 echo "== Claude Code dialect: the shared qsg park-honestly allow-list still works while mismatched =="
 run_claude_gate "$MM_REPO" '{"tool_name":"Write","tool_input":{"file_path":".harness/handoff.md"}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "Write to handoff.md allowed while mismatched" || fail "handoff.md write should be allowed, got $GATE_STATUS: $GATE_OUT"
@@ -163,6 +167,10 @@ DECISION="$(echo "$GATE_OUT" | jq -r '.decision // empty' 2>/dev/null)"
 REASON="$(echo "$GATE_OUT" | jq -r '.reason // empty' 2>/dev/null)"
 [ "$DECISION" = "deny" ] && pass "agy: mismatch -> deny decision" || fail "agy: expected a deny decision on mismatch, got: $GATE_OUT"
 echo "$REASON" | grep -qi "mismatch" && pass "agy: deny reason names the mismatch" || fail "agy: expected 'mismatch' in the deny reason, got: $REASON"
+
+echo "$REASON" | grep -q "room branch is 'feature/mismatch'" && pass "issue #189: agy deny reason names the CURRENT branch" || fail "expected \"room branch is 'feature/mismatch'\" in: $REASON"
+echo "$REASON" | grep -q "the integration branch is 'uat'" && pass "issue #189: agy deny reason names the EXPECTED branch" || fail "expected \"the integration branch is 'uat'\" in: $REASON"
+echo "$REASON" | grep -q "run: git checkout uat" && pass "issue #189: agy deny reason gives the exact remedy command" || fail "expected 'run: git checkout uat' in: $REASON"
 
 echo "== agy dialect: allow-listed command and restore command pass while mismatched =="
 run_agy_gate "$AGY_MM_REPO" '{"toolCall":{"args":{"CommandLine":"bash lib/dispatch.sh assign orchestra x DONE"}}}'

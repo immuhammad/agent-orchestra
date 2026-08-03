@@ -140,7 +140,7 @@ gk_check_room_branch() {
     local reason=""
     reason="$(room_branch_override_reason "$root")"
     echo "$(date) - ALERT: room branch $ROOM_BRANCH_STATE (root: $root)" >> "$BUDGET_LOG"
-    gk_alert_orchestra "room-branch" "room branch $ROOM_BRANCH_STATE (HEAD ${ROOM_BRANCH_HEAD:-?}, root: $root) -- see AGENTS.md's Dispatch Protocol.${reason:+ override reason on file: $reason}"
+    gk_alert_orchestra "room-branch" "$(room_branch_mismatch_message "$root") (HEAD ${ROOM_BRANCH_HEAD:-?}, root: $root) -- see AGENTS.md's Dispatch Protocol.${reason:+ override reason on file: $reason}"
     gk_mark_alerted room_branch
   fi
 }

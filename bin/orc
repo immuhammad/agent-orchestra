@@ -54,6 +54,36 @@ orc_watch_identity() {
   fi
 }
 
+# orc_init_apply_protect <target> -- issue #189: every orc init mode
+# (core/force/adopt, and interactive via its delegation to core) finishes
+# with orc-protect ON. The live incident this closes: an in-room agent
+# edited orchestrator.yaml to defeat the room-branch gate, something
+# kernel immutability (bin/orc-protect) would have made impossible --
+# except nothing had ever engaged that layer in the first place, since no
+# init path turned it on. ORC_INIT_NO_PROTECT=1 opts out for tests/CI:
+# chflags/chattr-immutable files would break test-fixture teardown (a
+# plain rm -rf can't remove them), and CI's own answers-driven dogfood
+# init (.github/workflows/ci.yml) must stay unprivileged. Best-effort,
+# never fails the caller -- the room was already fully written by the
+# time this runs; a failure to flip the protection bit (e.g. unprivileged
+# Linux) is surfaced but doesn't unwind a otherwise-successful init.
+# Always prints exactly one line either way (applied / skipped-because-
+# env) so a caller/log can tell which happened without re-deriving env
+# state.
+orc_init_apply_protect() {
+  local target="$1"
+  if [ -n "${ORC_INIT_NO_PROTECT:-}" ]; then
+    echo "orc init: orc-protect skipped (ORC_INIT_NO_PROTECT set)"
+    return 0
+  fi
+  if bash "$ORC_SCRIPT_DIR/orc-protect" on "$target" >&2; then
+    echo "orc init: orc-protect applied"
+  else
+    echo "orc init: orc-protect FAILED to apply -- see above (unprivileged Linux without CAP_LINUX_IMMUTABLE? re-run 'bin/orc-protect on' once privileged)" >&2
+  fi
+  return 0
+}
+
 # orc_seed_watch_identity <target> -- writes target/.harness/state/
 # watch-repo with the CURRENT identity (orc_watch_identity), and -- ONLY
 # when a PRIOR recorded identity exists AND differs from the current one
@@ -1176,6 +1206,8 @@ orc_init_core() {
     echo "orc init: WARNING -- the room was written but a post-init verifier failed above; something is wrong with this installation, not the answers you gave." >&2
     return 1
   fi
+
+  orc_init_apply_protect "$target"
 }
 
 # orc_init_sha256 <path> -- portable content hash for the drift
@@ -1517,9 +1549,12 @@ orc_init_force() {
   orc_seed_watch_identity "$target"
 
   trap - EXIT
-  if [ "$was_protected" -eq 1 ]; then
-    bash "$ORC_SCRIPT_DIR/orc-protect" on "$target" >&2 || true
-  fi
+  # issue #189: unlike the was_protected-conditional restore this replaced
+  # (which only re-armed protection if the room was ALREADY protected
+  # before this --force run), every init mode now finishes protected
+  # unconditionally -- an unprotected room resyncing via --force is
+  # exactly the gap the live incident fell through.
+  orc_init_apply_protect "$target"
 
   [ -n "$synth" ] && rm -f "$synth"
 
@@ -1689,6 +1724,8 @@ orc_init_adopt() {
   if [ "$repo_tail" = "agent-orchestra" ]; then
     echo "orc init --adopt: origin still points at $repo -- re-point it to your own repo (git remote set-url origin <your-url>) or clear it (git remote remove origin) once you've adopted this checkout." >&2
   fi
+
+  orc_init_apply_protect "$target"
 
   echo "orc init --adopt: adopted $target as project '$project'"
   if [ -d "$target/$backup_rel" ]; then

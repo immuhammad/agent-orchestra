@@ -25,6 +25,10 @@
 
 ORC_DEFAULT_PROTECTED_PATHS=""
 
+_ORC_CONFIG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+# shellcheck source=./cmd-inspect-lib.sh
+source "$_ORC_CONFIG_LIB_DIR/cmd-inspect-lib.sh"
+
 # orc_harness_config_dirs -- one hardcoded default-protected dir per line:
 # .claude/ and .agents/, which wire the harness's OWN enforcement (guard.sh,
 # guard-write.sh, quota-stop-gate.sh, the Stop hook, agy's guard hooks).
@@ -46,6 +50,58 @@ orc_is_harness_config_path() {
     .claude/*|*/.claude/*|.agents/*|*/.agents/*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# orc_enforcement_layer_dirs -- hooks/ lib/ bin/, one per line: the room
+# root's own LIVE, wired enforcement scripts (guard.sh/guard-write.sh
+# themselves live in lib/, the PreToolUse hooks live in hooks/, bin/ holds
+# orc/orc-protect/orc-install-skills). A DELIBERATE SIBLING to
+# orc_harness_config_dirs above, not a merge into it (issue #189, live
+# incident) -- these three are excluded from bin/orc-protect's kernel-
+# immutability target set on purpose (git pull/merge must keep writing
+# them on the room root with no protect-off/on dance); the root-anchored
+# software check in orc_is_enforcement_layer_path below is their whole
+# backstop, not a supplement to a kernel one. Do not widen
+# orc_is_harness_config_path's segment-matched list to cover these --
+# that match style (`*/hooks/*`) would block a Builder's legitimate
+# worktree edits, which the resolved-path check below is built to allow.
+orc_enforcement_layer_dirs() {
+  printf '%s\n' "hooks/" "lib/" "bin/"
+}
+
+# orc_is_enforcement_layer_path <file_path> <root> -- true if file_path
+# resolves to somewhere under <root>/hooks, <root>/lib, or <root>/bin --
+# UNLESS it resolves under <root>/.worktrees, which is exempt (a Builder
+# legitimately edits hooks/lib/bin inside .worktrees/issue-N/, the dogfood
+# room's own daily workflow; only the ROOT's own live wired copies are
+# protected here). A RESOLVED-PATH check via orc_lexical_normalize
+# (lib/cmd-inspect-lib.sh), not a string prefix or path-segment match --
+# a naive prefix check on the UNNORMALIZED path would let
+# ".worktrees/../hooks/x" spoof the exemption (it string-prefixes under
+# .worktrees/ while actually resolving to <root>/hooks/x); normalizing
+# BEFORE comparing collapses the ".." first, so the spoof can't survive.
+orc_is_enforcement_layer_path() {
+  local file_path="$1" root="$2" resolved root_normalized wt_prefix d dir_path
+  [ -z "$file_path" ] && return 1
+  [ -z "$root" ] && return 1
+  case "$file_path" in
+    /*) resolved="$file_path" ;;
+    *) resolved="$PWD/$file_path" ;;
+  esac
+  resolved="$(orc_lexical_normalize "$resolved")" || return 1
+  root_normalized="$(orc_lexical_normalize "$root")" || return 1
+  wt_prefix="$root_normalized/.worktrees"
+  case "$resolved" in
+    "$wt_prefix"|"$wt_prefix"/*) return 1 ;;
+  esac
+  while IFS= read -r d; do
+    [ -z "$d" ] && continue
+    dir_path="$root_normalized/${d%/}"
+    case "$resolved" in
+      "$dir_path"|"$dir_path"/*) return 0 ;;
+    esac
+  done < <(orc_enforcement_layer_dirs)
+  return 1
 }
 
 orc_config_file() {

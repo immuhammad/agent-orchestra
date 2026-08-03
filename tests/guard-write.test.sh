@@ -97,6 +97,60 @@ fi
 expect_allowed "a normal project write (unrelated to .claude//.agents/) is still allowed" \
   "src/some-feature.js"
 
+echo "== issue #189: <root>/hooks, <root>/lib, <root>/bin are protected by default at the room root =="
+# A dedicated fixture with a real orchestrator.yaml (so qsg_resolve_canon_dir
+# can resolve ROOT) -- run_guard_write/expect_* above deliberately use a
+# THROWAWAY tmp dir per call with no fixed root, so this needs its own
+# helper that reuses ONE root across every case in this section.
+EROOT="$(mktemp -d)"
+printf 'project: enforcement-layer-probe\n' > "$EROOT/orchestrator.yaml"
+
+run_guard_write_at() {
+  local file_path="$1"
+  local payload
+  payload="$(jq -n --arg fp "$file_path" '{tool_input: {file_path: $fp}}')"
+  local out st
+  out="$(cd "$EROOT" && echo "$payload" | bash "$GUARD" 2>&1)"
+  st=$?
+  GUARD_OUT="$out"
+  GUARD_STATUS=$st
+}
+expect_blocked_at() {
+  local desc="$1" file_path="$2"
+  run_guard_write_at "$file_path"
+  if [ "$GUARD_STATUS" -eq 2 ]; then
+    echo "PASS: $desc"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: $desc (expected exit 2, got $GUARD_STATUS) -- output: $GUARD_OUT"; FAIL=$((FAIL + 1))
+  fi
+}
+expect_allowed_at() {
+  local desc="$1" file_path="$2"
+  run_guard_write_at "$file_path"
+  if [ "$GUARD_STATUS" -eq 0 ]; then
+    echo "PASS: $desc"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: $desc (expected exit 0, got $GUARD_STATUS) -- output: $GUARD_OUT"; FAIL=$((FAIL + 1))
+  fi
+}
+
+expect_blocked_at "root hooks/ write is blocked (absolute path)" "$EROOT/hooks/x.sh"
+expect_blocked_at "root lib/ write is blocked (absolute path)" "$EROOT/lib/x.sh"
+expect_blocked_at "root bin/ write is blocked (absolute path)" "$EROOT/bin/x.sh"
+expect_blocked_at "root hooks/ write is blocked (relative path, cwd=root)" "hooks/x.sh"
+
+expect_allowed_at "a worktree's own hooks/ copy stays editable (absolute path)" "$EROOT/.worktrees/issue-9/hooks/x.sh"
+expect_allowed_at "a worktree's own lib/ copy stays editable (absolute path)" "$EROOT/.worktrees/issue-9/lib/x.sh"
+expect_allowed_at "a worktree's own bin/ copy stays editable (absolute path)" "$EROOT/.worktrees/issue-9/bin/x.sh"
+expect_allowed_at "a worktree's own hooks/ copy stays editable (relative path, cwd=root)" ".worktrees/issue-9/hooks/x.sh"
+
+expect_blocked_at "a .worktrees/../hooks traversal spoof still resolves to root and blocks (resolved-path check, not string prefix)" \
+  "$EROOT/.worktrees/../hooks/x.sh"
+
+expect_allowed_at "an unrelated root-level path is unaffected" "$EROOT/src/app.js"
+
+rm -rf "$EROOT"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

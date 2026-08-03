@@ -73,6 +73,6 @@ case "$TOOL_NAME" in
     ;;
 esac
 
-MSG="room-branch-gate: tool blocked -- room branch $STATE (expected the integration branch). Restore with 'git checkout <integration-branch>' (or 'git switch'), or set an override: ORC_ALLOW_UNMERGED_HARNESS=1 / write a reason to .harness/state/room-branch-override."
+MSG="room-branch-gate: tool blocked -- $(room_branch_mismatch_message "$ROOT") (or 'git switch <integration-branch>'), or set an override: ORC_ALLOW_UNMERGED_HARNESS=1 / write a reason to .harness/state/room-branch-override."
 echo "{\"decision\":\"deny\", \"reason\":$(jq -Rn --arg m "$MSG" '$m')}"
 exit 0

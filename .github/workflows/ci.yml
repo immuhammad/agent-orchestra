@@ -21,7 +21,13 @@ jobs:
         # path (not the newer `--adopt`) against a fixed answers fixture so
         # this doesn't depend on how GitHub Actions' checkout configures
         # the origin remote.
-        run: bash bin/orc init --answers .github/ci-orchestrator-answers.txt .
+        # ORC_INIT_NO_PROTECT=1: issue #189 made every orc init mode
+        # finish with orc-protect on by default (chflags/chattr
+        # immutability on .claude/.agents/orchestrator.yaml) -- this
+        # step's own answers-driven init must stay unprivileged (CI runners
+        # commonly lack CAP_LINUX_IMMUTABLE) and must not leave files
+        # immutable for later steps in this same job.
+        run: ORC_INIT_NO_PROTECT=1 bash bin/orc init --answers .github/ci-orchestrator-answers.txt .
       - name: Syntax-check every script
         run: |
           set -e

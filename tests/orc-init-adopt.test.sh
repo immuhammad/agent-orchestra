@@ -14,6 +14,10 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ORC="$DIR/../bin/orc"
+# issue #189: orc init --adopt now finishes with orc-protect on by
+# default -- opt out here so a chflags/chattr-immutable fixture doesn't
+# break this file's own scratch-dir teardown.
+export ORC_INIT_NO_PROTECT=1
 
 PASS=0
 FAIL=0
@@ -399,6 +403,45 @@ if echo "$OUT_FORK" | grep -q "origin still points at someone-else/agent-orchest
   pass "the origin-recommendation also fires (tail-only match) for a differently-owned fork named agent-orchestra"
 else
   fail "expected the origin-recommendation for a same-name fork under a different owner, got: $OUT_FORK"
+fi
+
+echo "== issue #189: orc init --adopt finishes with orc-protect on by default =="
+PROTECT_PROBE="$TMP/protect-cap-probe"
+touch "$PROTECT_PROBE"
+if [ "$(uname -s)" = Darwin ]; then
+  if chflags uchg "$PROTECT_PROBE" 2>/dev/null; then CAN_FLAG=1; chflags nouchg "$PROTECT_PROBE"; else CAN_FLAG=0; fi
+else
+  if chattr +i "$PROTECT_PROBE" 2>/dev/null; then CAN_FLAG=1; chattr -i "$PROTECT_PROBE"; else CAN_FLAG=0; fi
+fi
+rm -f "$PROTECT_PROBE"
+
+if [ "$CAN_FLAG" -eq 0 ]; then
+  echo "SKIP: no immutability privilege here (unprivileged Linux?) -- orc-protect-on-by-default cases skipped"
+else
+  ADOPT_PROTECT="$TMP/adopt-protect-on"
+  mkdir -p "$ADOPT_PROTECT"
+  OUT_ADOPT_PROTECT="$(ORC_INIT_NO_PROTECT= bash "$ORC" init --adopt "$ADOPT_PROTECT" 2>&1)"
+  if echo "$OUT_ADOPT_PROTECT" | grep -q "orc init: orc-protect applied"; then
+    pass "orc init --adopt prints 'orc-protect applied'"
+  else
+    fail "expected 'orc-protect applied' in output: $OUT_ADOPT_PROTECT"
+  fi
+  if bash "$DIR/../bin/orc-protect" status "$ADOPT_PROTECT" >/dev/null 2>&1; then
+    pass "orc init --adopt leaves the room orc-protect'd"
+  else
+    fail "expected the room to be orc-protect'd after orc init --adopt"
+  fi
+  bash "$DIR/../bin/orc-protect" off "$ADOPT_PROTECT" >/dev/null 2>&1 || true
+fi
+
+echo "== ORC_INIT_NO_PROTECT=1 skips orc-protect for --adopt too =="
+ADOPT_NOPROTECT="$TMP/adopt-no-protect"
+mkdir -p "$ADOPT_NOPROTECT"
+OUT_ADOPT_NOPROTECT="$(bash "$ORC" init --adopt "$ADOPT_NOPROTECT" 2>&1)"
+if echo "$OUT_ADOPT_NOPROTECT" | grep -q "orc init: orc-protect skipped (ORC_INIT_NO_PROTECT set)"; then
+  pass "ORC_INIT_NO_PROTECT=1 prints the skip message for --adopt"
+else
+  fail "expected the skip message in output: $OUT_ADOPT_NOPROTECT"
 fi
 
 echo ""
