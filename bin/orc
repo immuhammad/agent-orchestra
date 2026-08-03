@@ -22,6 +22,66 @@ source "$ORC_LIB_DIR/session-lifecycle.sh"
 # hardcoded "harness" default -- ORC_SESSION still overrides outright.
 ORC_SESSION="${ORC_SESSION:-$(orc_session_name "$(basename "$(pwd)")")}"
 
+# orc_seed_inbox_dirs [target] -- mkdir -p the four .harness/inbox/<agent>
+# dirs dispatch.sh actually writes to (orchestra/builder/agy/scribe -- the
+# live dispatch identity set, NOT the roles: block's implementer/tester/
+# reviewer axis). Shared by orc_build_session (a fresh clone-per-project
+# room, seeded at `orc up` time) and orc_init_adopt (an EXISTING
+# directory being adopted, seeded at adopt time instead) -- one mkdir,
+# not two hand-duplicated copies drifting apart. target defaults to "."
+# (cwd), matching orc_build_session's own prior relative-path usage.
+orc_seed_inbox_dirs() {
+  local target="${1:-.}"
+  mkdir -p "$target/.harness/inbox/orchestra" "$target/.harness/inbox/builder" \
+    "$target/.harness/inbox/agy" "$target/.harness/inbox/scribe"
+}
+
+# orc_watch_identity <target> -- prints the identity string used to
+# detect a repo swap for watcher-state reset (issue #171 Gate-1 item 7):
+# target's own github_repo if set, else its project scalar. Reads
+# target/orchestrator.yaml via a locally-scoped ORC_CONFIG_FILE (same
+# technique orc_init_answers_from_yaml uses further down) so this works
+# for any target dir, not just cwd.
+orc_watch_identity() {
+  local target="$1"
+  local ORC_CONFIG_FILE="$target/orchestrator.yaml"
+  local repo
+  repo="$(orc_github_repo)"
+  if [ -n "$repo" ]; then
+    echo "$repo"
+  else
+    orc_get_scalar project
+  fi
+}
+
+# orc_seed_watch_identity <target> -- writes target/.harness/state/
+# watch-repo with the CURRENT identity (orc_watch_identity), and -- ONLY
+# when a PRIOR recorded identity exists AND differs from the current one
+# -- clears the watcher-state files a repo swap would otherwise leave
+# stale (merge-watch-state, review-watch-state, events.log,
+# state/last-issue/). Called at the end of every `orc init` mode
+# (orc_init_core, orc_init_force, orc_init_adopt) -- NEVER from orc up
+# (see orc_build_session's own belt-and-suspenders WARNING instead;
+# resetting live state from a room that might already have panes running
+# would be actively dangerous). First-ever init/adopt has no prior file
+# to compare against -- nothing to reset, just seed.
+orc_seed_watch_identity() {
+  local target="$1"
+  local state_path identity prev
+  identity="$(orc_watch_identity "$target")"
+  state_path="$target/.harness/state/watch-repo"
+  mkdir -p "$(dirname "$state_path")"
+  if [ -f "$state_path" ]; then
+    prev="$(cat "$state_path" 2>/dev/null)"
+    if [ "$prev" != "$identity" ]; then
+      echo "orc init: repo identity changed ('$prev' -> '$identity') -- resetting watcher state (merge-watch-state, review-watch-state, events.log, state/last-issue/)"
+      rm -f "$target/.harness/merge-watch-state" "$target/.harness/review-watch-state" "$target/.harness/events.log"
+      rm -rf "$target/.harness/state/last-issue"
+    fi
+  fi
+  printf '%s\n' "$identity" > "$state_path"
+}
+
 # orc_build_session -- everything `orc up` does except the final attach.
 # Split out so tests can build a throwaway session, assert on it, and tear
 # it down without this process getting replaced by `tmux attach` (exec).
@@ -81,6 +141,62 @@ orc_build_session() {
     echo "orc: WARNING -- github_repo unset (or malformed) in orchestrator.yaml -- watchers will not poll GitHub until it's configured (expected an 'owner/repo' value)." >&2
   fi
 
+  # Own-checkout guard (#171 Gate-1 plan): refuse to build a control room
+  # on top of an un-adopted clone of the harness's OWN repo. A plain `git
+  # clone` of agent-orchestra, intended as the starting point for
+  # someone ELSE's new project, still carries the dogfood room's own
+  # orchestrator.yaml (project=agent-orchestra, github_repo=immuhammad/
+  # agent-orchestra) until `orc init --adopt` renames it -- without this
+  # guard, `orc up` would silently start dogfooding the harness's OWN
+  # room instead of the operator's actual project.
+  #
+  # EXEMPT (never refuse) is the genuine dogfood room's own shape:
+  # project equals the repo-name segment of github_repo AND project
+  # equals this checkout's own dirname -- both hold simultaneously only
+  # for the real harness checkout, never for an adopted derivative
+  # (renamed dir, or a project: field that has since diverged).
+  # Otherwise REFUSE when the repo-name segment -- from github_repo, or
+  # (github_repo unset/malformed) from this checkout's own git origin
+  # remote -- is literally "agent-orchestra": config still points at the
+  # harness's own identity, but the exemption's self-consistency check
+  # failed, meaning this was never actually adopted. Any other project
+  # (its own unrelated github_repo) is unaffected either way -- never
+  # refused by this check.
+  local own_checkout_repo_tail=""
+  if [ -n "$github_repo" ]; then
+    own_checkout_repo_tail="${github_repo##*/}"
+  fi
+  if [ -n "$own_checkout_repo_tail" ] && [ "$project" = "$own_checkout_repo_tail" ] && [ "$project" = "$(basename "$PWD")" ]; then
+    : # EXEMPT -- the real agent-orchestra dogfood room, always starts.
+  else
+    local own_checkout_refuse_tail="$own_checkout_repo_tail"
+    if [ -z "$own_checkout_refuse_tail" ]; then
+      local own_checkout_fallback_repo
+      own_checkout_fallback_repo="$(orc_init_default_github_repo "$PWD" 2>/dev/null)" || own_checkout_fallback_repo=""
+      [ -n "$own_checkout_fallback_repo" ] && own_checkout_refuse_tail="${own_checkout_fallback_repo##*/}"
+    fi
+    if [ "$own_checkout_refuse_tail" = "agent-orchestra" ]; then
+      echo "orc: REFUSE -- this checkout still looks like an un-adopted clone of the harness's own repo (agent-orchestra) -- run 'orc init --adopt' first to make this your own project's control room (or re-point/clear the git origin remote if that's not what this checkout is)." >&2
+      return 1
+    fi
+  fi
+
+  # Watcher-state identity check (belt-and-suspenders for orc init's own
+  # reset, issue #171 Gate-1 item 7) -- if init/--adopt was skipped after
+  # a repo swap, .harness/state/watch-repo (written by every orc init
+  # mode) won't match this checkout's CURRENT identity. Warn only -- the
+  # actual reset belongs at init time (orc_seed_watch_identity), never
+  # here: this room may already have panes running against live state.
+  local watch_state_path="./.harness/state/watch-repo"
+  if [ -f "$watch_state_path" ]; then
+    local watch_state_recorded watch_state_current
+    watch_state_recorded="$(cat "$watch_state_path" 2>/dev/null)"
+    watch_state_current="${github_repo:-$project}"
+    if [ "$watch_state_recorded" != "$watch_state_current" ]; then
+      echo "orc: WARNING -- recorded watcher-state identity ('$watch_state_recorded') does not match this checkout's current identity ('$watch_state_current') -- looks like orc init/--adopt was skipped after a repo swap. Run 'orc init --force' (or --adopt) to reset stale watcher state (.harness/merge-watch-state, review-watch-state, events.log, state/last-issue/)." >&2
+    fi
+  fi
+
   # Refuse to build the control room on top of a checkout
   # that isn't on the integration branch -- the room's whole guard/dispatch
   # posture assumes panes operate against the shared integration branch, so
@@ -125,8 +241,7 @@ orc_build_session() {
   # a different axis (per-role model config) than these fixed dispatch
   # identities. No legacy `copilot` dir: inbox_dir_name() now aliases it
   # INTO scribe/, so scribe/ alone is the one live physical directory.
-  mkdir -p ./.harness/inbox/orchestra ./.harness/inbox/builder \
-    ./.harness/inbox/agy ./.harness/inbox/scribe
+  orc_seed_inbox_dirs
 
   # Pane 3 (copilot/scribe) retired -- no recurring scribe
   # job remains (Builder writes PR bodies, watch.sh closes issues
@@ -803,6 +918,8 @@ orc_init_core() {
 
   orc_init_write_manifest "$target"
 
+  orc_seed_watch_identity "$target"
+
   echo "orc init: wrote a new control room for '$project' at $target"
   echo "orc init: Gate 1/Gate 2 approver: $gate"
 
@@ -1135,6 +1252,8 @@ orc_init_force() {
   bash "$ORC_SCRIPT_DIR/orc-install-skills" "$target"
 
   orc_init_write_manifest "$target"
+
+  orc_seed_watch_identity "$target"
 
   trap - EXIT
   if [ "$was_protected" -eq 1 ]; then
