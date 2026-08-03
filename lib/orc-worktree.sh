@@ -279,8 +279,12 @@ cmd_finish() {
   # case, which `gh pr create --body ""` then accepted without complaint.
   body="$(build_pr_body "$issue" "${extra_issues[@]+"${extra_issues[@]}"}")"
 
+  local repo_flag=()
+  [ -n "${GH_REPO:-}" ] && repo_flag=(--repo "$GH_REPO")
+
   local pr_url
   pr_url="$(cd "$wt" && gh pr create \
+    "${repo_flag[@]+"${repo_flag[@]}"}" \
     --base "$INTEGRATION_BRANCH" --head "$branch" --draft \
     --title "Issue #$issue" \
     --body "$body" 2>&1)" || {

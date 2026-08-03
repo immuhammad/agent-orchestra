@@ -5,6 +5,7 @@
 
 project: agent-orchestra
 integration_branch: main
+github_repo: immuhammad/agent-orchestra
 
 protected_paths:
   - .git/

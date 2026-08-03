@@ -419,6 +419,58 @@ else
   fail "interactive wrapper did not produce the expected room, status=$STATUS: $INTERACTIVE_OUT"
 fi
 
+echo "== issue #174: github_repo -- explicit GITHUB_REPO answer is rendered verbatim =="
+ANSWERS_REPO="$TMP/answers-repo.txt"
+full_answers "$ANSWERS_REPO"
+printf 'GITHUB_REPO=explicit-owner/explicit-repo\n' >> "$ANSWERS_REPO"
+TARGET_REPO="$TMP/room-repo-explicit"
+bash "$ORC" init --answers "$ANSWERS_REPO" "$TARGET_REPO" >/dev/null 2>&1
+if grep -q '^github_repo: explicit-owner/explicit-repo$' "$TARGET_REPO/orchestrator.yaml" 2>/dev/null; then
+  pass "explicit GITHUB_REPO answer is rendered into orchestrator.yaml verbatim"
+else
+  fail "expected 'github_repo: explicit-owner/explicit-repo' in orchestrator.yaml, got: $(cat "$TARGET_REPO/orchestrator.yaml" 2>/dev/null)"
+fi
+
+echo "== issue #174: github_repo -- no GITHUB_REPO answer + target IS a git repo with a github origin remote: auto-derived =="
+TARGET_AUTOREPO="$TMP/room-repo-auto"
+mkdir -p "$TARGET_AUTOREPO"
+git -C "$TARGET_AUTOREPO" init -q
+git -C "$TARGET_AUTOREPO" remote add origin git@github.com:auto-owner/auto-repo.git
+ANSWERS_AUTOREPO="$TMP/answers-auto.txt"
+full_answers "$ANSWERS_AUTOREPO"
+bash "$ORC" init --answers "$ANSWERS_AUTOREPO" "$TARGET_AUTOREPO" >/dev/null 2>&1
+if grep -q '^github_repo: auto-owner/auto-repo$' "$TARGET_AUTOREPO/orchestrator.yaml" 2>/dev/null; then
+  pass "github_repo auto-derived from the target's own git origin remote (SSH form) when no GITHUB_REPO answer is given"
+else
+  fail "expected 'github_repo: auto-owner/auto-repo' auto-derived, got: $(cat "$TARGET_AUTOREPO/orchestrator.yaml" 2>/dev/null)"
+fi
+
+echo "== issue #174: github_repo -- HTTPS origin remote form is also normalized =="
+TARGET_HTTPSREPO="$TMP/room-repo-https"
+mkdir -p "$TARGET_HTTPSREPO"
+git -C "$TARGET_HTTPSREPO" init -q
+git -C "$TARGET_HTTPSREPO" remote add origin https://github.com/https-owner/https-repo.git
+ANSWERS_HTTPSREPO="$TMP/answers-https.txt"
+full_answers "$ANSWERS_HTTPSREPO"
+bash "$ORC" init --answers "$ANSWERS_HTTPSREPO" "$TARGET_HTTPSREPO" >/dev/null 2>&1
+if grep -q '^github_repo: https-owner/https-repo$' "$TARGET_HTTPSREPO/orchestrator.yaml" 2>/dev/null; then
+  pass "github_repo auto-derived from the target's own git origin remote (HTTPS form)"
+else
+  fail "expected 'github_repo: https-owner/https-repo' auto-derived, got: $(cat "$TARGET_HTTPSREPO/orchestrator.yaml" 2>/dev/null)"
+fi
+
+echo "== issue #174: github_repo -- no GITHUB_REPO answer + target has no git origin remote at all: empty, not an error =="
+ANSWERS_NOREPO="$TMP/answers-norepo.txt"
+full_answers "$ANSWERS_NOREPO"
+TARGET_NOREPO="$TMP/room-repo-none"
+OUT_NOREPO="$(bash "$ORC" init --answers "$ANSWERS_NOREPO" "$TARGET_NOREPO" 2>&1)"
+STATUS_NOREPO=$?
+if [ "$STATUS_NOREPO" -eq 0 ] && grep -q '^github_repo: *$' "$TARGET_NOREPO/orchestrator.yaml" 2>/dev/null; then
+  pass "no origin remote at all: github_repo renders empty, init still succeeds (no crash)"
+else
+  fail "expected an empty github_repo line and a clean exit, got status=$STATUS_NOREPO: $(cat "$TARGET_NOREPO/orchestrator.yaml" 2>/dev/null)"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

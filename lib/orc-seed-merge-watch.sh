@@ -34,6 +34,17 @@ orc_seed_merge_watch() {
     return 0
   fi
 
+  # Refuse outright (create NO state file, not even an empty one) when
+  # GH_REPO is unset -- mw_fetch_merged_prs itself already fails closed
+  # (empty output) without it, but seeding an EMPTY-but-present state file
+  # here would then read as "already seeded" via the guard above FOREVER,
+  # even after github_repo is correctly configured on a later `orc up`.
+  # Refusing to write anything at all keeps this retryable.
+  if [ -z "${GH_REPO:-}" ]; then
+    echo "orc-seed-merge-watch.sh: GH_REPO unset -- refusing to seed $MERGE_WATCH_STATE (set orchestrator.yaml's github_repo and re-run 'orc up')" >&2
+    return 0
+  fi
+
   mkdir -p "$(dirname "$MERGE_WATCH_STATE")"
 
   local prs count=0 pr_number

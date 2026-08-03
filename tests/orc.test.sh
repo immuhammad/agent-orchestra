@@ -106,6 +106,49 @@ assert_eq "integration_branch scalar" "uat"         "$(grep '^BRANCH=' "$TMP/sca
 assert_eq "roles.orchestra.model"   "opus"          "$(grep '^ORCH_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 assert_eq "roles.implementer.model" "sonnet"        "$(grep '^IMPL_MODEL=' "$TMP/scalars.out" | cut -d= -f2)"
 
+echo "== orc-config.sh: orc_github_repo =="
+(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: test-project
+github_repo: immuhammad/agent-orchestra
+EOF
+  source "$DIR/../lib/orc-config.sh"
+  orc_github_repo
+) > "$TMP/repo-wellformed.out"
+assert_eq "well-formed github_repo passes through" "immuhammad/agent-orchestra" "$(cat "$TMP/repo-wellformed.out")"
+rm -f "$TMP/orchestrator.yaml"
+
+for bad in 'owner' 'owner/' '/repo' 'owner/repo/extra' 'owner/re po' 'owner/repo; rm -rf /' 'owner/repo\$(whoami)' 'owner/repo\`id\`' "owner/repo' OR '1'='1"; do
+  (
+    cd "$TMP"
+    printf 'project: test-project\ngithub_repo: %s\n' "$bad" > orchestrator.yaml
+    source "$DIR/../lib/orc-config.sh"
+    orc_github_repo
+  ) > "$TMP/repo-bad.out"
+  assert_eq "malformed/injection-shaped github_repo '$bad' reads as empty (fail closed)" "" "$(cat "$TMP/repo-bad.out")"
+done
+rm -f "$TMP/orchestrator.yaml"
+
+(
+  cd "$TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: test-project
+EOF
+  source "$DIR/../lib/orc-config.sh"
+  orc_github_repo
+) > "$TMP/repo-missing-key.out"
+assert_eq "missing github_repo key reads as empty" "" "$(cat "$TMP/repo-missing-key.out")"
+rm -f "$TMP/orchestrator.yaml"
+
+(
+  cd "$TMP"
+  rm -f orchestrator.yaml
+  source "$DIR/../lib/orc-config.sh"
+  orc_github_repo
+) > "$TMP/repo-missing-file.out"
+assert_eq "missing orchestrator.yaml: github_repo reads as empty" "" "$(cat "$TMP/repo-missing-file.out")"
+
 echo "== orc-config.sh: orc_session_name =="
 (
   cd "$TMP"
@@ -697,6 +740,7 @@ chmod +x "$FAKE_GH_BIN/gh"
   cd "$SEED_TMP"
   cat > orchestrator.yaml <<'EOF'
 project: seed-test-project
+github_repo: seed-test/project
 EOF
   PATH="$FAKE_GH_BIN:$PATH" ORC_SESSION="$SEED_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
     bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$SEED_TMP/build.err"
@@ -713,6 +757,7 @@ SEED_TMP2="$(mktemp -d)"
   cd "$SEED_TMP2"
   cat > orchestrator.yaml <<'EOF'
 project: seed-skip-test-project
+github_repo: seed-skip-test/project
 EOF
   mkdir -p .harness
   ORC_SESSION="orctest-seedskip-$$" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
@@ -725,6 +770,73 @@ else
 fi
 tmux kill-session -t "orctest-seedskip-$$" 2>/dev/null || true
 rm -rf "$SEED_TMP" "$SEED_TMP2"
+
+echo "== orc.sh: orc_build_session exports GH_REPO into the tmux session env from orchestrator.yaml's github_repo =="
+GHREPO_SESSION="orctest-ghrepo-$$"
+GHREPO_TMP="$(mktemp -d)"
+(
+  cd "$GHREPO_TMP"
+  cat > orchestrator.yaml <<'EOF'
+project: ghrepo-test-project
+github_repo: acme/widgets
+EOF
+  ORC_SESSION="$GHREPO_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+    bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$GHREPO_TMP/build.err"
+)
+GHREPO_OUT="$GHREPO_TMP/gh_repo_seen.txt"
+tmux send-keys -t "$GHREPO_SESSION:0.4" "echo \"[\$GH_REPO]\" > $GHREPO_OUT" C-m
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$GHREPO_OUT" ] && break
+  sleep 0.3
+done
+assert_eq "a fresh pane in the built session sees GH_REPO from orchestrator.yaml's github_repo" "[acme/widgets]" "$(cat "$GHREPO_OUT" 2>/dev/null)"
+
+# agy REQUEST-CHANGES (#174 round 1): the check above only ever
+# exercised pane 0.4 (created by a LATER split-window call), which passes
+# even when the env propagation is wired wrong -- pane 0 itself (spawned
+# by `new-session` in the very same step the session is created) is the
+# one a plain `set-environment` call issued afterward actually misses.
+GHREPO_OUT0="$GHREPO_TMP/gh_repo_seen_pane0.txt"
+tmux send-keys -t "$GHREPO_SESSION:0.0" "echo \"[\$GH_REPO]\" > $GHREPO_OUT0" C-m
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$GHREPO_OUT0" ] && break
+  sleep 0.3
+done
+assert_eq "pane 0 itself (the pane new-session spawns directly) also sees GH_REPO, not just later split panes" "[acme/widgets]" "$(cat "$GHREPO_OUT0" 2>/dev/null)"
+
+tmux kill-session -t "$GHREPO_SESSION" 2>/dev/null || true
+rm -rf "$GHREPO_TMP"
+
+echo "== orc.sh: orc_build_session warns loudly and never exports GH_REPO when github_repo is missing/invalid =="
+for bad_case in missing invalid; do
+  NOGH_SESSION="orctest-nogh-$bad_case-$$"
+  NOGH_TMP="$(mktemp -d)"
+  (
+    cd "$NOGH_TMP"
+    if [ "$bad_case" = missing ]; then
+      cat > orchestrator.yaml <<'EOF'
+project: nogh-test-project
+EOF
+    else
+      cat > orchestrator.yaml <<'EOF'
+project: nogh-test-project
+github_repo: not a valid repo slug
+EOF
+    fi
+    ORC_SESSION="$NOGH_SESSION" ORC_SKIP_PANE_COMMANDS=1 ORC_SKIP_LIVENESS=1 ORC_SKIP_MERGE_WATCH_SEED=1 ORC_SKIP_HOOK_WIRING_CHECK=1 ORC_ALLOW_UNMERGED_HARNESS=1 \
+      bash -c "source '$DIR/../bin/orc'; orc_build_session" 2> "$NOGH_TMP/build.err"
+  )
+  grep -qi 'github_repo unset' "$NOGH_TMP/build.err" && pass "$bad_case github_repo: orc_build_session warns loudly" || fail "$bad_case github_repo: expected a 'github_repo unset' warning, got: $(cat "$NOGH_TMP/build.err")"
+  NOGH_OUT="$NOGH_TMP/gh_repo_seen.txt"
+  tmux send-keys -t "$NOGH_SESSION:0.4" "echo \"[\$GH_REPO]\" > $NOGH_OUT" C-m
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$NOGH_OUT" ] && break
+    sleep 0.3
+  done
+  assert_eq "$bad_case github_repo: GH_REPO is empty in a fresh pane (never exported)" "[]" "$(cat "$NOGH_OUT" 2>/dev/null)"
+  tmux kill-session -t "$NOGH_SESSION" 2>/dev/null || true
+  rm -rf "$NOGH_TMP"
+done
 
 echo "== orc_build_session refuses/warns on room-branch mismatch =="
 rb_mk_repo() {

@@ -333,6 +333,49 @@ else
   fail "expected a loud REFUSE for --force on an uninitialized target, got status=$STATUS: $OUT"
 fi
 
+echo "== issue #174: orc_init_answers_from_yaml round-trips github_repo for bare --force's answers source =="
+ROOM_GHR="$TMP/room-ghr-roundtrip"
+mkdir -p "$ROOM_GHR"
+printf 'project: ghr-roundtrip\nintegration_branch: main\ngithub_repo: roundtrip-owner/roundtrip-repo\n' > "$ROOM_GHR/orchestrator.yaml"
+ROUNDTRIP_ANSWERS="$TMP/roundtrip-answers.txt"
+bash -c "source '$ORC_BIN_DIR/orc' >/dev/null 2>&1; orc_init_answers_from_yaml '$ROOM_GHR' '$ROUNDTRIP_ANSWERS'"
+if grep -q '^GITHUB_REPO=roundtrip-owner/roundtrip-repo$' "$ROUNDTRIP_ANSWERS" 2>/dev/null; then
+  pass "orc_init_answers_from_yaml recovers GITHUB_REPO from orchestrator.yaml's github_repo"
+else
+  fail "expected 'GITHUB_REPO=roundtrip-owner/roundtrip-repo' in the synthesized answers file, got: $(cat "$ROUNDTRIP_ANSWERS" 2>/dev/null)"
+fi
+
+echo "== issue #174: a full re-init (--force --answers) with GITHUB_REPO omitted re-derives from the target's own git remote, not silently dropped to empty =="
+ROOM_GHR2="$TMP/room-ghr-rederive"
+bash "$ORC" init --answers "$ANSWERS1" "$ROOM_GHR2" >/dev/null 2>&1
+git -C "$ROOM_GHR2" init -q
+git -C "$ROOM_GHR2" remote add origin git@github.com:rederive-owner/rederive-repo.git
+ANSWERS_RERUN="$TMP/answers-rerun.txt"
+write_answers "$ANSWERS_RERUN" <<'EOF'
+PROJECT=force-test-project
+INTEGRATION_BRANCH=main
+TICKET_TRACKER=gh-issues
+GATE_APPROVER=Ahmad
+ROLE_ORCHESTRA_MODEL=opus
+ROLE_ORCHESTRA_EFFORT=high
+ROLE_IMPLEMENTER_MODEL=sonnet
+ROLE_IMPLEMENTER_EFFORT=default
+ROLE_TESTER_MODEL=sonnet
+ROLE_TESTER_EFFORT=default
+ROLE_REVIEWER_MODEL=agy
+ROLE_REVIEWER_EFFORT=high
+ROLE_SCRIBE_MODEL=haiku
+ROLE_SCRIBE_EFFORT=low
+BUDGET_CLAUDE_PCT=80
+BUDGET_AGY_PCT=80
+EOF
+bash "$ORC" init --force --answers "$ANSWERS_RERUN" "$ROOM_GHR2" >/dev/null 2>&1
+if grep -q '^github_repo: rederive-owner/rederive-repo$' "$ROOM_GHR2/orchestrator.yaml" 2>/dev/null; then
+  pass "full re-init with no GITHUB_REPO answer re-derives it from the target's own git origin remote"
+else
+  fail "expected 'github_repo: rederive-owner/rederive-repo' re-derived, got: $(cat "$ROOM_GHR2/orchestrator.yaml" 2>/dev/null)"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

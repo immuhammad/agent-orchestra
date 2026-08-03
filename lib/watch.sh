@@ -87,7 +87,7 @@ source "$DIR/broker.sh"
 # merged-PR history on a fresh room, not just the last 20.
 mw_fetch_merged_prs() {
   local limit="${1:-20}"
-  gh pr list --state merged --limit "$limit" --json number,title,body,headRefName \
+  gh pr list --repo "$GH_REPO" --state merged --limit "$limit" --json number,title,body,headRefName \
     --jq '.[] | [.number, (.title // "" | gsub("\n";" ")), (.body // "" | gsub("\n";" ")), .headRefName] | @tsv' 2>/dev/null
 }
 
@@ -136,8 +136,8 @@ mw_mark_processed() {
 # call must not block processing of the rest of the merged-PR list.
 mw_close_issue() {
   local issue="$1" pr="$2"
-  gh issue comment "$issue" --body "Merged via PR #$pr." >/dev/null 2>&1 \
-    && gh issue close "$issue" >/dev/null 2>&1
+  gh issue comment "$issue" --repo "$GH_REPO" --body "Merged via PR #$pr." >/dev/null 2>&1 \
+    && gh issue close "$issue" --repo "$GH_REPO" >/dev/null 2>&1
 }
 
 # mw_dev_target_root -- optional override for orc-worktree.sh's
@@ -214,7 +214,22 @@ mw_notify_pick() {
 # close is done -- gated on the head branch actually matching the
 # feature/issue-<N> convention (a PR with no such branch has no worktree to
 # tear down in the first place).
+# Set once the first time merge_watch_check finds GH_REPO unset, so the
+# fail-closed warning below logs once per watcher process lifetime
+# ("once per watcher start"), not once per tick -- watch_main's `while
+# true` loop calls this every WATCH_INTERVAL seconds and would otherwise
+# spam events.log forever.
+_MW_GH_REPO_WARNED=""
+
 merge_watch_check() {
+  if [ -z "${GH_REPO:-}" ]; then
+    if [ -z "$_MW_GH_REPO_WARNED" ]; then
+      we_log_event "merge-watch: GH_REPO unset -- skipping GitHub polling. This watcher only reads GH_REPO from its own process env at session start; editing orchestrator.yaml's github_repo alone will NOT be picked up live -- restart the room ('orc up' again after killing the session) once it's configured."
+      _MW_GH_REPO_WARNED=1
+    fi
+    return 0
+  fi
+
   local pr title body branch issues issue branch_issue td_out
   while IFS=$'\t' read -r pr title body branch; do
     [ -z "$pr" ] && continue
@@ -286,7 +301,7 @@ REVIEW_WATCH_STATE="${REVIEW_WATCH_STATE:-$CANON_DIR/review-watch-state}"
 # bound -- there is no "reject an already-ready PR back to draft" state
 # in AGENTS.md's flow for review-watch to observe or act on.
 rw_fetch_open_draft_prs() {
-  gh pr list --state open --json number,title,body,headRefName,isDraft \
+  gh pr list --repo "$GH_REPO" --state open --json number,title,body,headRefName,isDraft \
     --jq '.[] | select(.isDraft) | [.number, (.title // "" | gsub("\n";" ")), (.body // "" | gsub("\n";" ")), .headRefName] | @tsv' 2>/dev/null
 }
 
@@ -313,7 +328,7 @@ rw_fetch_open_draft_prs() {
 # here is invisible to a diff, an editor, or the next reader. Split out
 # for the same reason as mw_fetch_merged_prs.
 rw_fetch_pr_comments() {
-  gh pr view "$1" --json comments \
+  gh pr view "$1" --repo "$GH_REPO" --json comments \
     --jq '.comments[] | [.createdAt, (.body | gsub("\n"; ([1] | implode)))] | @tsv' 2>/dev/null
 }
 
@@ -377,7 +392,18 @@ rw_notify() {
 #     the PR stays draft through the fix loop.
 # A PR with comments but no anchored match at all is logged once per tick
 # (not per comment) as ambiguous/malformed and skipped -- never guessed at.
+# Same once-per-watcher-start shape as _MW_GH_REPO_WARNED above.
+_RW_GH_REPO_WARNED=""
+
 review_watch_check() {
+  if [ -z "${GH_REPO:-}" ]; then
+    if [ -z "$_RW_GH_REPO_WARNED" ]; then
+      we_log_event "review-watch: GH_REPO unset -- skipping GitHub polling. This watcher only reads GH_REPO from its own process env at session start; editing orchestrator.yaml's github_repo alone will NOT be picked up live -- restart the room ('orc up' again after killing the session) once it's configured."
+      _RW_GH_REPO_WARNED=1
+    fi
+    return 0
+  fi
+
   local pr title body branch issue verdict delivered
   while IFS=$'\t' read -r pr title body branch; do
     [ -z "$pr" ] && continue
@@ -401,7 +427,7 @@ review_watch_check() {
 
     case "$verdict" in
       APPROVE)
-        gh pr ready "$pr" >/dev/null 2>&1
+        gh pr ready "$pr" --repo "$GH_REPO" >/dev/null 2>&1
         rw_notify builder "$issue" "PR #$pr APPROVED by reviewer -- marked ready; proceed with Gate-2 handoff."
         rw_notify orchestra "$issue" "PR #$pr (issue #$issue) APPROVED by reviewer and marked ready."
         echo "watch.sh: review-watch delivered APPROVE for PR #$pr (issue #$issue) -- marked ready, notified builder+orchestra"
