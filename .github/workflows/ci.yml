@@ -10,6 +10,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install tmux
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      - name: Provision this room's own dogfood config (orchestrator.yaml/souls)
+        # #171 made orchestrator.yaml/souls/*.md untracked per-project files
+        # (git rm --cached, never deleted -- they're just no longer part of
+        # a fresh checkout). A dev machine still has the pre-migration copy
+        # physically on disk; this CI checkout does not, and several tests
+        # resolve the real project root via lib/harness-root.sh and need a
+        # physical orchestrator.yaml to exist, same as any real checkout of
+        # this dogfood room would. Uses the well-established `orc init`
+        # path (not the newer `--adopt`) against a fixed answers fixture so
+        # this doesn't depend on how GitHub Actions' checkout configures
+        # the origin remote.
+        run: bash bin/orc init --answers .github/ci-orchestrator-answers.txt .
       - name: Syntax-check every script
         run: |
           set -e

@@ -29,9 +29,21 @@ pr*_body.txt
 # per-project root files -- each project that adopts
 # this harness copies these from templates/ and customizes its own copy;
 # never tracked here (or in a consumer project). templates/*.md are the
-# tracked reference/seed.
+# tracked reference/seed. orchestrator.yaml and souls/*.md joined this
+# list at issue #171 item 5b -- same reasoning: templates/orchestrator.
+# yaml and templates/souls/*.md stay the tracked source of truth, `orc
+# init`/`orc init --force`/`orc init --adopt` regenerate the live copies.
 /AGENTS.md
 /CLAUDE.md
 /GEMINI.md
 /review-protocol.md
+/orchestrator.yaml
+/souls/*.md
 /project/*
+
+# issue #171 item 5a: an optional CONSUMER_DIR answer (orc init /
+# orc init --adopt --consumer-dir) writes a wholesale ignore for a
+# consumer-named directory in the TARGET project this harness is
+# installed into -- never rendered here (this repo has no CONSUMER_DIR
+# of its own), documented at the write site (bin/orc's
+# orc_init_write_consumer_gitignore) for consumer projects.

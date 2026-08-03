@@ -32,6 +32,24 @@ MARKER=".harness/.session-start"
 # If no session marker exists, don't block (first run / manual session)
 [ -f "$MARKER" ] || exit 0
 
+# rider 8 (issue #171): a handoff.md that was NEVER initialised (no such
+# file at all) is a materially different problem from one that merely
+# went stale this session -- the room itself was likely never properly
+# `orc init`'d. bash's -ot is true when file1 (HANDOFF) doesn't exist but
+# file2 (MARKER) does, so the block below already fired for this case --
+# just with the STALE case's own wording, which misleadingly implies a
+# session let an existing handoff.md go out of date rather than the file
+# never having existed. Split the two so orchestra gets a distinct,
+# actionable signal for each. Both still block (exit 2): the never-
+# initialised case is at least as actionable/severe as the merely-stale
+# one (a room with no handoff.md at all has nothing for the NEXT session
+# to read either), so it gets the same severity, not a downgrade to a
+# warning.
+if [ "${ORC_ROLE:-}" = "orchestra" ] && [ ! -f "$HANDOFF" ]; then
+  echo "handoff.md not initialised -- run 'orc init' (or otherwise create .harness/handoff.md) before finishing this session." >&2
+  exit 2
+fi
+
 # handoff.md is Orchestra's file -- the room-level state of
 # record, and only Orchestra has the room-level view to write it honestly.
 # This nag used to fire for EVERY agent's Stop, and Builder clobbered the

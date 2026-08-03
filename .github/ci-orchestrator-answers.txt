@@ -1,0 +1,32 @@
+# CI-only answers fixture for `orc init --answers` -- issue #171 made this
+# repo's own orchestrator.yaml/souls/*.md untracked (per-project files,
+# matching AGENTS.md/CLAUDE.md/GEMINI.md/review-protocol.md's existing
+# convention). A dev machine still has the pre-migration file physically
+# on disk (git rm --cached never deletes it); a genuinely fresh checkout
+# -- CI's own `actions/checkout`, or any new contributor's first clone --
+# does not. Several tests (repo-gitignore, orc-worktree-config-copy,
+# orc-seed-merge-watch, watch) resolve the real project root via
+# lib/harness-root.sh and need a physical orchestrator.yaml to exist,
+# same as any real checkout of this dogfood room would have. CI runs
+# `orc init --answers .github/ci-orchestrator-answers.txt .` before the
+# test suite to provision exactly that -- values here MUST match this
+# repo's actual identity (see decisions.log if these ever drift from the
+# live room's own orchestrator.yaml).
+PROJECT=agent-orchestra
+INTEGRATION_BRANCH=main
+GITHUB_REPO=immuhammad/agent-orchestra
+PROTECTED_PATHS=.git/
+TICKET_TRACKER=gh-issues
+GATE_APPROVER=the human running this harness
+ROLE_ORCHESTRA_MODEL=opus
+ROLE_ORCHESTRA_EFFORT=high
+ROLE_IMPLEMENTER_MODEL=sonnet
+ROLE_IMPLEMENTER_EFFORT=default
+ROLE_TESTER_MODEL=sonnet
+ROLE_TESTER_EFFORT=default
+ROLE_REVIEWER_MODEL=agy
+ROLE_REVIEWER_EFFORT=high
+ROLE_SCRIBE_MODEL=haiku
+ROLE_SCRIBE_EFFORT=low
+BUDGET_CLAUDE_PCT=80
+BUDGET_AGY_PCT=80
