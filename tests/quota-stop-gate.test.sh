@@ -218,6 +218,25 @@ run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Edit","tool_input":{"edits"
 run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Edit","tool_input":{"edits":[{"new_string":"x"}]}}'
 [ "$GATE_STATUS" -eq 2 ] && pass "woz Edit: edits[] entry with no file_path denied" || fail "woz Edit entry missing file_path should be denied, got $GATE_STATUS: $GATE_OUT"
 
+echo "== issue #172 regression (agy REQUEST-CHANGES, PR #181): a STRING edits/file_glob_patterns value cannot type-confuse past the batch check =="
+# jq's `length` is polymorphic (a string has a length too), so
+# `(.tool_input.edits // []) | length` used to treat a STRING edits value
+# as a non-empty batch, enter the loop, have jq's array iteration fail
+# silently (no output), skip the loop body entirely, and fall through to
+# an unconditional allow -- WITHOUT ever checking top_path. This is the
+# exact live exploit agy's dedicated security pass on PR #181 reported.
+run_claude_gate '{"tool_name":"NotebookEdit","tool_input":{"file_path":"src/app.py","edits":"bypass"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "SECURITY -- a STRING edits value does not type-confuse past the batch check; top_path (src/app.py, disallowed) is still consulted and denies" || fail "SECURITY REGRESSION: STRING edits type-confusion bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"NotebookEdit","tool_input":{"file_path":".harness/handoff.md","edits":"bypass"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "a STRING edits value with an ALLOWED top_path still falls through to the (correct) allow, not a denial side effect of the fix" || fail "over-strict: STRING edits value with an allowed top_path should still be allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_path":"README.md","file_glob_patterns":"bypass"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "SECURITY -- a STRING file_glob_patterns value does not type-confuse past the batch check; top_path (README.md, disallowed) is still consulted and denies" || fail "SECURITY REGRESSION: STRING file_glob_patterns type-confusion bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Edit","tool_input":{"edits":{"file_path":".harness/handoff.md"}}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "SECURITY -- an OBJECT (not array) edits value also does not type-confuse past the batch check; no top_path present, denies" || fail "SECURITY REGRESSION: OBJECT edits type-confusion bypass allowed, got $GATE_STATUS: $GATE_OUT"
+
 echo "== issue #172: intent-normalized MCP read tools (woz Search) are judged like a built-in Read, not the catch-all deny =="
 run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_glob_patterns":[".harness/handoff.md"]}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "woz Search: single allowed glob pattern allowed while gated" || fail "woz Search with an allowed pattern should be allowed while gated, got $GATE_STATUS: $GATE_OUT"

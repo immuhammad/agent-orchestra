@@ -268,7 +268,20 @@ qsg_command_allowed() {
 # than silently falling through to a stale top_path check.
 qsg_write_intent_allowed() {
   local input="$1" canon_dir="$2" edits_len path top_path
-  edits_len="$(echo "$input" | jq '(.tool_input.edits // []) | length' 2>/dev/null)"
+  # `type == "array"` gate BEFORE `length` (agy REQUEST-CHANGES, PR #181):
+  # jq's `length` is polymorphic -- `"bypass" | length` is 6, not an error,
+  # so a tool_input.edits that's a STRING (not an array) used to satisfy
+  # `-gt 0` and enter the batch branch below. The subsequent `jq -r
+  # '.tool_input.edits[]...'` then fails outright on a non-iterable
+  # ("Cannot iterate over string"), producing NO output at all -- the
+  # `while read` loop runs zero iterations (not even one denying blank
+  # line) and falls straight through to `return 0`, WITHOUT ever
+  # consulting top_path. A single crafted call
+  # ({"tool_input":{"file_path":"src/app.py","edits":"bypass"}}) bypassed
+  # the gate entirely. Forcing non-arrays to 0 here routes that shape to
+  # the top_path fallback below instead, where it's judged like any
+  # ordinary single-path write.
+  edits_len="$(echo "$input" | jq '(.tool_input.edits // []) | if type == "array" then length else 0 end' 2>/dev/null)"
   case "$edits_len" in ''|*[!0-9]*) edits_len=0 ;; esac
   if [ "$edits_len" -gt 0 ]; then
     # NOT `.file_path // empty` -- jq's `empty` filter for a missing/null
@@ -303,7 +316,13 @@ qsg_write_intent_allowed() {
 # it happens to BE one of the exact allowed paths.
 qsg_read_intent_allowed() {
   local input="$1" canon_dir="$2" patterns_len pattern stripped top_path
-  patterns_len="$(echo "$input" | jq '(.tool_input.file_glob_patterns // []) | length' 2>/dev/null)"
+  # Same type-confusion bypass as qsg_write_intent_allowed's edits[] check
+  # above (agy REQUEST-CHANGES, PR #181) applies identically to
+  # file_glob_patterns -- a non-array value satisfies `length -gt 0` but
+  # then fails jq iteration silently, skipping the whole while loop and
+  # falling through to `return 0` unchecked. Same fix: force non-arrays
+  # to 0 so they route to the top_path fallback instead.
+  patterns_len="$(echo "$input" | jq '(.tool_input.file_glob_patterns // []) | if type == "array" then length else 0 end' 2>/dev/null)"
   case "$patterns_len" in ''|*[!0-9]*) patterns_len=0 ;; esac
   if [ "$patterns_len" -gt 0 ]; then
     # Same one-line-per-entry guarantee as qsg_write_intent_allowed above,
