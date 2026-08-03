@@ -149,6 +149,20 @@ expect_blocked_at "a .worktrees/../hooks traversal spoof still resolves to root 
 
 expect_allowed_at "an unrelated root-level path is unaffected" "$EROOT/src/app.js"
 
+echo "== SECURITY (agy's dedicated review, finding 1): a symlinked directory can't spoof the .worktrees exemption =="
+# ln -s ../../hooks .worktrees/issue-1/myhooks -- a write through
+# myhooks/x.sh lexically looks like it's under .worktrees/ (exempt), but
+# the kernel follows the symlink into the ROOT's real hooks/. Only a
+# PHYSICAL resolution (orc_physical_normalize) catches this.
+# hooks/ must actually exist at EROOT for this to be a realistic repro --
+# a real room always has it by the time this guard matters; a symlink to
+# a target that doesn't exist yet can't be exploited anyway (the OS
+# itself refuses to create a file under a dangling directory symlink).
+mkdir -p "$EROOT/hooks" "$EROOT/.worktrees/issue-1"
+ln -s ../../hooks "$EROOT/.worktrees/issue-1/myhooks"
+expect_blocked_at "a symlinked worktree subdir pointing at root hooks/ still blocks (physical resolution, not lexical)" \
+  "$EROOT/.worktrees/issue-1/myhooks/x.sh"
+
 rm -rf "$EROOT"
 
 echo ""

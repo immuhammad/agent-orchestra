@@ -49,17 +49,18 @@ fi
 # simply skipped, same posture as before this fix existed; the
 # .claude/.agents/protected_paths checks above/below are unaffected
 # either way.
-# pwd (not pwd -P): harness_canonical_dir resolves CANON_DIR via a plain
-# pwd too (see lib/harness-root.sh) -- matching that convention keeps
-# ROOT and an incoming FILE_PATH comparable as plain strings. Symlink-
-# resolving ROOT alone (pwd -P) while FILE_PATH stays unresolved is a
-# real mismatch, not just a test artifact: on macOS, mktemp -d returns a
-# /var/folders/... path that's itself a symlink to /private/var/folders/...
-# -- confirmed live, this exact drift silently made every enforcement-
-# layer case below false (never blocked, never exempted) until fixed.
+# No cd/pwd resolution needed here -- orc_is_enforcement_layer_path
+# (lib/orc-config.sh) physically resolves both FILE_PATH and ROOT
+# internally via orc_physical_normalize, so a plain string dirname is
+# enough (CANON_DIR is already absolute -- harness_canonical_dir always
+# returns one). An earlier version of this line used `pwd -P` here,
+# which double-resolved against that same internal resolution and (on
+# macOS, where mktemp -d's /var/folders/... is itself a symlink to
+# /private/var/folders/...) went stale the moment orc_physical_normalize
+# was added -- confirmed live via this file's own test suite.
 ROOT=""
 if CANON_DIR="$(qsg_resolve_canon_dir 2>/dev/null)"; then
-  ROOT="$(cd "$(dirname "$CANON_DIR")" 2>/dev/null && pwd)" || ROOT=""
+  ROOT="$(dirname "$CANON_DIR")"
 fi
 if [ -n "$ROOT" ] && orc_is_enforcement_layer_path "$FILE_PATH" "$ROOT"; then
   echo "guard-write.sh: blocked write into '$FILE_PATH' -- hooks/, lib/, and bin/ are the harness's own live wired enforcement scripts, protected by default at the room root (a worktree's own copies under .worktrees/<issue>/ stay editable -- that's where a Builder legitimately edits them). Work in a worktree via lib/orc-worktree.sh and land the change through review, same as any other code change." >&2

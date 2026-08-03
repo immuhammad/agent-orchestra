@@ -84,12 +84,14 @@ orc_is_enforcement_layer_path() {
   local file_path="$1" root="$2" resolved root_normalized wt_prefix d dir_path
   [ -z "$file_path" ] && return 1
   [ -z "$root" ] && return 1
-  case "$file_path" in
-    /*) resolved="$file_path" ;;
-    *) resolved="$PWD/$file_path" ;;
-  esac
-  resolved="$(orc_lexical_normalize "$resolved")" || return 1
-  root_normalized="$(orc_lexical_normalize "$root")" || return 1
+  # orc_physical_normalize, not orc_lexical_normalize -- a symlink can
+  # otherwise spoof the .worktrees exemption below (agy's dedicated
+  # security review of this diff, finding 1; see that function's own
+  # header for the exact repro). Both sides resolved the SAME way so
+  # they stay comparable regardless of which one a caller passes
+  # pre-resolved vs raw.
+  resolved="$(orc_physical_normalize "$file_path")" || return 1
+  root_normalized="$(orc_physical_normalize "$root")" || return 1
   wt_prefix="$root_normalized/.worktrees"
   case "$resolved" in
     "$wt_prefix"|"$wt_prefix"/*) return 1 ;;

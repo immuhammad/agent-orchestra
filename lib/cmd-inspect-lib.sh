@@ -55,6 +55,73 @@ orc_lexical_normalize() {
   return 0
 }
 
+# orc_physical_normalize <path> -- resolves path to its REAL filesystem
+# location: symlinks are followed at EVERY component, not just lexically
+# collapsed like orc_lexical_normalize above. Two passes: (1) if the path
+# itself (after lexical normalization) is a symlink, follow it,
+# repeatedly, up to a bounded number of hops (a symlinked LEAF file/dir --
+# cycle-safety cap, not a realistic depth for a legitimate path); (2)
+# resolve whatever directory now contains the result via `cd -P` (a
+# symlinked ANCESTOR directory anywhere in the chain -- the same idiom
+# this codebase's lib/quota-stop-lib.sh already uses for
+# qsg_command_allowed's resolved-executable check). Existence-tolerant
+# like orc_lexical_normalize above: a path (or its containing directory)
+# that doesn't exist yet falls back to the lexically-normalized form for
+# whatever portion can't be resolved on disk -- a Write about to CREATE a
+# new file has nothing to physically resolve yet, and a not-yet-existing
+# path can't also be a symlink pointing somewhere else.
+#
+# Exists because a purely LEXICAL check is spoofable: lib/orc-config.sh's
+# orc_is_enforcement_layer_path exempts <root>/.worktrees/** from the
+# hooks/lib/bin default-protection (a Builder's worktree legitimately
+# edits them) -- `ln -s ../../hooks .worktrees/issue-1/myhooks` then a
+# write to .worktrees/issue-1/myhooks/x.sh lexically normalizes to a
+# string still prefixed by .worktrees/, string-matching the exemption,
+# while the kernel actually follows the symlink and writes to the ROOT's
+# real hooks/x.sh (agy's dedicated security review of issue #189's diff,
+# finding 1). Physical resolution collapses the symlink BEFORE the
+# exemption check runs, so the spoof can't survive.
+orc_physical_normalize() {
+  local path="$1" candidate target dir base hops=0
+  case "$path" in
+    /*) : ;;
+    *) path="$PWD/$path" ;;
+  esac
+  candidate="$(orc_lexical_normalize "$path")" || return 1
+  while [ -L "$candidate" ] && [ "$hops" -lt 20 ]; do
+    target="$(readlink "$candidate")" || break
+    case "$target" in
+      /*) : ;;
+      *) target="$(dirname "$candidate")/$target" ;;
+    esac
+    candidate="$(orc_lexical_normalize "$target")" || return 1
+    hops=$((hops + 1))
+  done
+  # Resolve the DEEPEST EXISTING ancestor directory, walking up past any
+  # not-yet-created trailing components (a Write creating "hooks/x.sh"
+  # where "hooks/" itself doesn't exist yet is a legitimate case, not
+  # just the always-existing-leaf case) -- giving up at the FIRST missing
+  # component (the original version of this function) left an ancestor
+  # symlink unresolved whenever the immediate parent didn't happen to
+  # exist, silently falling back to the raw lexical form for the whole
+  # path. Accumulate the missing suffix as we climb, then reattach it
+  # (lexically -- those components don't exist, so they can't themselves
+  # be symlinks) once we hit real ground.
+  dir="$(dirname "$candidate")"
+  base="$(basename "$candidate")"
+  local suffix="" walk="$dir"
+  while [ ! -d "$walk" ] && [ "$walk" != "/" ]; do
+    suffix="/$(basename "$walk")$suffix"
+    walk="$(dirname "$walk")"
+  done
+  if [ -d "$walk" ]; then
+    walk="$(cd "$walk" 2>/dev/null && pwd -P)" || { echo "$candidate"; return 0; }
+    echo "$walk$suffix/$base"
+  else
+    echo "$candidate"
+  fi
+}
+
 # orc_split_top_level_segments <command string> -- echoes one shell
 # "segment" per line, splitting on UNQUOTED ; && || | AND a bare unquoted
 # `&` (backgrounding -- `cmd1 & cmd2` runs cmd1 in the background and
