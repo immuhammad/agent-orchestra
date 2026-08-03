@@ -149,6 +149,41 @@ worktree_is_checked_out() {
   git -C "$REPO_ROOT" worktree list --porcelain | grep -q "^worktree $path\$"
 }
 
+# _copy_untracked_root_config <wt> -- issue #171 item 5b: orchestrator.yaml
+# and souls/*.md are untracked in every project this harness installs into
+# (git rm --cached'd; templates/* stays the source of truth -- see
+# .gitignore) -- `git worktree add` only checks out TRACKED files, so a
+# brand-new worktree would otherwise come up with neither physically
+# present at its own top level.
+#
+# harness-root.sh's .harness redirect tolerates that fine on its own (it
+# walks UP from cwd past the missing file to the main checkout's own
+# still-physically-present copy, since every worktree this script creates
+# nests under $REPO_ROOT/.worktrees/ -- inside the main checkout's own
+# directory tree). orc-config.sh's readers do NOT: orc_get_scalar/
+# orc_protected_paths/orc_github_repo only ever resolve "orchestrator.yaml"
+# relative to $PWD (or $ORC_CONFIG_FILE), no walk-up at all. With cwd =
+# the worktree (any hook/guard firing inside a Builder pane whose cwd IS
+# the worktree), that resolves to nothing once the file isn't physically
+# there -- protected_paths silently comes back EMPTY, a guard fail-open,
+# not a loud failure (verified experimentally, see
+# tests/orc-worktree-config-copy.test.sh). Plain filesystem copies here,
+# never `git add` inside the worktree -- both files stay untracked in the
+# worktree's own branch too, same as everywhere else.
+_copy_untracked_root_config() {
+  local wt="$1" f
+  if [ -f "$REPO_ROOT/orchestrator.yaml" ]; then
+    cp "$REPO_ROOT/orchestrator.yaml" "$wt/orchestrator.yaml"
+  fi
+  if [ -d "$REPO_ROOT/souls" ]; then
+    mkdir -p "$wt/souls"
+    for f in "$REPO_ROOT"/souls/*.md; do
+      [ -e "$f" ] || continue
+      cp "$f" "$wt/souls/$(basename "$f")"
+    done
+  fi
+}
+
 cmd_start() {
   local issue="$1" base="${2:-}"
   local branch wt
@@ -176,6 +211,7 @@ cmd_start() {
 
   mkdir -p "$REPO_ROOT/.worktrees"
   git -C "$REPO_ROOT" worktree add -b "$branch" "$wt" "$base_sha"
+  _copy_untracked_root_config "$wt"
   echo "orc-worktree.sh: started $branch at $wt (base $base_sha)"
 }
 
@@ -224,6 +260,7 @@ cmd_resume() {
 
   mkdir -p "$REPO_ROOT/.worktrees"
   git -C "$REPO_ROOT" worktree add "$wt" "$branch"
+  _copy_untracked_root_config "$wt"
   echo "orc-worktree.sh: resumed $branch at $wt"
 }
 
