@@ -48,6 +48,32 @@ OUT="$(run_hook)"
 STATUS=$?
 [ "$STATUS" -eq 0 ] && pass "no marker -> exit 0" || fail "no marker should exit 0 (got $STATUS)"
 
+echo "== rider 8 (issue #171): orchestra role, marker present, handoff.md missing ENTIRELY -> distinct 'not initialised' message, exit 2 =="
+# Before this fix: [ "$HANDOFF" -ot "$MARKER" ] is FALSE for a
+# nonexistent file (bash's -ot requires both operands to exist), so the
+# hook silently exited 0 here -- indistinguishable from "everything's
+# fine". An orchestra pane in a room that was never properly `orc init`'d
+# needs a clear, DISTINCT signal instead of silence.
+rm -f "$SANDBOX/.harness/handoff.md"
+touch "$SANDBOX/.harness/.session-start"
+OUT="$(run_hook orchestra)"
+STATUS=$?
+if [ "$STATUS" -eq 2 ] && echo "$OUT" | grep -q "not initialised" && ! echo "$OUT" | grep -q "not updated this session"; then
+  pass "missing handoff.md (never initialised) gets a DISTINCT message from the stale-case nag, and blocks with exit 2"
+else
+  fail "expected exit 2 + a distinct 'not initialised' message (not the stale-case wording), got status=$STATUS: $OUT"
+fi
+
+echo "== rider 8: same never-initialised handoff.md state, non-orchestra role -> still silent (unknown role must never nag) =="
+OUT="$(run_hook builder)"
+STATUS=$?
+if [ "$STATUS" -eq 0 ] && [ -z "$OUT" ]; then
+  pass "builder role with a never-initialised handoff.md stays silent"
+else
+  fail "CORRECTNESS REGRESSION: builder role should never nag about handoff.md, got status=$STATUS: $OUT"
+fi
+rm -f "$SANDBOX/.harness/handoff.md"
+
 echo "== handoff.md updated after marker: passes silently =="
 touch "$SANDBOX/.harness/.session-start"
 sleep 1
