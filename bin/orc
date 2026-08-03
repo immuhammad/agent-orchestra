@@ -52,6 +52,26 @@ orc_build_session() {
   implementer_model="$(orc_get_role_model implementer)"
   implementer_model="${implementer_model:-sonnet}"
 
+  # GH_REPO pins every scripted `gh` call (watch.sh, orc-worktree.sh,
+  # orc-seed-merge-watch.sh) to ONE repo -- exported into BOTH this
+  # process's own environment (so the merge-watch seed call a few lines
+  # down, itself a `bash` subprocess, inherits it) and the tmux SESSION
+  # environment via set-environment (so every pane's shell picks it up --
+  # tmux only applies its session environment table to a process at the
+  # moment that process is spawned, so this must run before ANY pane
+  # exists, including pane 0 -- new-session itself creates the shell for
+  # pane 0, which is why this sits before every branch below that calls
+  # `tmux new-session`). Missing/invalid: warn loudly, room still starts
+  # (degraded -- watchers/orc-worktree.sh fail closed on their own end),
+  # never export a garbage value.
+  local github_repo
+  github_repo="$(orc_github_repo)"
+  if [ -n "$github_repo" ]; then
+    export GH_REPO="$github_repo"
+  else
+    echo "orc: WARNING -- github_repo unset (or malformed) in orchestrator.yaml -- watchers will not poll GitHub until it's configured (expected an 'owner/repo' value)." >&2
+  fi
+
   # Refuse to build the control room on top of a checkout
   # that isn't on the integration branch -- the room's whole guard/dispatch
   # posture assumes panes operate against the shared integration branch, so
@@ -206,6 +226,7 @@ orc_build_session() {
 
   if [ "$term_cols" -gt 0 ] && [ "$term_lines" -gt 0 ] && [ "$agent_rows" -ge "$min_agent_rows" ]; then
     tmux new-session -d -s "$session" -n main -x "$term_cols" -y "$term_lines"
+    [ -n "$github_repo" ] && tmux set-environment -t "$session" GH_REPO "$github_repo"
     tmux rename-window -t "$session:main" "control-room"
     tmux set -t "$session:0" pane-border-status top
 
@@ -229,6 +250,7 @@ orc_build_session() {
     fi
     echo "orc: WARNING -- terminal size ${size_desc} -- too small (or undetectable) for the weighted agent-panes layout (need >= ${min_agent_rows} rows for the agent panes after reserving ${monitor_rows} for the monitor row) -- falling back to percent-proportioned sizing (same 3-top/2-bottom shape, guessed sizes). Agent panes will be short; resize your terminal and restart the room ('orc up' again after killing the session) for more headroom." >&2
     tmux new-session -d -s "$session" -n main
+    [ -n "$github_repo" ] && tmux set-environment -t "$session" GH_REPO "$github_repo"
     tmux rename-window -t "$session:main" "control-room"
     tmux set -t "$session:0" pane-border-status top
 
@@ -558,17 +580,50 @@ orc_init_render_soul() {
 # GITHUB_REMOTE stay out: neither is ever rendered into any file's content
 # (GATE_APPROVER is a one-time stdout courtesy, GITHUB_REMOTE has no
 # consumer at all), so there's nothing for --force to lose by not
-# persisting them.
+# persisting them. GITHUB_REPO (issue #174, NOT the same key as the older,
+# still-unused GITHUB_REMOTE above) DOES have a live consumer (GH_REPO,
+# pinning every scripted `gh` call) and so IS persisted/round-tripped
+# below, same as ticket_tracker -- auto-derived from the target's own git
+# origin remote when no explicit answer is given, never silently dropped
+# to empty on a resync.
+# orc_init_default_github_repo <target> -- prints "owner/repo" derived
+# from the target directory's OWN `git remote get-url origin`, normalizing
+# both the SSH (git@github.com:owner/repo.git) and HTTPS (https[s]://
+# github.com/owner/repo[.git]) forms -- or nothing at all if there's no
+# origin remote, it isn't a github.com URL, or the result doesn't match
+# orc_github_repo's own owner/repo validation. Fail closed, same posture
+# as the reader itself -- this is only ever a DEFAULT, never authoritative
+# over an explicit GITHUB_REPO answer.
+orc_init_default_github_repo() {
+  local target="$1" url owner_repo
+  url="$(git -C "$target" remote get-url origin 2>/dev/null)" || return 0
+  [ -z "$url" ] && return 0
+  case "$url" in
+    git@github.com:*) owner_repo="${url#git@github.com:}" ;;
+    ssh://git@github.com/*) owner_repo="${url#ssh://git@github.com/}" ;;
+    https://github.com/*) owner_repo="${url#https://github.com/}" ;;
+    http://github.com/*) owner_repo="${url#http://github.com/}" ;;
+    *) return 0 ;;
+  esac
+  owner_repo="${owner_repo%.git}"
+  if [[ "$owner_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    echo "$owner_repo"
+  fi
+}
+
 orc_init_render_orchestrator_yaml() {
   local answers_file="$1" dest="$2"
-  local project branch paths tracker role rk model eff path_arr p
+  local project branch paths tracker repo role rk model eff path_arr p
   project="$(orc_init_read_answer "$answers_file" PROJECT)"
   branch="$(orc_init_read_answer "$answers_file" INTEGRATION_BRANCH main)"
   paths="$(orc_init_read_answer "$answers_file" PROTECTED_PATHS)"
   tracker="$(orc_init_read_answer "$answers_file" TICKET_TRACKER gh-issues)"
+  repo="$(orc_init_read_answer "$answers_file" GITHUB_REPO)"
+  [ -z "$repo" ] && repo="$(orc_init_default_github_repo "$(dirname "$dest")")"
   {
     echo "project: $project"
     echo "integration_branch: $branch"
+    echo "github_repo: $repo"
     echo "ticket_tracker: $tracker"
     echo ""
     echo "protected_paths:"
@@ -869,6 +924,7 @@ orc_init_answers_from_yaml() {
   {
     echo "PROJECT=$(orc_get_scalar project)"
     echo "INTEGRATION_BRANCH=$(orc_get_scalar integration_branch)"
+    echo "GITHUB_REPO=$(orc_github_repo)"
     echo "TICKET_TRACKER=$(orc_get_scalar ticket_tracker)"
     echo "PROTECTED_PATHS=$(orc_protected_paths | paste -sd, -)"
     echo "GATE_APPROVER=the human running this harness"

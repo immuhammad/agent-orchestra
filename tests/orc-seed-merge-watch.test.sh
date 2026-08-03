@@ -19,6 +19,15 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Issue #174: orc_seed_merge_watch now refuses to seed at all when GH_REPO
+# is unset (rather than seeding an empty-but-present state file, which
+# would then read as "already seeded" forever via the idempotent guard
+# above -- poisoning the room even after GH_REPO is fixed). All FOUR
+# pre-existing tests below exercise the seeding behavior itself, not this
+# gate, so they need a valid GH_REPO; the dedicated unset-GH_REPO test is
+# appended at the end of this file.
+export GH_REPO="test-owner/test-repo"
+
 echo "== orc_seed_merge_watch: populates an ABSENT state file with every merged PR (mocked gh) =="
 STATE="$TMP/merge-watch-state"
 rm -f "$STATE"
@@ -93,6 +102,23 @@ if [ -n "$SEEN" ] && [ "$SEEN" -gt 20 ] 2>/dev/null; then
 else
   fail "expected a seed limit > 20, got: $SEEN"
 fi
+
+echo "== orc_seed_merge_watch: refuses to seed (creates NO state file) when GH_REPO is unset =="
+STATE5="$TMP/unset-repo-state"
+rm -f "$STATE5"
+(
+  unset GH_REPO
+  export MERGE_WATCH_STATE="$STATE5"
+  source "$SEED"
+  mw_fetch_merged_prs() { echo 'SHOULD NOT BE CALLED'; printf '1\tt\tb\tfeature/issue-1\n'; }
+  orc_seed_merge_watch
+) 2> "$TMP/unset-repo.err"
+if [ ! -e "$STATE5" ]; then
+  pass "GH_REPO unset: no state file created at all (not even empty -- a later correctly-configured orc up can still seed for real)"
+else
+  fail "GH_REPO unset: expected no state file, got: $(ls -la "$STATE5" 2>&1)"
+fi
+grep -qi 'GH_REPO' "$TMP/unset-repo.err" && pass "GH_REPO unset: loud message explains why nothing was seeded" || fail "expected a GH_REPO-mentioning message on stderr, got: $(cat "$TMP/unset-repo.err")"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

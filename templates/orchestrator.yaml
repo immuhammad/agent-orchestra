@@ -11,6 +11,12 @@
 project: my-project
 integration_branch: main
 
+# owner/repo this room's scripted `gh` calls (watch.sh, orc-worktree.sh,
+# orc-seed-merge-watch.sh) pin to via GH_REPO -- required for the watchers
+# to poll/act on GitHub at all; missing/malformed fails closed (a
+# loud warning at `orc up`, watchers skip polling rather than guessing).
+github_repo: your-org/your-repo
+
 # Paths the guards refuse to let agents write to directly (secrets,
 # infra, whatever your project considers off-limits for autonomous edits).
 protected_paths:

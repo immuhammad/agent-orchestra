@@ -471,6 +471,66 @@ fi
 git -C "$NET_DEVROOT" worktree remove --force "$NET_WT" >/dev/null 2>&1
 rm -rf "$NET_DEVROOT" "$NET_ORIGIN_BARE"
 
+echo "== issue #174: cmd_finish's gh pr create is pinned to --repo \"\$GH_REPO\" when set, unchanged (cwd-derived) when unset =="
+GHR_ORIGIN_BARE="$(mktemp -d)"
+GHR_ORIGIN_BARE="$(cd "$GHR_ORIGIN_BARE" && pwd -P)"
+git init -q --bare "$GHR_ORIGIN_BARE"
+
+GHR_DEVROOT="$(mktemp -d)"
+GHR_DEVROOT="$(cd "$GHR_DEVROOT" && pwd -P)"
+git init -q "$GHR_DEVROOT"
+git -C "$GHR_DEVROOT" config user.email "test@test.local"
+git -C "$GHR_DEVROOT" config user.name "test"
+git -C "$GHR_DEVROOT" remote add origin "$GHR_ORIGIN_BARE"
+printf 'project: t174-repo-scratch\n' > "$GHR_DEVROOT/orchestrator.yaml"
+git -C "$GHR_DEVROOT" add orchestrator.yaml
+git -C "$GHR_DEVROOT" commit -q -m init
+git -C "$GHR_DEVROOT" push -q -u origin HEAD:main
+
+GHR_FAKE_GH="$(mktemp -d)"
+GHR_ARGV_LOG="$GHR_FAKE_GH/argv.log"
+cat > "$GHR_FAKE_GH/gh" <<'FAKEGH'
+#!/bin/bash
+echo "$@" >> "$GHR_ARGV_LOG"
+echo "https://example.invalid/pull/1"
+FAKEGH
+chmod +x "$GHR_FAKE_GH/gh"
+
+GHR_ISSUE_SET="t174-repo-set"
+GHR_BRANCH_SET="feature/issue-$GHR_ISSUE_SET"
+git -C "$GHR_DEVROOT" worktree add -q -b "$GHR_BRANCH_SET" "$GHR_DEVROOT/.worktrees/issue-$GHR_ISSUE_SET" main
+: > "$GHR_ARGV_LOG"
+(
+  cd "$GHR_DEVROOT"
+  export ORC_WORKTREE_REPO_ROOT="$GHR_DEVROOT"
+  export PATH="$GHR_FAKE_GH:$PATH"
+  export GHR_ARGV_LOG GH_REPO="pinned-owner/pinned-repo"
+  bash "$ORC" finish "$GHR_ISSUE_SET" >/dev/null 2>&1
+)
+grep -q -- '^pr create .*--repo pinned-owner/pinned-repo' "$GHR_ARGV_LOG" && pass "GH_REPO set: gh pr create pinned to --repo" || fail "GH_REPO set: expected --repo on gh pr create, got: $(cat "$GHR_ARGV_LOG")"
+
+GHR_ISSUE_UNSET="t174-repo-unset"
+GHR_BRANCH_UNSET="feature/issue-$GHR_ISSUE_UNSET"
+git -C "$GHR_DEVROOT" worktree add -q -b "$GHR_BRANCH_UNSET" "$GHR_DEVROOT/.worktrees/issue-$GHR_ISSUE_UNSET" main
+: > "$GHR_ARGV_LOG"
+(
+  cd "$GHR_DEVROOT"
+  unset GH_REPO
+  export ORC_WORKTREE_REPO_ROOT="$GHR_DEVROOT"
+  export PATH="$GHR_FAKE_GH:$PATH"
+  export GHR_ARGV_LOG
+  bash "$ORC" finish "$GHR_ISSUE_UNSET" >/dev/null 2>&1
+)
+if grep -q -- '^pr create ' "$GHR_ARGV_LOG" && ! grep -q -- '--repo' "$GHR_ARGV_LOG"; then
+  pass "GH_REPO unset: gh pr create still runs, unchanged cwd-derived behavior (no --repo flag, no refusal)"
+else
+  fail "GH_REPO unset: expected gh pr create with no --repo flag, got: $(cat "$GHR_ARGV_LOG")"
+fi
+
+git -C "$GHR_DEVROOT" worktree remove --force ".worktrees/issue-$GHR_ISSUE_SET" >/dev/null 2>&1
+git -C "$GHR_DEVROOT" worktree remove --force ".worktrees/issue-$GHR_ISSUE_UNSET" >/dev/null 2>&1
+rm -rf "$GHR_DEVROOT" "$GHR_ORIGIN_BARE" "$GHR_FAKE_GH"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

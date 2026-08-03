@@ -125,6 +125,20 @@ orc_protected_paths() {
   echo "$paths"
 }
 
+# orc_github_repo -- prints the top-level github_repo scalar ONLY if it
+# matches ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (a plain owner/repo slug);
+# anything else (missing key, missing file, extra segments, whitespace,
+# shell metacharacters) reads as empty. Fail closed by design -- this
+# value is interpolated into `gh --repo` on every scripted watcher call
+# site, so a malformed value must never reach a command line unvalidated.
+orc_github_repo() {
+  local val
+  val="$(orc_get_scalar github_repo)"
+  if [[ "$val" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    echo "$val"
+  fi
+}
+
 # orc_get_role_model <role> -- prints roles.<role>.model. Supports the block
 # mapping style: `roles:\n  <role>:\n    model: x\n    effort: y`.
 orc_get_role_model() {

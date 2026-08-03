@@ -30,7 +30,15 @@ WATCH_EVENTS_LOG="$TMP/events.log"
 REVIEW_WATCH_STATE="$TMP/review-watch-state"
 BROKER_STATE_DIR="$TMP/broker"
 BROKER_INBOX_ROOT="$TMP/inbox"
-export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE WATCH_EVENTS_LOG REVIEW_WATCH_STATE BROKER_STATE_DIR BROKER_INBOX_ROOT
+# Issue #174: every gh call site is pinned to --repo "$GH_REPO"; the vast
+# majority of THIS file's existing tests exercise merge_watch_check/
+# review_watch_check's surrounding logic (not the GH_REPO plumbing itself)
+# via a mocked mw_fetch_merged_prs/rw_fetch_* override, so a single valid
+# default here keeps all of that behavior unchanged. The dedicated
+# GH_REPO-unset/pinning tests near the end of this file override/unset it
+# in their own subshell.
+GH_REPO="test-owner/test-repo"
+export MERGE_WATCH_STATE WATCH_FLAGGED_DEAD_FILE WATCH_EVENTS_LOG REVIEW_WATCH_STATE BROKER_STATE_DIR BROKER_INBOX_ROOT GH_REPO
 source "$LIB/watch.sh"
 
 # wait_for_pane_cmd <target> <cmd substring> -- polls until the pane's
@@ -1090,6 +1098,135 @@ else
   fail "expected '(last 3 of 20)' under an explicit events_shown cap, got: $OUT"
 fi
 : > "$WATCH_EVENTS_LOG"
+
+echo "== issue #174: merge_watch_check/review_watch_check fail closed when GH_REPO is unset =="
+# Earlier tests in this file permanently override mw_fetch_merged_prs/
+# rw_fetch_open_draft_prs/etc. as plain bash functions (never restored) --
+# re-source watch.sh so the tests below exercise the REAL gh-calling
+# implementations, not a leftover mock from a prior section.
+source "$LIB/watch.sh"
+# Earlier sections also leave behind test-local `gh`/`rw_notify`/
+# `mw_teardown_branch` FUNCTION overrides, which -- being shell functions --
+# would shadow a PATH-based fake gh script entirely regardless of PATH
+# ordering. Clear them so the tests below hit the real code paths.
+unset -f gh rw_notify mw_teardown_branch 2>/dev/null || true
+GH_ARGV_LOG="$TMP/gh-argv.log"
+FAKE_GH_DIR="$TMP/fake-gh-unset"
+mkdir -p "$FAKE_GH_DIR"
+cat > "$FAKE_GH_DIR/gh" <<'FAKEGH'
+#!/bin/bash
+echo "$@" >> "$GH_ARGV_LOG"
+FAKEGH
+chmod +x "$FAKE_GH_DIR/gh"
+
+: > "$WATCH_EVENTS_LOG"
+: > "$GH_ARGV_LOG"
+(
+  unset GH_REPO
+  PATH="$FAKE_GH_DIR:$PATH"
+  export PATH GH_ARGV_LOG
+  merge_watch_check
+  merge_watch_check
+  merge_watch_check
+)
+if [ ! -s "$GH_ARGV_LOG" ]; then
+  pass "merge_watch_check with GH_REPO unset never invoked gh"
+else
+  fail "merge_watch_check with GH_REPO unset should never call gh, got: $(cat "$GH_ARGV_LOG")"
+fi
+WARN_LINES="$(grep -c 'merge-watch.*GH_REPO' "$WATCH_EVENTS_LOG" 2>/dev/null || true)"
+if [ "$WARN_LINES" = "1" ]; then
+  pass "merge_watch_check logs the GH_REPO-unset warning exactly ONCE across 3 ticks (once per watcher start, not per tick)"
+else
+  fail "expected exactly 1 GH_REPO-unset warning line across 3 ticks, got $WARN_LINES: $(cat "$WATCH_EVENTS_LOG")"
+fi
+
+: > "$WATCH_EVENTS_LOG"
+: > "$GH_ARGV_LOG"
+(
+  unset GH_REPO
+  PATH="$FAKE_GH_DIR:$PATH"
+  export PATH GH_ARGV_LOG
+  review_watch_check
+  review_watch_check
+)
+if [ ! -s "$GH_ARGV_LOG" ]; then
+  pass "review_watch_check with GH_REPO unset never invoked gh"
+else
+  fail "review_watch_check with GH_REPO unset should never call gh, got: $(cat "$GH_ARGV_LOG")"
+fi
+RWARN_LINES="$(grep -c 'review-watch.*GH_REPO' "$WATCH_EVENTS_LOG" 2>/dev/null || true)"
+if [ "$RWARN_LINES" = "1" ]; then
+  pass "review_watch_check logs the GH_REPO-unset warning exactly ONCE across 2 ticks"
+else
+  fail "expected exactly 1 GH_REPO-unset warning line across 2 ticks, got $RWARN_LINES: $(cat "$WATCH_EVENTS_LOG")"
+fi
+: > "$WATCH_EVENTS_LOG"
+
+echo "== issue #174: every gh call site is pinned to --repo \"\$GH_REPO\" when it IS set =="
+FAKE_GH_SET="$TMP/fake-gh-set"
+mkdir -p "$FAKE_GH_SET"
+cat > "$FAKE_GH_SET/gh" <<'FAKEGH'
+#!/bin/bash
+echo "$@" >> "$GH_ARGV_LOG"
+case "$1 $2" in
+  "pr view") echo '{"comments":[]}' ;;
+  "pr create") echo 'https://example.invalid/pull/1' ;;
+esac
+exit 0
+FAKEGH
+chmod +x "$FAKE_GH_SET/gh"
+
+: > "$GH_ARGV_LOG"
+(
+  PATH="$FAKE_GH_SET:$PATH"
+  export PATH GH_ARGV_LOG GH_REPO=pinned-owner/pinned-repo
+  mw_fetch_merged_prs >/dev/null
+)
+grep -q -- '--repo pinned-owner/pinned-repo' "$GH_ARGV_LOG" && pass "mw_fetch_merged_prs (gh pr list --state merged) pinned to --repo" || fail "mw_fetch_merged_prs missing --repo: $(cat "$GH_ARGV_LOG")"
+
+: > "$GH_ARGV_LOG"
+(
+  PATH="$FAKE_GH_SET:$PATH"
+  export PATH GH_ARGV_LOG GH_REPO=pinned-owner/pinned-repo
+  mw_close_issue 999 1000 >/dev/null 2>&1
+)
+COMMENT_PINNED="$(grep -c -- '^issue comment 999 .*--repo pinned-owner/pinned-repo' "$GH_ARGV_LOG" 2>/dev/null || true)"
+CLOSE_PINNED="$(grep -c -- '^issue close 999 --repo pinned-owner/pinned-repo' "$GH_ARGV_LOG" 2>/dev/null || true)"
+[ "$COMMENT_PINNED" -ge 1 ] && pass "mw_close_issue's gh issue comment pinned to --repo" || fail "gh issue comment missing --repo: $(cat "$GH_ARGV_LOG")"
+[ "$CLOSE_PINNED" -ge 1 ] && pass "mw_close_issue's gh issue close pinned to --repo" || fail "gh issue close missing --repo: $(cat "$GH_ARGV_LOG")"
+
+: > "$GH_ARGV_LOG"
+(
+  PATH="$FAKE_GH_SET:$PATH"
+  export PATH GH_ARGV_LOG GH_REPO=pinned-owner/pinned-repo
+  rw_fetch_open_draft_prs >/dev/null
+)
+grep -q -- '--repo pinned-owner/pinned-repo' "$GH_ARGV_LOG" && pass "rw_fetch_open_draft_prs (gh pr list --state open) pinned to --repo" || fail "rw_fetch_open_draft_prs missing --repo: $(cat "$GH_ARGV_LOG")"
+
+: > "$GH_ARGV_LOG"
+(
+  PATH="$FAKE_GH_SET:$PATH"
+  export PATH GH_ARGV_LOG GH_REPO=pinned-owner/pinned-repo
+  rw_fetch_pr_comments 42 >/dev/null
+)
+grep -q -- '^pr view 42 .*--repo pinned-owner/pinned-repo' "$GH_ARGV_LOG" && pass "rw_fetch_pr_comments (gh pr view) pinned to --repo" || fail "rw_fetch_pr_comments missing --repo: $(cat "$GH_ARGV_LOG")"
+
+: > "$GH_ARGV_LOG"
+: > "$MERGE_WATCH_STATE"
+MOCK_APPROVE_DIR="$TMP/mock-approve"
+mkdir -p "$MOCK_APPROVE_DIR"
+(
+  PATH="$FAKE_GH_SET:$PATH"
+  export PATH GH_ARGV_LOG GH_REPO=pinned-owner/pinned-repo
+  rw_fetch_open_draft_prs() { printf '77\tt\tCloses #12.\tfeature/issue-12\n'; }
+  rw_latest_verdict() { echo "APPROVE"; }
+  rw_notify() { :; }
+  review_watch_check >/dev/null 2>&1
+)
+grep -q -- '^pr ready 77 --repo pinned-owner/pinned-repo' "$GH_ARGV_LOG" && pass "review_watch_check's gh pr ready pinned to --repo" || fail "gh pr ready missing --repo: $(cat "$GH_ARGV_LOG")"
+: > "$MERGE_WATCH_STATE"
+: > "$GH_ARGV_LOG"
 
 echo ""
 echo "$PASS passed, $FAIL failed"
