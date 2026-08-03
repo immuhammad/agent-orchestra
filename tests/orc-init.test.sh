@@ -11,6 +11,12 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ORC="$DIR/../bin/orc"
+# issue #189: orc init now finishes with orc-protect on by default --
+# opt out here so a chflags/chattr-immutable fixture doesn't break this
+# file's own `rm -rf "$TMP"` teardown. orc-protect itself is covered by
+# tests/orc-protect.test.sh and tests/orc-init-key-consistency-adjacent
+# protect-on assertions below (a dedicated, non-opted-out case).
+export ORC_INIT_NO_PROTECT=1
 
 PASS=0
 FAIL=0
@@ -593,6 +599,54 @@ check_derive "ssh://git@gitlab.example.org/some-owner/some-repo" "some-owner/som
 check_derive "https://github.com/https-owner/https-repo.git" "https-owner/https-repo"
 check_derive "not-a-real-url-at-all" ""
 check_derive "git@work-alias:owner/repo/extra-path-segment" ""
+
+echo "== issue #189: orc init finishes with orc-protect on by default =="
+# Capability probe, same as tests/orc-protect.test.sh: chflags uchg is
+# always owner-settable on macOS, but chattr +i needs CAP_LINUX_IMMUTABLE
+# -- absent for an unprivileged Linux user (e.g. a plain CI runner).
+PROTECT_PROBE="$TMP/protect-cap-probe"
+touch "$PROTECT_PROBE"
+if [ "$(uname -s)" = Darwin ]; then
+  if chflags uchg "$PROTECT_PROBE" 2>/dev/null; then CAN_FLAG=1; chflags nouchg "$PROTECT_PROBE"; else CAN_FLAG=0; fi
+else
+  if chattr +i "$PROTECT_PROBE" 2>/dev/null; then CAN_FLAG=1; chattr -i "$PROTECT_PROBE"; else CAN_FLAG=0; fi
+fi
+rm -f "$PROTECT_PROBE"
+
+if [ "$CAN_FLAG" -eq 0 ]; then
+  echo "SKIP: no immutability privilege here (unprivileged Linux?) -- orc-protect-on-by-default cases skipped"
+else
+  TARGET_PROTECT="$TMP/room-protect-on"
+  # Override this file's own file-wide ORC_INIT_NO_PROTECT=1 opt-out for
+  # just this one call -- this is the dedicated case that needs the real
+  # default (protect ON) to actually engage.
+  OUT_PROTECT="$(ORC_INIT_NO_PROTECT= bash "$ORC" init --answers "$ANSWERS1" "$TARGET_PROTECT" 2>&1)"
+  if echo "$OUT_PROTECT" | grep -q "orc init: orc-protect applied"; then
+    pass "orc init prints 'orc-protect applied'"
+  else
+    fail "expected 'orc-protect applied' in output: $OUT_PROTECT"
+  fi
+  if bash "$DIR/../bin/orc-protect" status "$TARGET_PROTECT" >/dev/null 2>&1; then
+    pass "orc init leaves the room orc-protect'd (kernel immutability engaged)"
+  else
+    fail "expected the room to be orc-protect'd after plain orc init"
+  fi
+  bash "$DIR/../bin/orc-protect" off "$TARGET_PROTECT" >/dev/null 2>&1 || true
+fi
+
+echo "== ORC_INIT_NO_PROTECT=1 skips orc-protect (the tests/CI opt-out) =="
+TARGET_NOPROTECT="$TMP/room-no-protect"
+OUT_NOPROTECT="$(bash "$ORC" init --answers "$ANSWERS1" "$TARGET_NOPROTECT" 2>&1)"
+if echo "$OUT_NOPROTECT" | grep -q "orc init: orc-protect skipped (ORC_INIT_NO_PROTECT set)"; then
+  pass "ORC_INIT_NO_PROTECT=1 prints the skip message"
+else
+  fail "expected the skip message in output: $OUT_NOPROTECT"
+fi
+if bash "$DIR/../bin/orc-protect" status "$TARGET_NOPROTECT" >/dev/null 2>&1; then
+  fail "the room should NOT be orc-protect'd when ORC_INIT_NO_PROTECT=1"
+else
+  pass "the room stays unprotected when ORC_INIT_NO_PROTECT=1 (status exits nonzero)"
+fi
 
 echo ""
 echo "$PASS passed, $FAIL failed"

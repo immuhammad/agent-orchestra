@@ -15,6 +15,8 @@ set -euo pipefail
 GUARD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./orc-config.sh
 source "$GUARD_SCRIPT_DIR/orc-config.sh"
+# shellcheck source=./quota-stop-lib.sh
+source "$GUARD_SCRIPT_DIR/quota-stop-lib.sh"
 
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
@@ -37,14 +39,42 @@ if orc_is_harness_config_path "$FILE_PATH"; then
   exit 2
 fi
 
-while IFS= read -r protected; do
-  [ -z "$protected" ] && continue
-  case "$FILE_PATH" in
-    "$protected"*|*"/$protected"*)
-      echo "guard-write.sh: blocked write into protected path '$protected' (see AGENTS.md / orchestrator.yaml): $FILE_PATH" >&2
-      exit 2
-      ;;
-  esac
-done <<< "$(orc_protected_paths)"
+# issue #189: <root>/hooks, <root>/lib, <root>/bin -- the harness's own
+# live wired enforcement scripts -- are protected by default at the room
+# ROOT only; a Builder's own worktree copies (.worktrees/issue-N/hooks/...)
+# stay editable, since that's the live daily workflow this must not break
+# (see lib/orc-config.sh's orc_is_enforcement_layer_path). Best-effort
+# root resolution: if it can't be resolved (no orchestrator.yaml
+# findable -- this isn't a harness room at all), this ADDITIVE check is
+# simply skipped, same posture as before this fix existed; the
+# .claude/.agents/protected_paths checks above/below are unaffected
+# either way.
+# No cd/pwd resolution needed here -- orc_is_enforcement_layer_path
+# (lib/orc-config.sh) physically resolves both FILE_PATH and ROOT
+# internally via orc_physical_normalize, so a plain string dirname is
+# enough (CANON_DIR is already absolute -- harness_canonical_dir always
+# returns one). An earlier version of this line used `pwd -P` here,
+# which double-resolved against that same internal resolution and (on
+# macOS, where mktemp -d's /var/folders/... is itself a symlink to
+# /private/var/folders/...) went stale the moment orc_physical_normalize
+# was added -- confirmed live via this file's own test suite.
+ROOT=""
+if CANON_DIR="$(qsg_resolve_canon_dir 2>/dev/null)"; then
+  ROOT="$(dirname "$CANON_DIR")"
+fi
+if [ -n "$ROOT" ] && orc_is_enforcement_layer_path "$FILE_PATH" "$ROOT"; then
+  echo "guard-write.sh: blocked write into '$FILE_PATH' -- hooks/, lib/, and bin/ are the harness's own live wired enforcement scripts, protected by default at the room root (a worktree's own copies under .worktrees/<issue>/ stay editable -- that's where a Builder legitimately edits them). Work in a worktree via lib/orc-worktree.sh and land the change through review, same as any other code change." >&2
+  exit 2
+fi
+
+# orc_is_protected_path -- root-anchored, .worktrees-exempt (see its own
+# header): replaces a raw substring match that used to block a worktree's
+# own copy of any protected_paths entry too (agy's dedicated security
+# review, round 2 -- the same false-positive class hooks/lib/bin above
+# was already fixed against).
+if [ -n "$ROOT" ] && orc_is_protected_path "$FILE_PATH" "$ROOT"; then
+  echo "guard-write.sh: blocked write into a protected path (see AGENTS.md / orchestrator.yaml): $FILE_PATH" >&2
+  exit 2
+fi
 
 exit 0

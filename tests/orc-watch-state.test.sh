@@ -13,6 +13,10 @@
 # that might already have panes running would be actively dangerous.
 # Run: bash tests/orc-watch-state.test.sh
 set -uo pipefail
+# issue #189: orc init now finishes with orc-protect on by default --
+# opt out here so a chflags/chattr-immutable fixture doesn't break this
+# file's own scratch-dir teardown.
+export ORC_INIT_NO_PROTECT=1
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ORC="$DIR/../bin/orc"

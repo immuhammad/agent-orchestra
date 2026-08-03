@@ -104,6 +104,44 @@ assert_segments "quoted ; (no backslash involved) stays inside" "echo ${DQ}a;b${
 expect_redirect "plain unquoted redirect" "echo hi > out.txt"
 expect_no_redirect "quoted redirect char is not a redirect" "echo ${DQ}usage < 50%${DQ}"
 
+echo "== orc_physical_normalize: a not-yet-existing path resolves via its nearest EXISTING ancestor, not just its immediate parent =="
+NOEXIST_ROOT="$(mktemp -d)"
+GOT="$(orc_physical_normalize "$NOEXIST_ROOT/does/not/exist.txt")"
+EXPECT_NOEXIST="$(cd "$NOEXIST_ROOT" && pwd -P)/does/not/exist.txt"
+if [ "$GOT" = "$EXPECT_NOEXIST" ]; then
+  pass "a not-yet-existing path walks up to the nearest real ancestor and physically resolves IT"
+else
+  fail "expected '$EXPECT_NOEXIST', got '$GOT'"
+fi
+rm -rf "$NOEXIST_ROOT"
+
+echo "== orc_physical_normalize: follows a symlinked ANCESTOR directory =="
+PHYS_ROOT="$(mktemp -d)"
+mkdir -p "$PHYS_ROOT/real/hooks"
+ln -s real/hooks "$PHYS_ROOT/alias"
+GOT_DIR="$(orc_physical_normalize "$PHYS_ROOT/alias/x.sh")"
+EXPECT_DIR="$(cd "$PHYS_ROOT/real/hooks" && pwd -P)/x.sh"
+if [ "$GOT_DIR" = "$EXPECT_DIR" ]; then
+  pass "a symlinked ancestor directory resolves to its real physical location"
+else
+  fail "expected '$EXPECT_DIR', got '$GOT_DIR'"
+fi
+rm -rf "$PHYS_ROOT"
+
+echo "== orc_physical_normalize: follows a symlinked LEAF file =="
+LEAF_ROOT="$(mktemp -d)"
+mkdir -p "$LEAF_ROOT/real"
+touch "$LEAF_ROOT/real/target.sh"
+ln -s real/target.sh "$LEAF_ROOT/alias.sh"
+GOT_LEAF="$(orc_physical_normalize "$LEAF_ROOT/alias.sh")"
+EXPECT_LEAF="$(cd "$LEAF_ROOT/real" && pwd -P)/target.sh"
+if [ "$GOT_LEAF" = "$EXPECT_LEAF" ]; then
+  pass "a symlinked leaf file resolves to its real physical location"
+else
+  fail "expected '$EXPECT_LEAF', got '$GOT_LEAF'"
+fi
+rm -rf "$LEAF_ROOT"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

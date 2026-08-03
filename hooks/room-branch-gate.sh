@@ -75,5 +75,5 @@ case "$TOOL_NAME" in
     ;;
 esac
 
-echo "room-branch-gate.sh: tool blocked -- room branch $STATE (expected the integration branch). Restore with 'git checkout <integration-branch>' (or 'git switch'), or set an override: ORC_ALLOW_UNMERGED_HARNESS=1 / write a reason to .harness/state/room-branch-override." >&2
+echo "room-branch-gate.sh: tool blocked -- $(room_branch_mismatch_message "$ROOT") (or 'git switch <integration-branch>'), or set an override: ORC_ALLOW_UNMERGED_HARNESS=1 / write a reason to .harness/state/room-branch-override." >&2
 exit 2

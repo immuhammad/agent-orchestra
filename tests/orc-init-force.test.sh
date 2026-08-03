@@ -10,6 +10,10 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ORC="$DIR/../bin/orc"
 ORC_BIN_DIR="$(cd "$DIR/../bin" && pwd)"
+# issue #189: orc init --force now finishes with orc-protect on by
+# default -- opt out here so a chflags/chattr-immutable fixture doesn't
+# break this file's own scratch-dir teardown.
+export ORC_INIT_NO_PROTECT=1
 
 PASS=0
 FAIL=0
@@ -287,7 +291,11 @@ else
   ROOM7="$TMP/room7"
   bash "$ORC" init --answers "$ANSWERS1" "$ROOM7" >/dev/null 2>&1
   bash "$ORC_BIN_DIR/orc-protect" on "$ROOM7" >/dev/null 2>&1
-  OUT="$(bash "$ORC" init --force "$ROOM7" 2>&1)"
+  # issue #189: this specific case tests the real protect round-trip --
+  # override the file-wide opt-out for just this invocation so
+  # orc_init_apply_protect actually re-engages protection at the end,
+  # which is exactly what's being asserted below.
+  OUT="$(ORC_INIT_NO_PROTECT= bash "$ORC" init --force "$ROOM7" 2>&1)"
   STATUS=$?
   bash "$ORC_BIN_DIR/orc-protect" status "$ROOM7" >/dev/null 2>&1
   STILL_PROTECTED=$?
@@ -311,7 +319,10 @@ else
   # so the FIRST soul's mktemp write inside orc_init_force aborts the
   # whole script under set -e, exactly the class of abort that finding flags.
   chmod 555 "$ROOM8/souls"
-  OUT="$(bash "$ORC" init --force "$ROOM8" 2>&1)"
+  # issue #189: same real-protection override as ROOM7 above -- this case
+  # asserts a mid-sync abort still leaves protection ON, which only holds
+  # if orc_init_apply_protect isn't skipped by the file-wide opt-out.
+  OUT="$(ORC_INIT_NO_PROTECT= bash "$ORC" init --force "$ROOM8" 2>&1)"
   STATUS=$?
   chmod 755 "$ROOM8/souls"
   bash "$ORC_BIN_DIR/orc-protect" status "$ROOM8" >/dev/null 2>&1
