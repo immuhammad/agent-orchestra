@@ -352,6 +352,18 @@ while true; do
       gk_alert_orchestra "quota-agy" "quota agy at ${AGY_PCT}% — follow AGENTS.md failsafe. Fallback: hand work back to Claude Code."
       gk_say "Antigravity quota threshold"
       gk_mark_alerted agy
+      # #173 quota-gate coverage audit: every OTHER threshold branch in
+      # this function writes the shared quota-stop flag (the actual
+      # PreToolUse enforcement both hooks/quota-stop-gate.sh and
+      # lib/guard-quota-stop-agy.sh read) -- this lone branch used to
+      # only alert orchestra and never enforce anything, so agy could
+      # burn quota past its own failsafe_pct indefinitely with nothing
+      # but an advisory FLAG. No resets_at: agy's pool has no epoch this
+      # codebase can read (see ar_write_quota_stop_flag's own header
+      # comment), so this behaves like a "weekly" crossing -- human-
+      # clear-only via lib/quota-stop-clear.sh, never silently
+      # auto-lifted.
+      ar_write_quota_stop_flag "agy" "$AGY_PCT" "claude"
     fi
   fi
 

@@ -12,6 +12,13 @@ auto-resume-state.json
 gatekeeper-alert-state.json
 watch-flagged-dead
 
+# stray reviewer scratch that landed OUTSIDE a scratch dir (#173: agy
+# redirected `gh pr diff`/`gh pr view` straight into the project root as
+# pr17.diff/pr17_body.txt and left them behind) -- catches this even for
+# an agent that hasn't adopted the .harness/scratch/agy/ convention yet
+pr*.diff
+pr*_body.txt
+
 # dual-installed skill pack (bin/orc-install-skills dogfooded on this repo
 # itself, e.g. for agy to review here) -- skills/ is the source, these are
 # installed copies, never tracked
