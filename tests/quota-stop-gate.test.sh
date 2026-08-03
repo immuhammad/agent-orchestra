@@ -205,6 +205,53 @@ run_claude_gate '{"tool_name":"Write","tool_input":{"file_path":".harness/inbox/
 run_claude_gate '{"tool_name":"Write","tool_input":{"file_path":".harness/inbox/builder/./20260711-99.msg"}}'
 [ "$GATE_STATUS" -eq 0 ] && pass "a harmless ./ in an otherwise-legitimate inbox path is still allowed (normalization doesn't over-block)" || fail "over-strict: a harmless ./ segment got blocked, $GATE_STATUS: $GATE_OUT"
 
+echo "== issue #172: intent-normalized MCP write tools (woz Edit) are judged like a built-in Write, not the catch-all deny =="
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Edit","tool_input":{"edits":[{"file_path":".harness/handoff.md","new_string":"x"}]}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "woz Edit: single allowed path in edits[] allowed while gated" || fail "woz Edit with an allowed edits[] path should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Edit","tool_input":{"edits":[{"file_path":".harness/handoff.md","new_string":"x"},{"file_path":"src/app.py","new_string":"y"}]}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "woz Edit: a batch mixing one allowed and one disallowed path is denied WHOLE -- no ride-along" || fail "SECURITY: mixed woz Edit batch should be denied, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Edit","tool_input":{"edits":[]}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "woz Edit: empty edits[] denied (same posture as an empty top-level file_path)" || fail "empty woz Edit edits[] should be denied, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Edit","tool_input":{"edits":[{"new_string":"x"}]}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "woz Edit: edits[] entry with no file_path denied" || fail "woz Edit entry missing file_path should be denied, got $GATE_STATUS: $GATE_OUT"
+
+echo "== issue #172: intent-normalized MCP read tools (woz Search) are judged like a built-in Read, not the catch-all deny =="
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_glob_patterns":[".harness/handoff.md"]}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "woz Search: single allowed glob pattern allowed while gated" || fail "woz Search with an allowed pattern should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_glob_patterns":[".harness/handoff.md#1-10"]}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "woz Search: an allowed pattern with a #line-range suffix is still allowed (suffix stripped before the path check)" || fail "woz Search with a #line-range suffix on an allowed path should be allowed, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_glob_patterns":["README.md"]}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "woz Search: a disallowed path is denied" || fail "woz Search of a disallowed path should be denied, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_glob_patterns":[".harness/handoff.md","README.md"]}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "woz Search: a batch mixing one allowed and one disallowed pattern is denied WHOLE" || fail "SECURITY: mixed woz Search batch should be denied, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_glob_patterns":["src/**/*.ts"]}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "woz Search: a glob pattern that cannot resolve to an allow-listed literal path is denied" || fail "woz Search wildcard pattern should be denied (safe-by-default), got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"mcp__plugin_woz_code__Search","tool_input":{"file_glob_patterns":[]}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "woz Search: empty file_glob_patterns[] denied" || fail "empty woz Search file_glob_patterns[] should be denied, got $GATE_STATUS: $GATE_OUT"
+
+echo "== issue #172 regression trap: an unrecognized MCP tool name still fails CLOSED, intent normalization is not a catch-all =="
+run_claude_gate '{"tool_name":"mcp__foo__Frobnicate","tool_input":{"file_path":".harness/handoff.md"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "an unknown MCP tool name is denied even when its file_path would otherwise be allow-listed" || fail "SECURITY REGRESSION: unrecognized MCP tool name should still be denied, got $GATE_STATUS: $GATE_OUT"
+
+echo "== issue #172 regression trap: a hostile tool name crafted to LOOK like an allow-listed suffix does not over-match =="
+run_claude_gate '{"tool_name":"mcp__evil__NotAnEdit_Write","tool_input":{"file_path":".harness/handoff.md"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "mcp__evil__NotAnEdit_Write (single underscore before Write, not __Write) does not match the write-intent suffix and is denied" || fail "SECURITY REGRESSION: hostile near-miss tool name should still be denied, got $GATE_STATUS: $GATE_OUT"
+
+echo "== issue #172: NotebookEdit (host tool, single top-level file_path) is covered by the same write-intent path as Write/Edit =="
+run_claude_gate '{"tool_name":"NotebookEdit","tool_input":{"file_path":".harness/handoff.md"}}'
+[ "$GATE_STATUS" -eq 0 ] && pass "NotebookEdit to an allowed path allowed while gated" || fail "NotebookEdit to an allowed path should be allowed while gated, got $GATE_STATUS: $GATE_OUT"
+
+run_claude_gate '{"tool_name":"NotebookEdit","tool_input":{"file_path":"src/app.ipynb"}}'
+[ "$GATE_STATUS" -eq 2 ] && pass "NotebookEdit to a disallowed path denied while gated" || fail "NotebookEdit to a disallowed path should be denied while gated, got $GATE_STATUS: $GATE_OUT"
+
 echo "== Claude Code dialect: clearing the flag re-opens the gate =="
 rm -f "$FLAG"
 run_claude_gate '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'

@@ -61,6 +61,21 @@ if [ -n "$FILE_PATH" ] && qsg_path_allowed "$FILE_PATH" "$CANON_DIR"; then
   exit 0
 fi
 
+# Mirror audit (issue #172, hooks/quota-stop-gate.sh's Claude Code dialect
+# fix): that fix closed a batched-multi-path deadlock specific to woz's
+# Edit tool (tool_input.edits[], one file_path per entry, no top-level
+# file_path at all) and woz's Search tool (tool_input.file_glob_patterns[]).
+# Audited for the same gap here and found NONE to fix: every agy write-tool
+# payload confirmed live-traced in this file (write_to_file's args.TargetFile
+# above) and every read-tool payload (args.AbsolutePath/DirectoryPath below)
+# carries exactly ONE target path per call -- agy has no confirmed
+# equivalent of a batched multi-path edit/search call, so there is no single
+# top-level FILE_PATH extraction this audit needs to broaden. If a future
+# agy tool trace turns up a batched shape, apply the SAME all-entries-must-
+# pass rule qsg_write_intent_allowed/qsg_read_intent_allowed
+# (lib/quota-stop-lib.sh) already implement for woz -- do not hand-roll a
+# second copy of that logic here.
+
 # A follow-up round of agy's own dedicated security pass: the write-only
 # check above traps agy on READS too -- its PreToolUse matcher is ".*"
 # (templates/agents-hooks.json), so a gated agy session's read/view tool
