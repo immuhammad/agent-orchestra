@@ -101,6 +101,30 @@ orc_build_session() {
     return 1
   fi
 
+  # Auto-rehydrate (issue #185, Gate-1 item 2): FIRST thing this function
+  # does after the session-name safety check, before the own-checkout
+  # guard below -- that guard needs orchestrator.yaml just to read
+  # `project`/`github_repo` at all. A puller of the #171 untracking
+  # migration (PR #184) gets orchestrator.yaml/souls/*.md deleted from
+  # disk by a plain `git pull` (`git rm --cached` only protects the
+  # COMMITTER's own checkout) -- and orchestrator.yaml IS the marker
+  # file every fail-closed gate resolves the project root from, so once
+  # it's gone EVERY subsequent tool call denies with "project root
+  # unresolvable", including whatever tool call would have restored it
+  # (live incident, this room, 2026-08-03: a human had to copy the file
+  # back from outside the harness). Only fires on real evidence of "was
+  # tracked, now missing" (git history actually has the file) -- a
+  # genuinely fresh room that has never run `orc init` yet is a
+  # different, non-error case and must not get this notice.
+  if [ ! -f "$PWD/orchestrator.yaml" ] && git -C "$PWD" rev-parse --git-dir >/dev/null 2>&1; then
+    local rehydrate_probe_rev
+    rehydrate_probe_rev="$(_orc_rehydrate_last_rev orchestrator.yaml "$PWD" 2>/dev/null)" || rehydrate_probe_rev=""
+    if [ -n "$rehydrate_probe_rev" ]; then
+      echo "orc up: orchestrator.yaml is missing but git history has it -- auto-rehydrating before startup continues (issue #185: a puller of the #171 untracking migration loses this file on a plain 'git pull')." >&2
+      orc_rehydrate "$PWD" >&2 || true
+    fi
+  fi
+
   local project integration_branch orchestra_model implementer_model
 
   project="$(orc_get_scalar project)"
@@ -497,6 +521,140 @@ orc_up() {
   fi
   orc_build_session
   exec tmux attach -t "$session"
+}
+
+# --- orc rehydrate: restore a deleted orchestrator.yaml/souls/*.md ---
+# Issue #185 (P0, live incident 2026-08-03): the #171 untracking
+# migration (`git rm --cached`, merged via PR #184) is correct for the
+# COMMITTER's own checkout -- `git rm --cached` only removes the file
+# from the index, the working-tree copy survives locally there. For
+# every OTHER checkout that then `git pull`s that commit, it's a plain
+# deletion: git removes orchestrator.yaml/souls/*.md from the working
+# tree outright. orchestrator.yaml is the marker file every fail-closed
+# gate (room-branch-gate.sh, quota-stop-gate.sh, via
+# lib/harness-root.sh's walk-up) resolves the project root from -- once
+# it's gone, EVERY tool call denies with "project root unresolvable",
+# including whatever tool call would have restored it. A human had to
+# copy the file back from OUTSIDE the harness to unbrick this room.
+#
+# `orc rehydrate [target_dir]` (default target: $PWD) restores both
+# paths from their last-tracked git revision -- the newest commit
+# (walking back from HEAD, works from a detached HEAD too) whose tree
+# still actually CONTAINS the path, not simply the newest commit that
+# touched it (the newest hit for a deleted-and-gone path is the
+# DELETION commit itself, whose own tree no longer has the blob).
+#
+# NEVER overwrites an existing file -- refuse-if-exists is the whole
+# security property here: this must never become a write primitive an
+# already-gated session could reach to clobber a LIVE hand-edited
+# config, it only ever fills in an ABSENT file. Idempotent: a second run
+# after the first finds everything already present and no-ops cleanly.
+# souls/*.md is discovered from history (not a hardcoded filename list)
+# so a future soul added/renamed upstream doesn't need this to change.
+
+# _orc_rehydrate_last_rev <relpath> <target> -- echoes the newest commit
+# reachable from HEAD whose tree still contains relpath as a blob, or
+# fails (nothing echoed) if relpath was never tracked in this history at
+# all.
+_orc_rehydrate_last_rev() {
+  local relpath="$1" target="$2" rev
+  while IFS= read -r rev; do
+    [ -n "$rev" ] || continue
+    if git -C "$target" cat-file -e "$rev:$relpath" 2>/dev/null; then
+      echo "$rev"
+      return 0
+    fi
+  done < <(git -C "$target" log --format=%H -- "$relpath" 2>/dev/null)
+  return 1
+}
+
+# _orc_rehydrate_last_tree_rev <pathspec> <target> -- same idea as
+# _orc_rehydrate_last_rev but for a glob pathspec (souls/*.md) that
+# names a SET of files rather than one path: echoes the newest commit
+# whose tree has at least one file matching the pathspec.
+_orc_rehydrate_last_tree_rev() {
+  local pathspec="$1" target="$2" rev
+  while IFS= read -r rev; do
+    [ -n "$rev" ] || continue
+    if [ -n "$(git -C "$target" ls-tree -r --name-only "$rev" -- "$pathspec" 2>/dev/null)" ]; then
+      echo "$rev"
+      return 0
+    fi
+  done < <(git -C "$target" log --format=%H -- "$pathspec" 2>/dev/null)
+  return 1
+}
+
+# _orc_rehydrate_file <relpath> <target> [rev] -- restores one file if
+# missing; a caller that already knows the revision (the souls/*.md
+# loop, one shared commit for every soul) can pass it directly instead
+# of re-walking history per file. Returns 0 (restored), 1 (already
+# present -- refuse-if-exists, not an error), or 2 (no tracked history /
+# read failure -- the one genuinely failing case).
+_orc_rehydrate_file() {
+  local relpath="$1" target="$2" rev="${3:-}"
+  local abspath="$target/$relpath"
+
+  if [ -e "$abspath" ]; then
+    echo "orc rehydrate: $relpath already present -- left untouched" >&2
+    return 1
+  fi
+
+  if [ -z "$rev" ]; then
+    rev="$(_orc_rehydrate_last_rev "$relpath" "$target")" || {
+      echo "orc rehydrate: $relpath has no tracked history under $target -- nothing to restore" >&2
+      return 2
+    }
+  fi
+
+  mkdir -p "$(dirname "$abspath")"
+  if ! git -C "$target" show "$rev:$relpath" > "$abspath" 2>/dev/null; then
+    rm -f "$abspath"
+    echo "orc rehydrate: failed to read $relpath from $rev" >&2
+    return 2
+  fi
+  echo "orc rehydrate: restored $relpath from $rev (last tracked revision)" >&2
+  return 0
+}
+
+# orc_rehydrate [target_dir] -- see the block comment above. Exit status
+# reflects orchestrator.yaml specifically (the gate marker): 0 if it's
+# present on disk by the time this returns (already there, or just
+# restored), 1 only if it was missing AND has no tracked history to
+# restore from at all. souls/*.md restoration is best-effort and never
+# affects this exit status -- a missing soul card doesn't brick a gate.
+orc_rehydrate() {
+  local target="${1:-$PWD}"
+  target="$(cd "$target" 2>/dev/null && pwd -P)" || {
+    echo "orc rehydrate: no such directory: ${1:-$PWD}" >&2
+    return 1
+  }
+  if ! git -C "$target" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "orc rehydrate: $target is not inside a git repository -- nothing to rehydrate from" >&2
+    return 1
+  fi
+
+  local marker_status=0
+  _orc_rehydrate_file orchestrator.yaml "$target" || marker_status=$?
+
+  # NOTE: ls-tree's pathspec engine (unlike log's) has no glob magic --
+  # 'souls/*.md' silently matches nothing there (verified empirically).
+  # Use the plain 'souls/' directory pathspec for both the history walk
+  # and the enumeration, then filter to *.md entries defensively (souls/
+  # has only ever held soul cards, but this keeps the .gitignore's exact
+  # /souls/*.md scope even if that ever changes).
+  local souls_rev
+  souls_rev="$(_orc_rehydrate_last_tree_rev 'souls/' "$target")" || souls_rev=""
+  if [ -n "$souls_rev" ]; then
+    local soul_path
+    while IFS= read -r soul_path; do
+      case "$soul_path" in
+        *.md) _orc_rehydrate_file "$soul_path" "$target" "$souls_rev" || true ;;
+      esac
+    done < <(git -C "$target" ls-tree -r --name-only "$souls_rev" -- 'souls/' 2>/dev/null)
+  fi
+
+  [ "$marker_status" -eq 2 ] && return 1
+  return 0
 }
 
 # --- orc init: per-project onboarding wizard --------------
@@ -1528,6 +1686,7 @@ orc_init_interactive() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   case "${1:-}" in
     up) orc_up ;;
+    rehydrate) orc_rehydrate "${2:-$PWD}" ;;
     init)
       shift
       force=0
@@ -1570,7 +1729,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       fi
       ;;
     *)
-      echo "usage: orc.sh up|init [--force|--adopt] [--answers <file>] [--consumer-dir <path>] [target_dir]" >&2
+      echo "usage: orc.sh up|init [--force|--adopt] [--answers <file>] [--consumer-dir <path>] [target_dir] | rehydrate [target_dir]" >&2
       exit 1
       ;;
   esac

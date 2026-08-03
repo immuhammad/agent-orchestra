@@ -19,7 +19,7 @@ INPUT=$(cat)
 # security review) -- see qsg_resolve_canon_dir / hooks/quota-stop-gate.sh
 # for the full reasoning; same fix, same posture, both dialects.
 CANON_DIR="$(qsg_resolve_canon_dir)" || {
-  MSG="quota-stop-gate: gate cannot verify quota state -- project root unresolvable. Failing CLOSED per AGENTS.md Quota Failsafe."
+  MSG="quota-stop-gate: gate cannot verify quota state -- project root unresolvable. Failing CLOSED per AGENTS.md Quota Failsafe.$(qsg_deleted_marker_hint)"
   echo "{\"decision\":\"deny\", \"reason\":$(jq -Rn --arg m "$MSG" '$m')}"
   exit 0
 }

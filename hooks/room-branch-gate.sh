@@ -32,7 +32,7 @@ INPUT=$(cat)
 # Same fail-CLOSED posture as quota-stop-gate.sh (qsg_resolve_canon_dir):
 # an enforcement gate that can't verify state must not silently allow.
 CANON_DIR="$(qsg_resolve_canon_dir)" || {
-  echo "room-branch-gate.sh: gate cannot verify room-branch state -- project root unresolvable via \$CLAUDE_PROJECT_DIR or \$PWD ancestor walk-up (no orchestrator.yaml found). Failing CLOSED: an enforcement gate that can't check state must not silently allow. Set CLAUDE_PROJECT_DIR or run from inside a project with orchestrator.yaml." >&2
+  echo "room-branch-gate.sh: gate cannot verify room-branch state -- project root unresolvable via \$CLAUDE_PROJECT_DIR or \$PWD ancestor walk-up (no orchestrator.yaml found). Failing CLOSED: an enforcement gate that can't check state must not silently allow. Set CLAUDE_PROJECT_DIR or run from inside a project with orchestrator.yaml.$(qsg_deleted_marker_hint)" >&2
   exit 2
 }
 ROOT="$(cd "$(dirname "$CANON_DIR")" 2>/dev/null && pwd -P)" || {

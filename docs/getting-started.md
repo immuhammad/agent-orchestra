@@ -114,3 +114,38 @@ Most scripts also accept a narrower override for testing/advanced setups
 relevant override is pinned explicitly, root resolution is skipped
 entirely (lazy), so a fully-pinned test run needs no `orchestrator.yaml`
 at all.
+
+## If `orchestrator.yaml` disappeared after a `git pull`
+
+`orchestrator.yaml` and `souls/*.md` became untracked, per-room files at
+issue #171 (`git rm --cached`, merged in PR #184) — correct for the
+checkout that made the change (`git rm --cached` only removes a file
+from git's index; the working-tree copy survives locally there), but a
+plain `git pull` in any OTHER existing room deletes both from the
+working tree outright. `orchestrator.yaml` is the marker file every
+fail-closed gate resolves the project root from, so a room that pulled
+past that commit without rehydrating bricks on the very next tool call
+(every gate denies with "project root unresolvable").
+
+If your room already pulled the migration commit and looks bricked:
+run this from a **plain shell outside the harness** (not through a
+gated agent session — it can't run anything once its own
+`orchestrator.yaml` is gone):
+
+```
+bin/orc rehydrate .
+```
+
+This restores `orchestrator.yaml` and every `souls/*.md` card from their
+last-tracked git revision, prints exactly what it restored and from
+which commit, and never overwrites a file that's already present. A
+plain `bin/orc up` also auto-detects and rehydrates this state on its
+own now (issue #185) — the manual command above is only needed for a
+room stuck mid-session with a gate already denying everything, where an
+agent can't get a fresh `orc up` off the ground to fix itself.
+
+The equivalent one-liner without `orc rehydrate` (e.g. before this fix
+lands in your clone): `git show 'HEAD@{1}':orchestrator.yaml >
+orchestrator.yaml` — restores from the pre-pull reflog entry instead of
+walking commit history, so it only works immediately after the pull
+that caused the deletion.

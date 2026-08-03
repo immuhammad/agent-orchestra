@@ -289,6 +289,32 @@ STATUS=$?
 [ "$STATUS" -eq 0 ] && pass "CLAUDE_PROJECT_DIR anchor lets resolution succeed from an unrelated cwd (no flag active there, so allowed)" || fail "CLAUDE_PROJECT_DIR anchor should have resolved successfully, got $STATUS: $OUT"
 rm -rf "$NOROOT"
 
+echo "== issue #185: unresolvable root with the 'deleted marker' shape names the recovery command, but still fails CLOSED =="
+DELMARK="$(mktemp -d)"
+mkdir -p "$DELMARK/templates"
+git init -q "$DELMARK"
+printf 'project: x\n' > "$DELMARK/templates/orchestrator.yaml"
+# orchestrator.yaml itself is absent at $DELMARK's root -- the exact
+# shape a puller of the #171 untracking migration (PR #184) hits after
+# `git pull` (see tests/orc-rehydrate.test.sh for the full mechanics).
+OUT="$(cd "$DELMARK" && env CLAUDE_PROJECT_DIR="$DELMARK" bash "$CLAUDE_GATE" <<< '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' 2>&1)"
+STATUS=$?
+[ "$STATUS" -eq 2 ] && pass "deleted-marker shape: still fails closed (exit 2) -- message-only change, decision unchanged" || fail "SECURITY: deleted-marker shape must still fail closed, got $STATUS: $OUT"
+echo "$OUT" | grep -q "bin/orc rehydrate" && pass "deleted-marker shape: denial message names the exact recovery command" || fail "expected the denial message to name 'bin/orc rehydrate', got: $OUT"
+rm -rf "$DELMARK"
+
+echo "== issue #185: unresolvable root WITHOUT the deleted-marker shape gets no false hint =="
+NOTHARNESS="$(mktemp -d)"
+OUT="$(cd "$NOTHARNESS" && env CLAUDE_PROJECT_DIR="$NOTHARNESS" bash "$CLAUDE_GATE" <<< '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' 2>&1)"
+STATUS=$?
+[ "$STATUS" -eq 2 ] && pass "non-harness shape: still fails closed (exit 2)" || fail "expected fail-closed (exit 2), got $STATUS: $OUT"
+if echo "$OUT" | grep -q "bin/orc rehydrate"; then
+  fail "a directory with no templates/orchestrator.yaml and no .git should NOT get the rehydrate hint, got: $OUT"
+else
+  pass "non-harness shape: no false rehydrate hint"
+fi
+rm -rf "$NOTHARNESS"
+
 echo "== agy dialect: no flag -> allow decision =="
 rm -f "$FLAG"
 run_agy_gate '{"toolCall":{"args":{"CommandLine":"rm -rf /tmp/whatever"}}}'
@@ -333,6 +359,17 @@ OUT="$(cd "$NOROOT2" && env -u CLAUDE_PROJECT_DIR bash -c 'echo "{\"toolCall\":{
 rm -rf "$NOROOT2"
 DECISION="$(echo "$OUT" | jq -r '.decision // empty' 2>/dev/null)"
 [ "$DECISION" = "deny" ] && pass "agy: unresolvable root -> deny decision (fails closed), not allow" || fail "SECURITY REGRESSION (finding 3, agy): expected a deny decision, got: $OUT"
+
+echo "== issue #185: agy dialect also names the recovery command on the deleted-marker shape, still denies =="
+AGY_DELMARK="$(mktemp -d)"
+mkdir -p "$AGY_DELMARK/templates"
+git init -q "$AGY_DELMARK"
+printf 'project: x\n' > "$AGY_DELMARK/templates/orchestrator.yaml"
+OUT="$(cd "$AGY_DELMARK" && env CLAUDE_PROJECT_DIR="$AGY_DELMARK" bash -c 'echo "{\"toolCall\":{\"args\":{\"CommandLine\":\"ls -la\"}}}" | bash "'"$AGY_GATE"'"' 2>&1)"
+DECISION="$(echo "$OUT" | jq -r '.decision // empty' 2>/dev/null)"
+[ "$DECISION" = "deny" ] && pass "agy: deleted-marker shape still denies" || fail "agy: deleted-marker shape should still deny, got: $OUT"
+echo "$OUT" | grep -q "bin/orc rehydrate" && pass "agy: deleted-marker shape names the recovery command in its reason" || fail "agy: expected 'bin/orc rehydrate' in the deny reason, got: $OUT"
+rm -rf "$AGY_DELMARK"
 
 echo "== finding-4, CONFIRMED live 2026-07-12: agy's real write-tool payload shape (name=write_to_file, args.TargetFile) is allow-listed for handoff.md =="
 # The exact live-captured payload shape (redacted path/content): a genuine

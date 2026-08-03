@@ -49,6 +49,33 @@ qsg_resolve_canon_dir() {
   return 1
 }
 
+# qsg_deleted_marker_hint -- issue #185: when qsg_resolve_canon_dir fails
+# (no orchestrator.yaml findable at all), the fail-closed message stays
+# generic UNLESS the surrounding shape proves this is specifically a
+# harness project whose marker just went missing (as opposed to, say, a
+# genuinely non-harness directory or a plain typo'd cwd): if
+# $CLAUDE_PROJECT_DIR/templates/orchestrator.yaml exists (the tracked
+# source of truth, never deleted by the #171 untracking migration) AND
+# $CLAUDE_PROJECT_DIR/.git exists (this IS a git checkout of the
+# harness), that's exactly the "harness project with a deleted marker"
+# shape -- name the exact recovery command instead of leaving an
+# operator to rediscover it by hand (the live 2026-08-03 incident cost a
+# human round-trip finding this out). Does NOT change the deny/allow
+# decision either way -- every caller still fails closed on an
+# unresolvable root; this only ever adds words to a message a gate was
+# already about to print on its way to denying. Always returns 0 (an
+# empty hint on no match is not a failure) so it's safe to embed
+# directly inside a $(...) substitution regardless of the caller's own
+# `set` flags.
+qsg_deleted_marker_hint() {
+  local proj="${CLAUDE_PROJECT_DIR:-}"
+  [ -n "$proj" ] || return 0
+  if [ -f "$proj/templates/orchestrator.yaml" ] && [ -e "$proj/.git" ]; then
+    echo " This looks like a harness project whose orchestrator.yaml just went missing (e.g. a git pull deleted it -- see issue #185) -- run 'bin/orc rehydrate' from OUTSIDE this session (a plain shell, not through this gated agent) to restore it."
+  fi
+  return 0
+}
+
 # qsg_lexical_normalize <path> -- thin alias for lib/cmd-inspect-lib.sh's
 # orc_lexical_normalize (moved there so guard.sh's resolved
 # write-target check can reuse the exact same traversal-safe
