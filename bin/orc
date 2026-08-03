@@ -1107,6 +1107,88 @@ orc_init_answers_from_yaml() {
 # orc-protect (bin/orc-protect, kernel immutability on .claude/.agents/
 # orchestrator.yaml) is lifted for the duration if the target is
 # currently protected, and restored once the resync finishes -- the
+# orc_init_resync_templates <target> <answers_file> <backup_rel> -- the
+# templates-derived resync body shared by orc_init_force and
+# orc_init_adopt: AGENTS.md/CLAUDE.md/GEMINI.md/souls/*/review-protocol.md/
+# .claude/settings.json/.agents/hooks.json, each written through
+# orc_init_apply_file's drift-safe path (hand-edited since last
+# generation -> backed up to backup_rel first, loud). Also (re)installs
+# the skill pack. orchestrator.yaml is deliberately OUT of scope here --
+# --force and --adopt disagree on when it's in scope (bare --force never
+# touches it; --adopt always does, since deriving it automatically is
+# the whole point) -- each caller handles it itself before calling this,
+# one source of resync-body truth for both.
+orc_init_resync_templates() {
+  local target="$1" answers_file="$2" backup_rel="$3"
+  local project
+  project="$(orc_init_read_answer "$answers_file" PROJECT)"
+
+  local new_agents new_claude new_gemini new_review new_settings new_hooks
+  local new_soul_orchestra new_soul_builder new_soul_reviewer new_soul_scribe
+
+  new_agents="$(mktemp "$target/AGENTS.md.XXXXXX")"
+  orc_init_render_agents_md "$answers_file" "$ORC_TEMPLATES_DIR/AGENTS.md" "$new_agents"
+  orc_init_apply_file "$target" "AGENTS.md" "$new_agents" "$backup_rel"
+
+  new_claude="$(mktemp "$target/CLAUDE.md.XXXXXX")"
+  orc_init_render_project_doc "$ORC_TEMPLATES_DIR/CLAUDE.md" "$new_claude" "$project"
+  orc_init_apply_file "$target" "CLAUDE.md" "$new_claude" "$backup_rel"
+
+  mkdir -p "$target/souls"
+  new_soul_orchestra="$(mktemp "$target/souls/orchestra.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/orchestra.md" "$new_soul_orchestra" \
+    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_EFFORT high)" "0.0"
+  orc_init_apply_file "$target" "souls/orchestra.md" "$new_soul_orchestra" "$backup_rel"
+
+  new_soul_builder="$(mktemp "$target/souls/builder.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/builder.md" "$new_soul_builder" \
+    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_EFFORT default)" "0.1"
+  orc_init_apply_file "$target" "souls/builder.md" "$new_soul_builder" "$backup_rel"
+
+  new_soul_reviewer="$(mktemp "$target/souls/reviewer.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/reviewer.md" "$new_soul_reviewer" \
+    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_EFFORT high)" "0.2"
+  orc_init_apply_file "$target" "souls/reviewer.md" "$new_soul_reviewer" "$backup_rel"
+
+  new_soul_scribe="$(mktemp "$target/souls/scribe.md.XXXXXX")"
+  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/scribe.md" "$new_soul_scribe" \
+    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_MODEL)" \
+    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_EFFORT low)" "headless (no standing pane)"
+  orc_init_apply_file "$target" "souls/scribe.md" "$new_soul_scribe" "$backup_rel"
+
+  # GEMINI.md: base project-doc render + the reviewer soul appended under
+  # a ## SOUL heading, same two-step composition orc_init_core's fresh
+  # path uses -- reusing souls/reviewer.md's content we JUST wrote above
+  # rather than rendering the reviewer soul a second time.
+  new_gemini="$(mktemp "$target/GEMINI.md.XXXXXX")"
+  orc_init_render_project_doc "$ORC_TEMPLATES_DIR/GEMINI.md" "$new_gemini" "$project"
+  {
+    echo ""
+    echo "## SOUL"
+    echo ""
+    cat "$target/souls/reviewer.md"
+  } >> "$new_gemini"
+  orc_init_apply_file "$target" "GEMINI.md" "$new_gemini" "$backup_rel"
+
+  new_review="$(mktemp "$target/review-protocol.md.XXXXXX")"
+  cp "$ORC_TEMPLATES_DIR/review-protocol.md" "$new_review"
+  orc_init_apply_file "$target" "review-protocol.md" "$new_review" "$backup_rel"
+
+  mkdir -p "$target/.claude" "$target/.agents"
+  new_settings="$(mktemp "$target/.claude/settings.json.XXXXXX")"
+  cp "$ORC_TEMPLATES_DIR/settings.json" "$new_settings"
+  orc_init_apply_file "$target" ".claude/settings.json" "$new_settings" "$backup_rel"
+
+  new_hooks="$(mktemp "$target/.agents/hooks.json.XXXXXX")"
+  cp "$ORC_TEMPLATES_DIR/agents-hooks.json" "$new_hooks"
+  orc_init_apply_file "$target" ".agents/hooks.json" "$new_hooks" "$backup_rel"
+
+  bash "$ORC_SCRIPT_DIR/orc-install-skills" "$target"
+}
+
 # off->edit->on dance folded INTO --force itself, per the Gate-1 plan,
 # rather than a FLAG-worthy collision.
 orc_init_force() {
@@ -1186,70 +1268,7 @@ orc_init_force() {
     orc_init_apply_file "$target" "orchestrator.yaml" "$new_yaml" "$backup_rel"
   fi
 
-  local new_agents new_claude new_gemini new_review new_settings new_hooks
-  local new_soul_orchestra new_soul_builder new_soul_reviewer new_soul_scribe
-
-  new_agents="$(mktemp "$target/AGENTS.md.XXXXXX")"
-  orc_init_render_agents_md "$answers_file" "$ORC_TEMPLATES_DIR/AGENTS.md" "$new_agents"
-  orc_init_apply_file "$target" "AGENTS.md" "$new_agents" "$backup_rel"
-
-  new_claude="$(mktemp "$target/CLAUDE.md.XXXXXX")"
-  orc_init_render_project_doc "$ORC_TEMPLATES_DIR/CLAUDE.md" "$new_claude" "$project"
-  orc_init_apply_file "$target" "CLAUDE.md" "$new_claude" "$backup_rel"
-
-  mkdir -p "$target/souls"
-  new_soul_orchestra="$(mktemp "$target/souls/orchestra.md.XXXXXX")"
-  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/orchestra.md" "$new_soul_orchestra" \
-    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_MODEL)" \
-    "$(orc_init_read_answer "$answers_file" ROLE_ORCHESTRA_EFFORT high)" "0.0"
-  orc_init_apply_file "$target" "souls/orchestra.md" "$new_soul_orchestra" "$backup_rel"
-
-  new_soul_builder="$(mktemp "$target/souls/builder.md.XXXXXX")"
-  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/builder.md" "$new_soul_builder" \
-    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_MODEL)" \
-    "$(orc_init_read_answer "$answers_file" ROLE_IMPLEMENTER_EFFORT default)" "0.1"
-  orc_init_apply_file "$target" "souls/builder.md" "$new_soul_builder" "$backup_rel"
-
-  new_soul_reviewer="$(mktemp "$target/souls/reviewer.md.XXXXXX")"
-  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/reviewer.md" "$new_soul_reviewer" \
-    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_MODEL)" \
-    "$(orc_init_read_answer "$answers_file" ROLE_REVIEWER_EFFORT high)" "0.2"
-  orc_init_apply_file "$target" "souls/reviewer.md" "$new_soul_reviewer" "$backup_rel"
-
-  new_soul_scribe="$(mktemp "$target/souls/scribe.md.XXXXXX")"
-  orc_init_render_soul "$ORC_TEMPLATES_DIR/souls/scribe.md" "$new_soul_scribe" \
-    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_MODEL)" \
-    "$(orc_init_read_answer "$answers_file" ROLE_SCRIBE_EFFORT low)" "headless (no standing pane)"
-  orc_init_apply_file "$target" "souls/scribe.md" "$new_soul_scribe" "$backup_rel"
-
-  # GEMINI.md: base project-doc render + the reviewer soul appended under
-  # a ## SOUL heading, same two-step composition orc_init_core's fresh
-  # path uses -- reusing souls/reviewer.md's content we JUST wrote above
-  # rather than rendering the reviewer soul a second time.
-  new_gemini="$(mktemp "$target/GEMINI.md.XXXXXX")"
-  orc_init_render_project_doc "$ORC_TEMPLATES_DIR/GEMINI.md" "$new_gemini" "$project"
-  {
-    echo ""
-    echo "## SOUL"
-    echo ""
-    cat "$target/souls/reviewer.md"
-  } >> "$new_gemini"
-  orc_init_apply_file "$target" "GEMINI.md" "$new_gemini" "$backup_rel"
-
-  new_review="$(mktemp "$target/review-protocol.md.XXXXXX")"
-  cp "$ORC_TEMPLATES_DIR/review-protocol.md" "$new_review"
-  orc_init_apply_file "$target" "review-protocol.md" "$new_review" "$backup_rel"
-
-  mkdir -p "$target/.claude" "$target/.agents"
-  new_settings="$(mktemp "$target/.claude/settings.json.XXXXXX")"
-  cp "$ORC_TEMPLATES_DIR/settings.json" "$new_settings"
-  orc_init_apply_file "$target" ".claude/settings.json" "$new_settings" "$backup_rel"
-
-  new_hooks="$(mktemp "$target/.agents/hooks.json.XXXXXX")"
-  cp "$ORC_TEMPLATES_DIR/agents-hooks.json" "$new_hooks"
-  orc_init_apply_file "$target" ".agents/hooks.json" "$new_hooks" "$backup_rel"
-
-  bash "$ORC_SCRIPT_DIR/orc-install-skills" "$target"
+  orc_init_resync_templates "$target" "$answers_file" "$backup_rel"
 
   orc_init_write_manifest "$target"
 
@@ -1265,6 +1284,143 @@ orc_init_force() {
   echo "orc init --force: resync complete for $target"
   if [ -d "$target/$backup_rel" ]; then
     echo "orc init --force: drifted files were backed up under $backup_rel"
+  fi
+}
+
+# orc_init_adopt <target> [explicit_answers_file] -- issue #171: adopt the
+# harness into an EXISTING directory. Two real scenarios: (a) a plain
+# project dir that never ran `orc init` at all, or (b) someone cloned the
+# agent-orchestra repo itself intending it as the starting point for
+# THEIR OWN new project (the checkout still carries the harness's own
+# dogfood orchestrator.yaml/AGENTS.md/souls/* etc until adopted).
+#
+# Unlike orc_init_core, --adopt does NOT refuse when orchestrator.yaml
+# already exists -- that's precisely the case it exists to handle -- and
+# unlike bare orc_init_force, orchestrator.yaml is ALWAYS in scope
+# (deriving it automatically, no answers file required, is the whole
+# point). Every templates-derived file goes through the SAME drift-safe
+# orc_init_apply_file path --force uses (orc_init_resync_templates,
+# shared above): a hand-edited file in an existing target gets backed
+# up, not clobbered, and a second --adopt run with no changes is a
+# true no-op.
+#
+# Identity: PROJECT is the existing orchestrator.yaml's own project:
+# value when one is already present (a re-adopt must never silently
+# rename an already-named room), else the target dir's basename.
+# GITHUB_REPO is ALWAYS freshly re-derived from the target's own git
+# origin remote (orc_init_default_github_repo) -- re-adopt is exactly
+# the moment an operator is expected to have re-pointed origin, per the
+# recommendation this function prints below. Everything else falls back
+# to the room's own existing orchestrator.yaml values when present
+# (orc_init_answers_from_yaml, same reconstruction bare --force uses --
+# a re-adopt must never silently revert a hand-tuned integration_branch/
+# protected_paths/role lane/budget), or the same hardcoded defaults
+# orc_init_interactive falls back to on an empty prompt answer when the
+# target has never been initialized at all. An explicit --answers FILE
+# always wins over any derived value (orc_init_read_answer's own
+# last-line-wins semantics, since it's appended after the derived base).
+orc_init_adopt() {
+  local target="${1:-.}" explicit_answers="${2:-}"
+
+  case "$target" in
+    /*) : ;;
+    *) target="./$target" ;;
+  esac
+  mkdir -p -- "$target"
+  target="$(cd -- "$target" && pwd)"
+
+  if [ -n "$explicit_answers" ] && [ ! -f "$explicit_answers" ]; then
+    echo "orc init --adopt: no such answers file: $explicit_answers" >&2
+    return 1
+  fi
+
+  local repo
+  repo="$(orc_init_default_github_repo "$target")"
+
+  local derived
+  derived="$(mktemp)"
+  if [ -f "$target/orchestrator.yaml" ] || [ -L "$target/orchestrator.yaml" ]; then
+    orc_init_answers_from_yaml "$target" "$derived"
+  else
+    local project
+    project="$(basename "$target")"
+    {
+      echo "PROJECT=$project"
+      echo "INTEGRATION_BRANCH=main"
+      echo "TICKET_TRACKER=gh-issues"
+      echo "PROTECTED_PATHS="
+      echo "GATE_APPROVER=the human running this harness"
+      echo "ROLE_ORCHESTRA_MODEL=opus"
+      echo "ROLE_ORCHESTRA_EFFORT=high"
+      echo "ROLE_IMPLEMENTER_MODEL=sonnet"
+      echo "ROLE_IMPLEMENTER_EFFORT=default"
+      echo "ROLE_TESTER_MODEL=sonnet"
+      echo "ROLE_TESTER_EFFORT=default"
+      echo "ROLE_REVIEWER_MODEL=agy"
+      echo "ROLE_REVIEWER_EFFORT=high"
+      echo "ROLE_SCRIBE_MODEL=haiku"
+      echo "ROLE_SCRIBE_EFFORT=low"
+      echo "BUDGET_CLAUDE_PCT=80"
+      echo "BUDGET_AGY_PCT=80"
+    } > "$derived"
+  fi
+  # GITHUB_REPO always freshly derived (appended LAST -- later duplicate
+  # key wins), overriding whatever orc_init_answers_from_yaml may have
+  # reconstructed from a possibly-stale existing orchestrator.yaml.
+  echo "GITHUB_REPO=$repo" >> "$derived"
+
+  local answers_file
+  answers_file="$(mktemp)"
+  cat "$derived" > "$answers_file"
+  [ -n "$explicit_answers" ] && cat "$explicit_answers" >> "$answers_file"
+  rm -f "$derived"
+
+  if ! orc_init_validate "$answers_file"; then
+    rm -f "$answers_file"
+    echo "orc init --adopt: aborting -- fix the answers above and re-run. Nothing was written." >&2
+    return 1
+  fi
+
+  local project
+  project="$(orc_init_read_answer "$answers_file" PROJECT)"
+
+  local ts backup_rel
+  ts="$(date +%Y%m%d%H%M%S)"
+  backup_rel=".harness/state/init-backups/$ts"
+
+  local new_yaml
+  new_yaml="$(mktemp "$target/orchestrator.yaml.XXXXXX")"
+  orc_init_render_orchestrator_yaml "$answers_file" "$new_yaml"
+  orc_init_apply_file "$target" "orchestrator.yaml" "$new_yaml" "$backup_rel"
+
+  orc_init_resync_templates "$target" "$answers_file" "$backup_rel"
+
+  mkdir -p "$target/.harness"
+  # handoff.md: only seeded if MISSING -- an existing room (scenario b,
+  # or a re-adopt) may already have live handoff content; unlike the
+  # templates-derived set above, this is never overwritten once present.
+  [ -f "$target/.harness/handoff.md" ] || cp "$ORC_TEMPLATES_DIR/handoff.md" "$target/.harness/handoff.md"
+  touch "$target/.harness/decisions.log"
+
+  orc_seed_inbox_dirs "$target"
+
+  orc_init_write_manifest "$target"
+
+  orc_seed_watch_identity "$target"
+
+  rm -f "$answers_file"
+
+  # Loud (never silent, never auto-acted-on) origin recommendation: a
+  # raw, un-re-pointed clone of the harness's OWN repo is exactly
+  # scenario (b) this function exists for -- print the recommendation,
+  # never touch git config ourselves.
+  if [ "$repo" = "immuhammad/agent-orchestra" ]; then
+    echo "orc init --adopt: origin still points at immuhammad/agent-orchestra -- re-point it to your own repo (git remote set-url origin <your-url>) or clear it (git remote remove origin) once you've adopted this checkout." >&2
+  fi
+
+  echo "orc init --adopt: adopted $target as project '$project'"
+  if [ -d "$target/$backup_rel" ]; then
+    echo "orc init --adopt: drifted files were backed up under $backup_rel"
   fi
 }
 
@@ -1334,17 +1490,21 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     init)
       shift
       force=0
+      adopt=0
       answers=""
       target=""
       while [ $# -gt 0 ]; do
         case "$1" in
           --force) force=1; shift ;;
+          --adopt) adopt=1; shift ;;
           --answers) answers="$2"; shift 2 ;;
           *) target="$1"; shift ;;
         esac
       done
       target="${target:-$PWD}"
-      if [ "$force" -eq 1 ]; then
+      if [ "$adopt" -eq 1 ]; then
+        orc_init_adopt "$target" "$answers"
+      elif [ "$force" -eq 1 ]; then
         orc_init_force "$target" "$answers"
       elif [ -n "$answers" ]; then
         orc_init_core "$answers" "$target"
@@ -1353,7 +1513,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       fi
       ;;
     *)
-      echo "usage: orc.sh up|init [--force] [--answers <file>] [target_dir]" >&2
+      echo "usage: orc.sh up|init [--force|--adopt] [--answers <file>] [target_dir]" >&2
       exit 1
       ;;
   esac
