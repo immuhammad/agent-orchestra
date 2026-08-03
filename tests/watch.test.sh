@@ -290,7 +290,58 @@ else
   pass "no teardown call for a head branch that isn't feature/issue-N"
 fi
 
-echo "== merge_watch_check: dispatches a PICK-next nudge to orchestra after each processed PR =="
+echo "== rider 6 (issue #171): merge_watch_check dispatches PICK-next ONLY for PRs with a resolvable linked issue =="
+# Previously this asserted mw_notify_pick fired for EVERY processed PR,
+# issue-linked or not -- that was the actual bug rider 6 exists to fix: an
+# unlinkable merge (no Closes-ref, no feature/issue-N branch match) still
+# nudged Orchestra to "PICK next" with nothing new to pick, a spurious
+# nudge. The three cases below replace that single overly-permissive
+# assertion: a linkable PR alone, an unlinkable PR alone, and both merged
+# in the SAME poll pass (mixed cycle) to prove the gating is per-PR, not a
+# single generic once-per-poll-cycle dispatch.
+
+echo "== merge_watch_check: a PR with a valid Closes-ref still dispatches PICK-next (unchanged) =="
+: > "$GH_CALLS"
+: > "$MERGE_WATCH_STATE"
+: > "$TEARDOWN_CALLS"
+: > "$PICK_CALLS"
+mw_fetch_merged_prs() {
+  printf '701\tIssue #91 followups\tCloses #91\tfeature/issue-91\n'
+}
+merge_watch_check
+if grep -qxF "701" "$PICK_CALLS"; then
+  pass "mw_notify_pick called for PR #701 (valid Closes-ref) -- unchanged behavior"
+else
+  fail "expected mw_notify_pick called for PR #701: $(cat "$PICK_CALLS")"
+fi
+
+echo "== merge_watch_check: a PR with NO Closes-ref and NO feature/issue-N branch match dispatches NO PICK-next =="
+: > "$GH_CALLS"
+: > "$MERGE_WATCH_STATE"
+: > "$TEARDOWN_CALLS"
+: > "$PICK_CALLS"
+: > "$WATCH_EVENTS_LOG"
+mw_fetch_merged_prs() {
+  printf '702\tsome PR\tno linked issue here\tsome-branch\n'
+}
+merge_watch_check
+if grep -qxF '702' "$MERGE_WATCH_STATE" 2>/dev/null; then
+  pass "unlinkable PR #702 still marked processed (never re-examined on a later poll)"
+else
+  fail "unlinkable PR #702 should still be marked processed"
+fi
+if grep -q 'PR #702 merged, no linked issue found' "$WATCH_EVENTS_LOG" 2>/dev/null; then
+  pass "unlinkable PR #702 logged to events.log"
+else
+  fail "expected 'PR #702 merged, no linked issue found' event: $(cat "$WATCH_EVENTS_LOG" 2>/dev/null)"
+fi
+if [ -s "$PICK_CALLS" ]; then
+  fail "mw_notify_pick should NOT be called for unlinkable PR #702, got: $(cat "$PICK_CALLS")"
+else
+  pass "mw_notify_pick correctly NOT called for unlinkable PR #702"
+fi
+
+echo "== merge_watch_check: mixed poll cycle (one linkable + one unlinkable) dispatches PICK-next for the linkable one ONLY =="
 : > "$GH_CALLS"
 : > "$MERGE_WATCH_STATE"
 : > "$TEARDOWN_CALLS"
@@ -299,10 +350,21 @@ mw_fetch_merged_prs() {
   printf '601\tIssue #90 followups\tCloses #90\tfeature/issue-90\n602\tsome PR\tno linked issue here\tsome-branch\n'
 }
 merge_watch_check
-if grep -qxF "601" "$PICK_CALLS" && grep -qxF "602" "$PICK_CALLS"; then
-  pass "mw_notify_pick called for EVERY processed PR (issue-linked or not), not just ones with a teardown-able branch"
+if grep -qxF "601" "$PICK_CALLS"; then
+  pass "mw_notify_pick called for PR #601 (has a resolvable Closes-ref)"
 else
-  fail "expected mw_notify_pick called for both PR #601 and #602: $(cat "$PICK_CALLS")"
+  fail "expected mw_notify_pick called for PR #601: $(cat "$PICK_CALLS")"
+fi
+if grep -qxF "602" "$PICK_CALLS"; then
+  fail "mw_notify_pick should NOT be called for PR #602 (no Closes-ref, no feature/issue-N branch match)"
+else
+  pass "mw_notify_pick correctly skipped for PR #602 (unlinkable) in a mixed poll cycle"
+fi
+PICK_LINE_COUNT="$(wc -l < "$PICK_CALLS" | tr -d ' ')"
+if [ "$PICK_LINE_COUNT" = "1" ]; then
+  pass "exactly one PICK-next dispatched for the mixed cycle (not a spurious extra one)"
+else
+  fail "expected exactly 1 PICK-next dispatch for the mixed cycle, got $PICK_LINE_COUNT: $(cat "$PICK_CALLS")"
 fi
 
 echo "== mw_notify_pick: dispatches via dispatch_main assign orchestra (write + nudge-if-idle) =="

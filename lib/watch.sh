@@ -264,7 +264,15 @@ merge_watch_check() {
         we_log_event "PR #$pr merged -> teardown skipped: $td_out"
       fi
     fi
-    mw_notify_pick "$pr"
+    # rider 6 (issue #171): PICK-next is Orchestra's cue that a merge
+    # actually resolved something worth moving on from -- an unlinkable
+    # PR (no Closes-ref, no feature/issue-N branch match) has nothing to
+    # pick next, so dispatching the nudge for it was pure noise. Gate on
+    # $issues (set above from the Closes-ref extraction, falling back to
+    # the branch-name match) rather than firing unconditionally; marking
+    # processed stays unconditional either way, so an unlinkable PR is
+    # still never re-examined on a later poll.
+    [ -n "$issues" ] && mw_notify_pick "$pr"
     mw_mark_processed "$pr"
   done <<< "$(mw_fetch_merged_prs)"
 }
